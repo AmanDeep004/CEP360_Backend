@@ -1,29 +1,71 @@
 import User from "../models/userModel.js";
 import errorHandler from "../utils/index.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
+
 /**
  * @desc    Register a new user
- * @route   POST /api/users
+ * @route   POST /api/users/register
  * @access  Public
  */
 const registerUser = asyncHandler(async (req, res, next) => {
   try {
-    const { firstName, lastName, email, password } = req.body;
+    const {
+      firstName,
+      lastName,
+      employeeCode,
+      email,
+      password,
+      type,
+      employeeBase,
+      programName,
+      programType,
+      programManager,
+      location,
+      status,
+      doj,
+      pan,
+      role
+    } = req.body;
+
     // Check if user exists
-    const userExists = await User.findOne({ email: email.toLowerCase() });
+    const userExists = await User.findOne({ 
+      $or: [
+        { email: email.toLowerCase() },
+        { employeeCode }
+      ]
+    });
+
     if (userExists) {
-      return sendError(next, "User already exists", 400);
+      return sendError(next, "User already exists with this email or employee code", 400);
     }
+
     // Create user
     const user = await User.create({
       firstName,
       lastName,
+      employeeCode,
       email: email.toLowerCase(),
       password,
+      type,
+      employeeBase,
+      programName,
+      programType,
+      programManager,
+      location,
+      status: status || 'active',
+      doj,
+      pan,
+      role: role || 'agent'
     });
-    if (user) {
-      return sendResponse(res, 200, "User Created.", user._id);
-    }
+
+    return sendResponse(res, 200, "User Created Successfully", {
+      _id: user._id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      employeeCode: user.employeeCode,
+      role: user.role
+    });
   } catch (error) {
     return sendError(next, error.message, 500);
   }
@@ -35,37 +77,49 @@ const registerUser = asyncHandler(async (req, res, next) => {
  * @access  Public
  */
 const loginUser = asyncHandler(async (req, res, next) => {
-  const { email, password } = req.body;
-  // Validate email & password
-  if (!email || !password) {
-    return sendError(next, "Please provide an email and password", 400);
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return sendError(next, "Please provide email and password", 400);
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase() }).select('+password');
+
+    if (!user) {
+      return sendError(next, "Invalid credentials", 401);
+    }
+
+    const isMatch = await user.matchPassword(password);
+
+    if (!isMatch) {
+      return sendError(next, "Invalid credentials", 401);
+    }
+
+    // Update last login
+    // await user.updateLastLogin();
+
+    const token = user.getSignedJwtToken();
+
+    res.cookie("token", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: "Strict",
+      expires: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
+      path: "/"
+    });
+
+    return sendResponse(res, 200, "Login successful", {
+      _id: user._id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      role: user.role,
+      token
+    });
+  } catch (error) {
+    return sendError(next, error.message, 500);
   }
-  // Check for user
-  const userData = await User.findOne({ email: email.toLowerCase() });
-  if (!userData) {
-    return sendError(next, "Invalid credentials", 400);
-  }
-  // Check if password matches
-  const isMatch = await userData.matchPassword(password);
-  if (!isMatch) {
-    return sendError(next, "Invalid credentials", 400);
-  }
-  const token = userData.getSignedJwtToken();
-  res.cookie("token", token, {
-    httpOnly: true, // Prevents JavaScript access
-    secure: true, // Ensures cookie is sent over HTTPS
-    sameSite: "Strict", // Prevents CSRF attacks
-    expires: new Date(Date.now() + 3600000), // Cookie expiration (1 hour)
-    path: "/", // Path where the cookie is valid
-  });
-  const data = {
-    _id: userData._id,
-    firstName: userData.firstName,
-    lastName: userData?.lastName,
-    token,
-    role: userData.role,
-  };
-  return sendResponse(res, 200, "Login successfully.", data);
 });
 
 /**
@@ -73,16 +127,17 @@ const loginUser = asyncHandler(async (req, res, next) => {
  * @route   GET /api/users/profile
  * @access  Private
  */
-const getUserProfile = asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user._id);
+const getUserProfile = asyncHandler(async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user._id);
 
-  if (user) {
-    setTimeout(() => {
-      console.log("User data fetched successfully");
-      return sendResponse(res, 200, "User data.", user);
-    }, 2000); // Simulate a delay of 2 seconds
-  } else {
-    throw createError("User not found", 404);
+    if (!user) {
+      return sendError(next, "User not found", 404);
+    }
+
+    return sendResponse(res, 200, "User profile retrieved successfully", user);
+  } catch (error) {
+    return sendError(next, error.message, 500);
   }
 });
 
@@ -91,53 +146,105 @@ const getUserProfile = asyncHandler(async (req, res) => {
  * @route   PUT /api/users/profile
  * @access  Private
  */
-const updateUserProfile = asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user._id);
+const updateUserProfile = asyncHandler(async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user._id);
 
-  if (!user) {
-    throw createError("User not found", 404);
-  }
+    if (!user) {
+      return sendError(next, "User not found", 404);
+    }
 
-  user.firstName = req.body.firstName || user.firstName;
-  user.email = req.body.email || user.email;
-  user.linkedinData = req.body.linkedinData || user.linkedinData;
-  user.lastName = req.body.lastName || user.lastName;
+    const updateFields = [
+      'firstName', 'lastName', 'email', 'type', 
+      'employeeBase', 'programName', 'programType',
+      'programManager', 'location', 'status', 'pan'
+    ];
 
-  if (req.body.password) {
-    user.password = req.body.password;
-  }
+    updateFields.forEach(field => {
+      if (req.body[field] !== undefined) {
+        user[field] = req.body[field];
+      }
+    });
 
-  const updatedUser = await user.save();
+    if (req.body.password) {
+      user.password = req.body.password;
+    }
 
-  return res.status(200).json({
-    success: true,
-    data: {
+    const updatedUser = await user.save();
+
+    return sendResponse(res, 200, "Profile updated successfully", {
       _id: updatedUser._id,
       firstName: updatedUser.firstName,
       lastName: updatedUser.lastName,
       email: updatedUser.email,
-      role: updatedUser.role,
-      token: updatedUser.getSignedJwtToken(),
-    },
-  });
+      role: updatedUser.role
+    });
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
 });
 
+/**
+ * @desc    Get all users
+ * @route   GET /api/users
+ * @access  Private/Admin
+ */
+const getAllUsers = asyncHandler(async (req, res, next) => {
+  try {
+    const users = await User.find({}).select('-password');
+
+    return sendResponse(res, 200, "Users retrieved successfully", users);
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
+/**
+ * @desc    Delete user
+ * @route   DELETE /api/users/:id
+ * @access  Private/Admin
+ */
+const deleteUser = asyncHandler(async (req, res, next) => {
+  try {
+    const user = await User.findById(req.params.id);
+
+    if (!user) {
+      return sendError(next, "User not found", 404);
+    }
+
+    // Prevent admin from deleting themselves
+    if (user._id.toString() === req.user._id.toString()) {
+      return sendError(next, "Cannot delete your own account", 400);
+    }
+
+    await user.deleteOne();
+
+    return sendResponse(res, 200, "User deleted successfully", null);
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
+
+/**
+ * @desc    Logout user
+ * @route   POST /api/users/logout
+ * @access  Private
+ */
 const logout = asyncHandler(async (req, res, next) => {
   try {
     res.cookie("token", "", {
       httpOnly: true,
-      secure: true,
+      secure: process.env.NODE_ENV === 'production',
       sameSite: "Strict",
       expires: new Date(0),
-      path: "/",
+      path: "/"
     });
-    const error = new Error("first case");
-    error.data = { logOut: true };
-    error.statusCode = 400;
-    return next(error);
+
+    return sendResponse(res, 200, "Logged out successfully", { logOut: true });
   } catch (error) {
-    next(error);
+    return sendError(next, error.message, 500);
   }
 });
 
-export { registerUser, loginUser, updateUserProfile, getUserProfile, logout };
+export { registerUser, loginUser, updateUserProfile, getUserProfile,deleteUser, logout ,getAllUsers};
