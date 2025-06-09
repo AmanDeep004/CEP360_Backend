@@ -19,6 +19,12 @@ const userSchema = new Schema(
       trim: true,
       maxlength: [50, "Name cannot be more than 50 characters"],
     },
+    employeeCode: {
+      type: String,
+      required: [true, "Employee code is required"],
+      unique: true,
+      trim: true,
+    },
     email: {
       type: String,
       required: [true, "Please add an email"],
@@ -35,10 +41,70 @@ const userSchema = new Schema(
       minlength: [6, "Password must be at least 6 characters"],
       select: false,
     },
-
     role: {
       type: String,
-      default: UserRoleEnum.USER,
+      enum: {
+        values: [
+          "admin",
+          "program_manager",
+          "resource_manager",
+          "agent",
+          "database_manager",
+        ],
+        message: "{VALUE} is not a valid role",
+      },
+      default: "agent",
+    },
+    lastLogin: {
+      type: Date,
+    },
+    type: {
+      type: String,
+      required: [true, "Employee type is required"],
+      trim: true,
+    },
+    employeeBase: {
+      type: String,
+      required: [true, "Employee base is required"],
+      trim: true,
+    },
+    programName: {
+      type: String,
+      required: [true, "Program name is required"],
+      trim: true,
+    },
+    programType: {
+      type: String,
+      required: [true, "Program type is required"],
+      trim: true,
+    },
+    programManager: {
+      type: String,
+      required: [true, "Program manager is required"],
+      trim: true,
+    },
+    location: {
+      type: String,
+      required: [true, "Location is required"],
+      trim: true,
+    },
+    status: {
+      type: String,
+      required: [true, "Status is required"],
+      enum: {
+        values: ["active", "inactive", "pending"],
+        message: "{VALUE} is not a valid status",
+      },
+      default: "active",
+    },
+    doj: {
+      type: Date,
+      required: [true, "Date of joining is required"],
+    },
+    pan: {
+      type: String,
+      trim: true,
+      match: [/[A-Z]{5}[0-9]{4}[A-Z]{1}/, "Please provide a valid PAN number"],
     },
   },
   {

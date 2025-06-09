@@ -1,6 +1,9 @@
 const UserRoleEnum = Object.freeze({
-  ADMIN: "ADMIN",
-  USER: "USER",
+  ADMIN: "admin",
+  PROGRAM_MANAGER: "program_manager",
+  RESOURCE_MANAGER: "resource_manager",
+  AGENT: "agent",
+  DATABASE_MANAGER: "database_manager",
 });
 
 const HTTPLOG = false; //true, false
