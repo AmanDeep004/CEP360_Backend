@@ -1,6 +1,10 @@
 import User from "../models/userModel.js";
 import errorHandler from "../utils/index.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
+import { UserRoleEnum } from "../utils/enum.js";
+
+const { ADMIN, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT, DATABASE_MANAGER } =
+  UserRoleEnum;
 
 /**
  * @desc    Register a new user
@@ -10,61 +14,68 @@ const { asyncHandler, sendError, sendResponse } = errorHandler;
 const registerUser = asyncHandler(async (req, res, next) => {
   try {
     const {
-      firstName,
-      lastName,
+      employeeName,
+      type,
       employeeCode,
       email,
       password,
-      type,
+      role,
+      code,
       employeeBase,
       programName,
       programType,
+      signature,
       programManager,
       location,
       status,
       doj,
       pan,
-      role
+      ctc,
+      telecmiId,
     } = req.body;
 
     // Check if user exists
-    const userExists = await User.findOne({ 
-      $or: [
-        { email: email.toLowerCase() },
-        { employeeCode }
-      ]
+    const userExists = await User.findOne({
+      $or: [{ email: email.toLowerCase() }, { employeeCode }],
     });
 
     if (userExists) {
-      return sendError(next, "User already exists with this email or employee code", 400);
+      return sendError(
+        next,
+        "User already exists with this email or employee code",
+        400
+      );
     }
 
     // Create user
     const user = await User.create({
-      firstName,
-      lastName,
+      employeeName,
+      type,
       employeeCode,
       email: email.toLowerCase(),
       password,
-      type,
+      role: role || "agent",
+      code,
       employeeBase,
       programName,
       programType,
+      signature,
       programManager,
       location,
-      status: status || 'active',
+      status: status || "active",
       doj,
       pan,
-      role: role || 'agent'
+      ctc,
+      telecmiId,
     });
 
     return sendResponse(res, 200, "User Created Successfully", {
       _id: user._id,
-      firstName: user.firstName,
-      lastName: user.lastName,
+      employeeName: user.employeeName,
       email: user.email,
       employeeCode: user.employeeCode,
-      role: user.role
+      role: user.role,
+      status: user.status,
     });
   } catch (error) {
     return sendError(next, error.message, 500);
@@ -84,7 +95,9 @@ const loginUser = asyncHandler(async (req, res, next) => {
       return sendError(next, "Please provide email and password", 400);
     }
 
-    const user = await User.findOne({ email: email.toLowerCase() }).select('+password');
+    const user = await User.findOne({ email: email.toLowerCase() }).select(
+      "+password"
+    );
 
     if (!user) {
       return sendError(next, "Invalid credentials", 401);
@@ -103,10 +116,10 @@ const loginUser = asyncHandler(async (req, res, next) => {
 
     res.cookie("token", token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: process.env.NODE_ENV === "production",
       sameSite: "Strict",
       expires: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
-      path: "/"
+      path: "/",
     });
 
     return sendResponse(res, 200, "Login successful", {
@@ -115,7 +128,7 @@ const loginUser = asyncHandler(async (req, res, next) => {
       lastName: user.lastName,
       email: user.email,
       role: user.role,
-      token
+      token,
     });
   } catch (error) {
     return sendError(next, error.message, 500);
@@ -155,12 +168,26 @@ const updateUserProfile = asyncHandler(async (req, res, next) => {
     }
 
     const updateFields = [
-      'firstName', 'lastName', 'email', 'type', 
-      'employeeBase', 'programName', 'programType',
-      'programManager', 'location', 'status', 'pan'
+      "employeeName",
+      "type",
+      "code",
+      "employeeBase",
+      "programName",
+      "programType",
+      "signature",
+      "programManager",
+      "location",
+      "status",
+      "pan",
+      "telecmiId",
     ];
 
-    updateFields.forEach(field => {
+    console.log("User role:", req.user.role);
+    if (req.user.role === ADMIN || req.user.role === RESOURCE_MANAGER) {
+      updateFields.push("ctc");
+    }
+
+    updateFields.forEach((field) => {
       if (req.body[field] !== undefined) {
         user[field] = req.body[field];
       }
@@ -174,10 +201,10 @@ const updateUserProfile = asyncHandler(async (req, res, next) => {
 
     return sendResponse(res, 200, "Profile updated successfully", {
       _id: updatedUser._id,
-      firstName: updatedUser.firstName,
-      lastName: updatedUser.lastName,
+      employeeName: updatedUser.employeeName,
       email: updatedUser.email,
-      role: updatedUser.role
+      role: updatedUser.role,
+      status: updatedUser.status,
     });
   } catch (error) {
     return sendError(next, error.message, 500);
@@ -191,7 +218,7 @@ const updateUserProfile = asyncHandler(async (req, res, next) => {
  */
 const getAllUsers = asyncHandler(async (req, res, next) => {
   try {
-    const users = await User.find({}).select('-password');
+    const users = await User.find({}).select("-password");
 
     return sendResponse(res, 200, "Users retrieved successfully", users);
   } catch (error) {
@@ -225,7 +252,6 @@ const deleteUser = asyncHandler(async (req, res, next) => {
   }
 });
 
-
 /**
  * @desc    Logout user
  * @route   POST /api/users/logout
@@ -235,10 +261,10 @@ const logout = asyncHandler(async (req, res, next) => {
   try {
     res.cookie("token", "", {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: process.env.NODE_ENV === "production",
       sameSite: "Strict",
       expires: new Date(0),
-      path: "/"
+      path: "/",
     });
 
     return sendResponse(res, 200, "Logged out successfully", { logOut: true });
@@ -247,4 +273,12 @@ const logout = asyncHandler(async (req, res, next) => {
   }
 });
 
-export { registerUser, loginUser, updateUserProfile, getUserProfile,deleteUser, logout ,getAllUsers};
+export {
+  registerUser,
+  loginUser,
+  updateUserProfile,
+  getUserProfile,
+  deleteUser,
+  logout,
+  getAllUsers,
+};

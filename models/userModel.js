@@ -7,17 +7,18 @@ const { sign } = jwt;
 
 const userSchema = new Schema(
   {
-    firstName: {
+    employeeName: {
       type: String,
-      required: [true, "Please add a First Name"],
+      required: [true, "Please add Employee name"],
       trim: true,
       maxlength: [50, "Name cannot be more than 50 characters"],
     },
-    lastName: {
+    type:{
       type: String,
-      //required: [true, "Please add a lastName"],
+      enum: {
+        values: ["KSTN", "KI", "TEMP","CEP"],
+      },
       trim: true,
-      maxlength: [50, "Name cannot be more than 50 characters"],
     },
     employeeCode: {
       type: String,
@@ -55,6 +56,10 @@ const userSchema = new Schema(
       },
       default: "agent",
     },
+    code:{
+      type: String,
+      trim: true,
+    },
     lastLogin: {
       type: Date,
     },
@@ -76,6 +81,11 @@ const userSchema = new Schema(
     programType: {
       type: String,
       required: [true, "Program type is required"],
+      trim: true,
+    },
+    signature: {
+      type: String,
+      required: [true, "Signature is required"],
       trim: true,
     },
     programManager: {
@@ -106,6 +116,15 @@ const userSchema = new Schema(
       trim: true,
       match: [/[A-Z]{5}[0-9]{4}[A-Z]{1}/, "Please provide a valid PAN number"],
     },
+    ctc:{
+      type: Number,
+      // required: [true, "CTC is required"],
+      min: [0, "CTC cannot be negative"],
+    },
+    telecmiId:{
+      type: String,
+      trim: true,
+    }
   },
   {
     timestamps: true,
