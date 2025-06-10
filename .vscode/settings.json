@@ -1,0 +1,28 @@
+{
+  // config related to code formatting
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.formatOnSave": true,
+  "prettier.jsxSingleQuote": false,
+  "[javascript]": {
+    "editor.formatOnSave": true
+    // "editor.defaultFormatter": null
+  },
+  "[javascriptreact]": {
+    "editor.formatOnSave": true
+    // "editor.defaultFormatter": null
+  },
+  // "javascript.validate.enable": false, //disable all built-in syntax checking
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit",
+    "source.fixAll.tslint": "explicit"
+  },
+  // emmet
+  "emmet.triggerExpansionOnTab": true,
+  "emmet.includeLanguages": {
+    "javascript": "javascriptreact"
+  },
+  "eslint.alwaysShowStatus": true,
+  "[sass]": {
+    "editor.defaultFormatter": "syler.sass-indented"
+  }
+}

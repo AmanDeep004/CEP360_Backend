@@ -34,8 +34,9 @@ const sendResponse = (res, statusCode, message, data, rest) => {
  * @param {number} statusCode - HTTP status code
  * @returns {Function} - Next function with error
  */
-const sendError = (next, message, statusCode) => {
+const sendError = (next, message, statusCode, data) => {
   const error = new Error(message);
+  error.data = data || {};
   error.statusCode = statusCode;
   return next(error);
 };
