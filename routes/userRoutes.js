@@ -12,8 +12,14 @@ import {
 import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
 
-const { ADMIN, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT, DATABASE_MANAGER } =
-  UserRoleEnum;
+const {
+  ADMIN,
+  PROGRAM_MANAGER,
+  RESOURCE_MANAGER,
+  AGENT,
+  DATABASE_MANAGER,
+  PRESALES_MANAGER,
+} = UserRoleEnum;
 const router = Router();
 router.post(
   "/register",
@@ -22,7 +28,19 @@ router.post(
   registerUser
 );
 router.post("/login", loginUser);
-router.get("/user", protect, authorize(ADMIN, AGENT), getUserProfile);
+router.get(
+  "/user",
+  protect,
+  authorize(
+    ADMIN,
+    PROGRAM_MANAGER,
+    RESOURCE_MANAGER,
+    AGENT,
+    DATABASE_MANAGER,
+    PRESALES_MANAGER
+  ),
+  getUserProfile
+);
 router.put(
   "/user",
   protect,
