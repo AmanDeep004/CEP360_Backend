@@ -4,6 +4,7 @@ const UserRoleEnum = Object.freeze({
   RESOURCE_MANAGER: "resource_manager",
   AGENT: "agent",
   DATABASE_MANAGER: "database_manager",
+  PRESALES_MANAGER: "presales_manager",
 });
 
 const HTTPLOG = false; //true, false

@@ -5,8 +5,14 @@ import { UserRoleEnum } from "../utils/enum.js";
 const { genSalt, hash, compare } = pkg;
 const { sign } = jwt;
 
-const { ADMIN, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT, DATABASE_MANAGER } =
-  UserRoleEnum;
+const {
+  ADMIN,
+  PROGRAM_MANAGER,
+  RESOURCE_MANAGER,
+  AGENT,
+  DATABASE_MANAGER,
+  PRESALES_MANAGER,
+} = UserRoleEnum;
 const userSchema = new Schema(
   {
     employeeName: {
@@ -53,6 +59,7 @@ const userSchema = new Schema(
           PROGRAM_MANAGER,
           DATABASE_MANAGER,
           AGENT,
+          PRESALES_MANAGER,
         ],
         message: "{VALUE} is not a valid role",
       },
