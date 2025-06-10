@@ -5,6 +5,8 @@ import { UserRoleEnum } from "../utils/enum.js";
 const { genSalt, hash, compare } = pkg;
 const { sign } = jwt;
 
+const { ADMIN, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT, DATABASE_MANAGER } =
+  UserRoleEnum;
 const userSchema = new Schema(
   {
     employeeName: {
@@ -13,10 +15,10 @@ const userSchema = new Schema(
       trim: true,
       maxlength: [50, "Name cannot be more than 50 characters"],
     },
-    type:{
+    type: {
       type: String,
       enum: {
-        values: ["KSTN", "KI", "TEMP","CEP"],
+        values: ["KSTN", "KI", "TEMP", "CEP"],
       },
       trim: true,
     },
@@ -46,17 +48,17 @@ const userSchema = new Schema(
       type: String,
       enum: {
         values: [
-          "admin",
-          "program_manager",
-          "resource_manager",
-          "agent",
-          "database_manager",
+          ADMIN,
+          RESOURCE_MANAGER,
+          PROGRAM_MANAGER,
+          DATABASE_MANAGER,
+          AGENT,
         ],
         message: "{VALUE} is not a valid role",
       },
       default: "agent",
     },
-    code:{
+    code: {
       type: String,
       trim: true,
     },
@@ -116,15 +118,15 @@ const userSchema = new Schema(
       trim: true,
       match: [/[A-Z]{5}[0-9]{4}[A-Z]{1}/, "Please provide a valid PAN number"],
     },
-    ctc:{
+    ctc: {
       type: Number,
       // required: [true, "CTC is required"],
       min: [0, "CTC cannot be negative"],
     },
-    telecmiId:{
+    telecmiId: {
       type: String,
       trim: true,
-    }
+    },
   },
   {
     timestamps: true,
