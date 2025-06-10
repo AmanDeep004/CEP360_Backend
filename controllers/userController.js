@@ -267,7 +267,7 @@ const logout = asyncHandler(async (req, res, next) => {
       path: "/",
     });
 
-    return sendResponse(res, 200, "Logged out successfully", { logOut: true });
+    return sendError(next, "error.message", 500, { logOut: true });
   } catch (error) {
     return sendError(next, error.message, 500);
   }
