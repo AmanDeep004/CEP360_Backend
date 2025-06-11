@@ -54,7 +54,7 @@ const userSchema = new Schema(
       type: String,
       enum: {
         values: [
-          ADMIN,
+          // ADMIN,
           RESOURCE_MANAGER,
           PROGRAM_MANAGER,
           DATABASE_MANAGER,

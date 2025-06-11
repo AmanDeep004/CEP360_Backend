@@ -6,6 +6,7 @@ import cookieParser from "cookie-parser";
 import connectDB from "./config/db.js";
 import { errorHandler } from "./middleware/errorMiddleware.js";
 import userRoutes from "./routes/userRoutes.js";
+import campaignRoutes from "./routes/campaignRoutes.js";
 import { expressWinstonErrorLogger, logger } from "./logger/index.js";
 dotenv.config({ path: `.env.local` });
 // Connect to database
@@ -27,6 +28,7 @@ app.get("/", (req, res) => {
   res.json({ message: "Welcome to MERN API" });
 });
 app.use("/api/auth", userRoutes);
+app.use("/api/campaign", campaignRoutes);
 // Handle 404 - Route not found
 app.use("*", (req, res) => {
   res.status(404).json({

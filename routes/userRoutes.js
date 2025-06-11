@@ -5,6 +5,7 @@ import {
   updateUserProfile,
   getUserProfile,
   getAllUsers,
+  getUsersByRole,
   deleteUser,
   logout,
   // getUsers,
@@ -42,6 +43,8 @@ router.get(
   authorize(ADMIN, RESOURCE_MANAGER, PROGRAM_MANAGER),
   getAllUsers
 );
+
+router.get("/users-by-role", protect, authorize(...ALL), getUsersByRole);
 router.delete("/:id", protect, authorize(ADMIN, RESOURCE_MANAGER), deleteUser);
 router.post("/logout", logout);
 // Admin only routes

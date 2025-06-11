@@ -227,6 +227,37 @@ const getAllUsers = asyncHandler(async (req, res, next) => {
 });
 
 /**
+ * @desc    Get user by roles specially program manager & agent
+ */
+const getUsersByRole = asyncHandler(async (req, res, next) => {
+  try {
+    const roles = req.query.roles?.split(",") || [];
+    // console.log("Roles:", roles);
+
+    if (roles.length === 0) {
+      return sendError(next, "Please specify roles to filter", 400);
+    }
+
+    const validRoles = roles.every(
+      (role) => UserRoleEnum.ALL.includes(role) && role !== ADMIN
+    );
+    if (!validRoles) {
+      return sendError(next, "Invalid role specified", 400);
+    }
+
+    const users = await User.find({ role: { $in: roles } })
+      .select(
+        "employeeName email role employeeCode programName location status _id"
+      )
+      .lean();
+
+    return sendResponse(res, 200, "Users retrieved successfully", users);
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
+/**
  * @desc    Delete user
  * @route   DELETE /api/users/:id
  * @access  Private/Admin
@@ -278,6 +309,7 @@ export {
   loginUser,
   updateUserProfile,
   getUserProfile,
+  getUsersByRole,
   deleteUser,
   logout,
   getAllUsers,
