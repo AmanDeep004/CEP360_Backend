@@ -19,6 +19,7 @@ const {
   AGENT,
   DATABASE_MANAGER,
   PRESALES_MANAGER,
+  ALL,
 } = UserRoleEnum;
 const router = Router();
 router.post(
@@ -28,19 +29,7 @@ router.post(
   registerUser
 );
 router.post("/login", loginUser);
-router.get(
-  "/user",
-  protect,
-  authorize(
-    ADMIN,
-    PROGRAM_MANAGER,
-    RESOURCE_MANAGER,
-    AGENT,
-    DATABASE_MANAGER,
-    PRESALES_MANAGER
-  ),
-  getUserProfile
-);
+router.get("/user", protect, authorize(...ALL), getUserProfile);
 router.put(
   "/user",
   protect,
