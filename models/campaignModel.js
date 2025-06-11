@@ -12,13 +12,16 @@ const campaignSchema = new mongoose.Schema(
       maxlength: [50, "Program Name cannot be more than 50 characters"],
       unique: [true, "Campaign name must be unique"],
     },
-    type: { type: String, enum: { values: ALL }, required: true },
+
+    type: { type: String, required: true },
+    // type: { type: String, enum: { values: ALL }, required: true },
     // category: { type: String, required: true },  // DELETED
     startDate: { type: Date, required: true },
     endDate: { type: Date, required: true },
     campaignManagerId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      //   type: mongoose.Schema.Types.ObjectId,
+      //   ref: "User",
+      type: String,
       required: true,
     },
     status: {
