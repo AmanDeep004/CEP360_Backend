@@ -161,7 +161,7 @@ const getUserProfile = asyncHandler(async (req, res, next) => {
  */
 const updateUserProfile = asyncHandler(async (req, res, next) => {
   try {
-    const user = await User.findById(req.user._id);
+    const user = await User.findById(req.body._id);
 
     if (!user) {
       return sendError(next, "User not found", 404);
@@ -182,7 +182,7 @@ const updateUserProfile = asyncHandler(async (req, res, next) => {
       "telecmiId",
     ];
 
-    console.log("User role:", req.user.role);
+    // console.log("User role:", req.user.role);
     if (req.user.role === ADMIN || req.user.role === RESOURCE_MANAGER) {
       updateFields.push("ctc");
     }
