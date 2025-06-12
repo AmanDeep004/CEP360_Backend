@@ -92,7 +92,7 @@ const updateCampaign = asyncHandler(async (req, res, next) => {
     if (req.body.name) {
       const nameExists = await Campaign.findOne({
         name: req.body.name.trim(),
-        _id: { $ne: req.params.id }, // Exclude current campaign
+        _id: { $ne: req.body._id }, // Exclude current campaign
       });
 
       if (nameExists) {
@@ -100,7 +100,7 @@ const updateCampaign = asyncHandler(async (req, res, next) => {
       }
     }
     const updatedCampaign = await Campaign.findByIdAndUpdate(
-      req.params.id,
+      req.body._id,
       { ...req.body, name: req.body.name?.trim() },
       { new: true, runValidators: true }
     );
