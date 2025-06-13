@@ -18,9 +18,9 @@ const campaignSchema = new mongoose.Schema(
     // category: { type: String, required: true },  // DELETED
     startDate: { type: Date, required: true },
     endDate: { type: Date, required: true },
-    campaignManagerId: {
-      //   type: mongoose.Schema.Types.ObjectId,
-      //   ref: "User",
+    programManager: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
       type: String,
       required: true,
     },

@@ -9,7 +9,7 @@ const { asyncHandler, sendError, sendResponse } = errorHandler;
  */
 const createCampaign = asyncHandler(async (req, res, next) => {
   try {
-    const { name, type, startDate, endDate, campaignManagerId } = req.body;
+    const { name, type, startDate, endDate, programManager } = req.body;
     const campaignExists = await Campaign.findOne({ name: name.trim() });
 
     if (campaignExists) {
@@ -21,7 +21,7 @@ const createCampaign = asyncHandler(async (req, res, next) => {
       type,
       startDate,
       endDate,
-      campaignManagerId,
+      programManager,
       status: "active",
     });
 
@@ -39,7 +39,7 @@ const createCampaign = asyncHandler(async (req, res, next) => {
 const getAllCampaigns = asyncHandler(async (req, res, next) => {
   try {
     const campaigns = await Campaign.find()
-      .populate("campaignManagerId", "employeeName email")
+      .populate("programManager", "employeeName email")
       .lean();
 
     return sendResponse(
