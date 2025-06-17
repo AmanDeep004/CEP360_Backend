@@ -30,32 +30,32 @@ const campaignSchema = new mongoose.Schema(
       default: "active",
       enum: ["active", "inactive", "completed"],
     },
-    // teamLeaderId: {
-    //   type: mongoose.Schema.Types.ObjectId,
-    //   ref: "User",
-    //   required: false,
-    // },
-    // keyAccountManager: { type: String, required: false },
-    // // executedAt: { type: String, required: true },   //DELETED
+    teamLeaderId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: false,
+    },
+    keyAccountManager: { type: String, required: false },
+    // executedAt: { type: String, required: true },   //DELETED
 
-    // jcNumber: { type: String, required: false },
-    // brandName: { type: String, required: true },
-    // clientName: { type: String, required: true },
-    // clientEmail: { type: String, required: true },
-    // clientContact: { type: String, required: true },
-    // comments: { type: String },
-    // resourcesAssigned: [
-    //   {
-    //     type: mongoose.Schema.Types.ObjectId,
-    //     ref: "User",
-    //   },
-    // ],
-    // resourcesReleased: [
-    //   {
-    //     type: mongoose.Schema.Types.ObjectId,
-    //     ref: "User",
-    //   },
-    // ],
+    jcNumber: { type: String, required: false },
+    brandName: { type: String, required: false },
+    clientName: { type: String, required: false },
+    clientEmail: { type: String, required: false },
+    clientContact: { type: String, required: false },
+    comments: { type: String },
+    resourcesAssigned: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
+    resourcesReleased: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
   },
   { timestamps: true }
 );

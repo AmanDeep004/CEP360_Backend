@@ -5,11 +5,12 @@ import {
   getCampaign,
   updateCampaign,
   deleteCampaign,
+  getCampaignsByUserId,
 } from "../controllers/campaignController.js";
 import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
 
-const { ADMIN, PROGRAM_MANAGER, PRESALES_MANAGER } = UserRoleEnum;
+const { ADMIN, PROGRAM_MANAGER, PRESALES_MANAGER, AGENT } = UserRoleEnum;
 const router = Router();
 
 // Create new campaign
@@ -31,6 +32,13 @@ router.get(
 // Get single campaign by ID
 router.get("/:id", protect, getCampaign);
 
+// get campaign details by user id   only for pm/agent
+router.get(
+  "/getCampaignById/:userId",
+  protect,
+  authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER, AGENT),
+  getCampaignsByUserId
+);
 // Update campaign
 router.put(
   "/update",

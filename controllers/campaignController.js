@@ -1,6 +1,16 @@
 import Campaign from "../models/campaignModel.js";
 import errorHandler from "../utils/index.js";
+import User from "../models/userModel.js";
+import { UserRoleEnum } from "../utils/enum.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
+const {
+  ADMIN,
+  PRESALES_MANAGER,
+  PROGRAM_MANAGER,
+  RESOURCE_MANAGER,
+  AGENT,
+  DATABASE_MANAGER,
+} = UserRoleEnum;
 
 /**
  * @desc    Create new campaign
@@ -9,7 +19,24 @@ const { asyncHandler, sendError, sendResponse } = errorHandler;
  */
 const createCampaign = asyncHandler(async (req, res, next) => {
   try {
-    const { name, type, startDate, endDate, programManager } = req.body;
+    const {
+      name,
+      type,
+      startDate,
+      endDate,
+      programManager,
+      status,
+      teamLeaderId,
+      keyAccountManager,
+      jcNumber,
+      brandName,
+      clientName,
+      clientEmail,
+      clientContact,
+      comments,
+      resourcesAssigned,
+      resourcesReleased,
+    } = req.body;
     const campaignExists = await Campaign.findOne({ name: name.trim() });
 
     if (campaignExists) {
@@ -22,10 +49,46 @@ const createCampaign = asyncHandler(async (req, res, next) => {
       startDate,
       endDate,
       programManager,
-      status: "active",
+      status: status || "active",
+      teamLeaderId,
+      keyAccountManager,
+      jcNumber,
+      brandName,
+      clientName,
+      clientEmail,
+      clientContact,
+      comments,
+      resourcesAssigned,
+      resourcesReleased,
     });
+    const populatedCampaign = await Campaign.findById(campaign._id)
+      .populate({
+        path: "programManager",
+        select: "employeeName email",
+        transform: (doc) => ({
+          programManagerName: doc.employeeName,
+          programManagerEmail: doc.email,
+        }),
+      })
+      .populate({
+        path: "teamLeaderId",
+        select: "employeeName email",
+      })
+      .populate({
+        path: "resourcesAssigned",
+        select: "employeeName email role",
+      })
+      .populate({
+        path: "resourcesReleased",
+        select: "employeeName email role",
+      });
 
-    return sendResponse(res, 200, "Campaign created successfully", campaign);
+    return sendResponse(
+      res,
+      200,
+      "Campaign created successfully",
+      populatedCampaign
+    );
   } catch (error) {
     return sendError(next, error.message, 500);
   }
@@ -39,9 +102,23 @@ const createCampaign = asyncHandler(async (req, res, next) => {
 const getAllCampaigns = asyncHandler(async (req, res, next) => {
   try {
     const campaigns = await Campaign.find()
-      .populate("programManager", "employeeName email")
+      .populate({
+        path: "programManager",
+        select: "employeeName email",
+      })
+      .populate({
+        path: "teamLeaderId",
+        select: "employeeName email",
+      })
+      .populate({
+        path: "resourcesAssigned",
+        select: "employeeName email role",
+      })
+      .populate({
+        path: "resourcesReleased",
+        select: "employeeName email role",
+      })
       .lean();
-
     return sendResponse(
       res,
       200,
@@ -60,10 +137,23 @@ const getAllCampaigns = asyncHandler(async (req, res, next) => {
  */
 const getCampaign = asyncHandler(async (req, res, next) => {
   try {
-    const campaign = await Campaign.findById(req.params.id).populate(
-      "campaignManagerId",
-      "employeeName email"
-    );
+    const campaign = await Campaign.findById(req.params.id)
+      .populate({
+        path: "programManager",
+        select: "employeeName email",
+      })
+      .populate({
+        path: "teamLeaderId",
+        select: "employeeName email",
+      })
+      .populate({
+        path: "resourcesAssigned",
+        select: "employeeName email role",
+      })
+      .populate({
+        path: "resourcesReleased",
+        select: "employeeName email role",
+      });
 
     if (!campaign) {
       return sendError(next, "Campaign not found", 404);
@@ -117,6 +207,82 @@ const updateCampaign = asyncHandler(async (req, res, next) => {
 });
 
 /**
+ * @desc    Get campaigns by user ID with role-based access
+ * @route   GET /api/campaigns/user/:userId
+ * @access  Private
+ */
+const getCampaignsByUserId = asyncHandler(async (req, res, next) => {
+  try {
+    const user = await User.findById(req.params.userId);
+    if (!user) {
+      return sendError(next, "User not found", 404);
+    }
+
+    let query = {};
+    let selectFields = {};
+
+    // Set query based on user role
+    switch (user.role) {
+      case PROGRAM_MANAGER:
+        query = { programManager: user._id };
+        break;
+      case PRESALES_MANAGER:
+        // Resource managers can see all campaigns
+        break;
+      case AGENT:
+        query = {
+          $or: [
+            { resourcesAssigned: user._id },
+            { resourcesReleased: user._id },
+          ],
+        };
+        // Limit fields for agents
+        selectFields = {
+          name: 1,
+          type: 1,
+          startDate: 1,
+          endDate: 1,
+          status: 1,
+          programManager: 1,
+          teamLeaderId: 1,
+        };
+        break;
+      default:
+        return sendError(next, "Invalid user role", 400);
+    }
+
+    const campaigns = await Campaign.find(query)
+      .select(Object.keys(selectFields).length ? selectFields : null)
+      .populate({
+        path: "programManager",
+        select: "employeeName email",
+      })
+      .populate({
+        path: "teamLeaderId",
+        select: "employeeName email",
+      })
+      .populate({
+        path: "resourcesAssigned",
+        select: "employeeName email role",
+      })
+      .populate({
+        path: "resourcesReleased",
+        select: "employeeName email role",
+      })
+      .lean();
+
+    return sendResponse(
+      res,
+      200,
+      "Campaigns retrieved successfully",
+      campaigns
+    );
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
+/**
  * @desc    Delete campaign
  * @route   DELETE /api/campaigns/:id
  * @access  Private/Admin
@@ -143,4 +309,5 @@ export {
   getCampaign,
   updateCampaign,
   deleteCampaign,
+  getCampaignsByUserId,
 };
