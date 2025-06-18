@@ -6,9 +6,12 @@ import {
   updateCampaign,
   deleteCampaign,
   getCampaignsByUserId,
+  uploadCampaignDatabase,
 } from "../controllers/campaignController.js";
+import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
+const upload = multer({ storage: multer.memoryStorage() });
 
 const { ADMIN, PROGRAM_MANAGER, PRESALES_MANAGER, AGENT } = UserRoleEnum;
 const router = Router();
@@ -47,6 +50,12 @@ router.put(
   updateCampaign
 );
 
+router.post(
+  "/upload-database",
+  protect,
+  upload.single("file"),
+  uploadCampaignDatabase
+);
 // Delete campaign
 // router.delete("/delete/:id", protect, authorize(ADMIN), deleteCampaign);
 

@@ -1,7 +1,9 @@
 import Campaign from "../models/campaignModel.js";
 import errorHandler from "../utils/index.js";
 import User from "../models/userModel.js";
+import CampaignDatabase from "../models/campaignDatabase.js";
 import { UserRoleEnum } from "../utils/enum.js";
+import XLSX from "xlsx";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 const {
   ADMIN,
@@ -178,22 +180,64 @@ const updateCampaign = asyncHandler(async (req, res, next) => {
       return sendError(next, "Campaign not found", 404);
     }
 
-    // If name is being updated, check for uniqueness
-    if (req.body.name) {
-      const nameExists = await Campaign.findOne({
-        name: req.body.name.trim(),
-        _id: { $ne: req.body._id }, // Exclude current campaign
-      });
+    const updateData = { ...req.body };
+    delete updateData._id;
 
-      if (nameExists) {
-        return sendError(next, "Campaign with this name already exists", 400);
-      }
+    // Handle resourcesAssigned/resourcesReleased logic
+    if (req.body.resourcesAssigned) {
+      const prevAssigned = (campaign.resourcesAssigned || []).map((id) =>
+        id.toString()
+      );
+      const prevReleased = (campaign.resourcesReleased || []).map((id) =>
+        id.toString()
+      );
+      const newAssigned = (req.body.resourcesAssigned || []).map((id) =>
+        id.toString()
+      );
+
+      const removedFromAssigned = prevAssigned.filter(
+        (id) => !newAssigned.includes(id)
+      );
+      let updatedReleased = [
+        ...prevReleased,
+        ...removedFromAssigned.filter((id) => !prevReleased.includes(id)),
+      ];
+
+      const addedToAssigned = newAssigned.filter(
+        (id) => !prevAssigned.includes(id)
+      );
+      updatedReleased = updatedReleased.filter(
+        (id) => !addedToAssigned.includes(id)
+      );
+
+      updateData.resourcesReleased = updatedReleased;
     }
+
     const updatedCampaign = await Campaign.findByIdAndUpdate(
       req.body._id,
-      { ...req.body, name: req.body.name?.trim() },
+      updateData,
       { new: true, runValidators: true }
-    );
+    )
+      .populate({
+        path: "programManager",
+        select: "employeeName email",
+        transform: (doc) => ({
+          programManagerName: doc.employeeName,
+          programManagerEmail: doc.email,
+        }),
+      })
+      .populate({
+        path: "teamLeaderId",
+        select: "employeeName email",
+      })
+      .populate({
+        path: "resourcesAssigned",
+        select: "employeeName email role",
+      })
+      .populate({
+        path: "resourcesReleased",
+        select: "employeeName email role",
+      });
 
     return sendResponse(
       res,
@@ -303,6 +347,60 @@ const deleteCampaign = asyncHandler(async (req, res, next) => {
   }
 });
 
+/**
+ * @desc    Upload campaign database (Excel)
+ * @route   POST /api/campaigns/upload-database
+ * @access  Private
+ */
+
+const uploadCampaignDatabase = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId, uploadedBy } = req.body;
+    if (!req.file) return sendError(next, "No file uploaded", 400);
+
+    const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const json = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+    const REQUIRED_FIELDS = [
+      "mobile",
+      "name",
+      "email",
+      "location",
+      "company",
+      // "designation",
+    ];
+    const missingFields = REQUIRED_FIELDS.filter(
+      (field) =>
+        !Object.keys(json[0] || {})
+          .map((f) => f.toLowerCase())
+          .includes(field)
+    );
+
+    if (missingFields.length > 0) {
+      return sendError(next, `Missing Fields: ${missingFields.join(",")}`, 400);
+    }
+    const dbEntries = json.map((row) => ({
+      campaignId,
+      uploadedBy,
+      name: row.name,
+      email: row.email,
+      mobile: row.mobile,
+      location: row.location,
+      company: row.company,
+    }));
+
+    // Save all entries
+    await CampaignDatabase.insertMany(dbEntries);
+
+    return sendResponse(res, 200, "Database uploaded successfully", {
+      count: dbEntries.length,
+    });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
 export {
   createCampaign,
   getAllCampaigns,
@@ -310,4 +408,5 @@ export {
   updateCampaign,
   deleteCampaign,
   getCampaignsByUserId,
+  uploadCampaignDatabase,
 };

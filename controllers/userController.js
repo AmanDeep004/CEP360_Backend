@@ -1,4 +1,5 @@
 import User from "../models/userModel.js";
+import Campaign from "../models/campaignModel.js";
 import errorHandler from "../utils/index.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 import { UserRoleEnum } from "../utils/enum.js";
@@ -229,10 +230,11 @@ const getAllUsers = asyncHandler(async (req, res, next) => {
 /**
  * @desc    Get user by roles specially program manager & agent
  */
+
+// here
 const getUsersByRole = asyncHandler(async (req, res, next) => {
   try {
     const roles = req.query.roles?.split(",") || [];
-    // console.log("Roles:", roles);
 
     if (roles.length === 0) {
       return sendError(next, "Please specify roles to filter", 400);
@@ -245,6 +247,32 @@ const getUsersByRole = asyncHandler(async (req, res, next) => {
       return sendError(next, "Invalid role specified", 400);
     }
 
+    if (roles.length == 1 && roles[0] === AGENT) {
+      const campaigns = await Campaign.find({
+        programManager: { $ne: req.user._id },
+      }).select("resourcesAssigned");
+
+      const assignedAgentIds = campaigns
+        .map((c) => c.resourcesAssigned)
+        .flat()
+        .map((id) => id.toString());
+
+      const agents = await User.find({
+        role: AGENT,
+        _id: { $nin: assignedAgentIds },
+      }).select(
+        "employeeName email role employeeCode programName location status _id"
+      );
+
+      return sendResponse(
+        res,
+        200,
+        "Agents not assigned to any campaign (except your own) retrieved successfully",
+        agents
+      );
+    }
+
+    // Default: get users by roles (excluding admin)
     const users = await User.find({ role: { $in: roles } })
       .select(
         "employeeName email role employeeCode programName location status _id"
