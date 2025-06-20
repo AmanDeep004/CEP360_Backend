@@ -15,14 +15,15 @@ const campaignSchema = new mongoose.Schema(
 
     type: { type: String, required: true },
     // type: { type: String, enum: { values: ALL }, required: true },
-    // category: { type: String, required: true },  // DELETED
     startDate: { type: Date, required: true },
     endDate: { type: Date, required: true },
     programManager: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      type: String,
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
       required: true,
+      validate: [
+        (array) => array.length > 0,
+        "At least one Program Manager is required",
+      ],
     },
     status: {
       type: String,
@@ -30,51 +31,15 @@ const campaignSchema = new mongoose.Schema(
       default: "active",
       enum: ["active", "inactive", "completed"],
     },
-    teamLeaderId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: false,
-    },
     keyAccountManager: { type: String, required: false },
-    // executedAt: { type: String, required: true },   //DELETED
-
     jcNumber: { type: String, required: false },
     brandName: { type: String, required: false },
     clientName: { type: String, required: false },
     clientEmail: { type: String, required: false },
     clientContact: { type: String, required: false },
     comments: { type: String },
-    resourcesAssigned: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-      },
-    ],
-    resourcesReleased: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-      },
-    ],
   },
   { timestamps: true }
 );
-
-// campaignSchema.pre("save", async function (next) {
-//   const campaign = this;
-//   const userIds = [
-//     campaign.programManagerId,
-//     campaign.teamLeaderId,
-//     campaign.keyAccountManager,
-//     ...campaign.resourcesAssigned,
-//     ...campaign.resourcesReleased,
-//   ].filter((id) => id && mongoose.Types.ObjectId.isValid(id));
-
-//   const users = await User.find({ _id: { $in: userIds } });
-//   if (users.length !== userIds.length) {
-//     throw new Error("One or more referenced users do not exist");
-//   }
-//   next();
-// });
 
 export default mongoose.model("Campaign", campaignSchema);

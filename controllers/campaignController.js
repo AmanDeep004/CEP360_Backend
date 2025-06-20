@@ -1,7 +1,6 @@
 import Campaign from "../models/campaignModel.js";
 import errorHandler from "../utils/index.js";
 import User from "../models/userModel.js";
-import CampaignDatabase from "../models/campaignDatabase.js";
 import { UserRoleEnum } from "../utils/enum.js";
 import XLSX from "xlsx";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
@@ -28,7 +27,6 @@ const createCampaign = asyncHandler(async (req, res, next) => {
       endDate,
       programManager,
       status,
-      teamLeaderId,
       keyAccountManager,
       jcNumber,
       brandName,
@@ -36,10 +34,8 @@ const createCampaign = asyncHandler(async (req, res, next) => {
       clientEmail,
       clientContact,
       comments,
-      resourcesAssigned,
-      resourcesReleased,
     } = req.body;
-    const campaignExists = await Campaign.findOne({ name: name.trim() });
+    const campaignExists = await Campaign.exists({ name: name.trim() });
 
     if (campaignExists) {
       return sendError(next, "Campaign with this name already exists", 400);
@@ -52,7 +48,6 @@ const createCampaign = asyncHandler(async (req, res, next) => {
       endDate,
       programManager,
       status: status || "active",
-      teamLeaderId,
       keyAccountManager,
       jcNumber,
       brandName,
@@ -60,37 +55,22 @@ const createCampaign = asyncHandler(async (req, res, next) => {
       clientEmail,
       clientContact,
       comments,
-      resourcesAssigned,
-      resourcesReleased,
     });
-    const populatedCampaign = await Campaign.findById(campaign._id)
-      .populate({
-        path: "programManager",
-        select: "employeeName email",
-        transform: (doc) => ({
-          programManagerName: doc.employeeName,
-          programManagerEmail: doc.email,
-        }),
-      })
-      .populate({
-        path: "teamLeaderId",
-        select: "employeeName email",
-      })
-      .populate({
-        path: "resourcesAssigned",
-        select: "employeeName email role",
-      })
-      .populate({
-        path: "resourcesReleased",
-        select: "employeeName email role",
-      });
+    // const populatedCampaign = await Campaign.findById(campaign._id)
+    //   .populate({
+    //     path: "programManager",
+    //     select: "employeeName email",
+    //   })
+    //   .populate({
+    //     path: "resourcesAssigned",
+    //     select: "employeeName email role",
+    //   })
+    //   .populate({
+    //     path: "resourcesReleased",
+    //     select: "employeeName email role",
+    //   });
 
-    return sendResponse(
-      res,
-      200,
-      "Campaign created successfully",
-      populatedCampaign
-    );
+    return sendResponse(res, 200, "Campaign created successfully", campaign);
   } catch (error) {
     return sendError(next, error.message, 500);
   }
@@ -107,18 +87,6 @@ const getAllCampaigns = asyncHandler(async (req, res, next) => {
       .populate({
         path: "programManager",
         select: "employeeName email",
-      })
-      .populate({
-        path: "teamLeaderId",
-        select: "employeeName email",
-      })
-      .populate({
-        path: "resourcesAssigned",
-        select: "employeeName email role",
-      })
-      .populate({
-        path: "resourcesReleased",
-        select: "employeeName email role",
       })
       .lean();
     return sendResponse(
@@ -144,18 +112,7 @@ const getCampaign = asyncHandler(async (req, res, next) => {
         path: "programManager",
         select: "employeeName email",
       })
-      .populate({
-        path: "teamLeaderId",
-        select: "employeeName email",
-      })
-      .populate({
-        path: "resourcesAssigned",
-        select: "employeeName email role",
-      })
-      .populate({
-        path: "resourcesReleased",
-        select: "employeeName email role",
-      });
+      .lean();
 
     if (!campaign) {
       return sendError(next, "Campaign not found", 404);
@@ -174,82 +131,25 @@ const getCampaign = asyncHandler(async (req, res, next) => {
  */
 const updateCampaign = asyncHandler(async (req, res, next) => {
   try {
-    const campaign = await Campaign.findById(req.body._id);
+    const { _id, ...updateData } = req.body;
 
-    if (!campaign) {
-      return sendError(next, "Campaign not found", 404);
-    }
+    const updatedCampaign = await Campaign.findByIdAndUpdate(_id, updateData, {
+      new: true,
+      runValidators: true,
+    }).populate({ path: "programManager", select: "employeeName email role" });
 
-    const updateData = { ...req.body };
-    delete updateData._id;
-
-    // Handle resourcesAssigned/resourcesReleased logic
-    if (req.body.resourcesAssigned) {
-      const prevAssigned = (campaign.resourcesAssigned || []).map((id) =>
-        id.toString()
-      );
-      const prevReleased = (campaign.resourcesReleased || []).map((id) =>
-        id.toString()
-      );
-      const newAssigned = (req.body.resourcesAssigned || []).map((id) =>
-        id.toString()
-      );
-
-      const removedFromAssigned = prevAssigned.filter(
-        (id) => !newAssigned.includes(id)
-      );
-      let updatedReleased = [
-        ...prevReleased,
-        ...removedFromAssigned.filter((id) => !prevReleased.includes(id)),
-      ];
-
-      const addedToAssigned = newAssigned.filter(
-        (id) => !prevAssigned.includes(id)
-      );
-      updatedReleased = updatedReleased.filter(
-        (id) => !addedToAssigned.includes(id)
-      );
-
-      updateData.resourcesReleased = updatedReleased;
-    }
-
-    const updatedCampaign = await Campaign.findByIdAndUpdate(
-      req.body._id,
-      updateData,
-      { new: true, runValidators: true }
-    )
-      .populate({
-        path: "programManager",
-        select: "employeeName email",
-        transform: (doc) => ({
-          programManagerName: doc.employeeName,
-          programManagerEmail: doc.email,
-        }),
-      })
-      .populate({
-        path: "teamLeaderId",
-        select: "employeeName email",
-      })
-      .populate({
-        path: "resourcesAssigned",
-        select: "employeeName email role",
-      })
-      .populate({
-        path: "resourcesReleased",
-        select: "employeeName email role",
-      });
+    if (!updatedCampaign) return sendError(next, "Campaign not found", 404);
 
     return sendResponse(
       res,
       200,
       "Campaign updated successfully",
-      updatedCampaign
+      updatedCampaign.toObject()
     );
   } catch (error) {
     return sendError(next, error.message, 500);
   }
 });
-
 /**
  * @desc    Get campaigns by user ID with role-based access
  * @route   GET /api/campaigns/user/:userId
@@ -257,21 +157,13 @@ const updateCampaign = asyncHandler(async (req, res, next) => {
  */
 const getCampaignsByUserId = asyncHandler(async (req, res, next) => {
   try {
-    const user = await User.findById(req.params.userId);
-    if (!user) {
-      return sendError(next, "User not found", 404);
-    }
+    const user = await User.findById(req.params.userId).select("role");
+    if (!user) return sendError(next, "User not found", 404);
 
     let query = {};
-    let selectFields = {};
-
-    // Set query based on user role
     switch (user.role) {
       case PROGRAM_MANAGER:
         query = { programManager: user._id };
-        break;
-      case PRESALES_MANAGER:
-        // Resource managers can see all campaigns
         break;
       case AGENT:
         query = {
@@ -280,39 +172,18 @@ const getCampaignsByUserId = asyncHandler(async (req, res, next) => {
             { resourcesReleased: user._id },
           ],
         };
-        // Limit fields for agents
-        selectFields = {
-          name: 1,
-          type: 1,
-          startDate: 1,
-          endDate: 1,
-          status: 1,
-          programManager: 1,
-          teamLeaderId: 1,
-        };
+        break;
+      case PRESALES_MANAGER:
+      case RESOURCE_MANAGER:
+      case DATABASE_MANAGER:
+      case ADMIN:
         break;
       default:
         return sendError(next, "Invalid user role", 400);
     }
 
     const campaigns = await Campaign.find(query)
-      .select(Object.keys(selectFields).length ? selectFields : null)
-      .populate({
-        path: "programManager",
-        select: "employeeName email",
-      })
-      .populate({
-        path: "teamLeaderId",
-        select: "employeeName email",
-      })
-      .populate({
-        path: "resourcesAssigned",
-        select: "employeeName email role",
-      })
-      .populate({
-        path: "resourcesReleased",
-        select: "employeeName email role",
-      })
+      .populate({ path: "programManager", select: "employeeName email role" })
       .lean();
 
     return sendResponse(
@@ -347,60 +218,6 @@ const deleteCampaign = asyncHandler(async (req, res, next) => {
   }
 });
 
-/**
- * @desc    Upload campaign database (Excel)
- * @route   POST /api/campaigns/upload-database
- * @access  Private
- */
-
-const uploadCampaignDatabase = asyncHandler(async (req, res, next) => {
-  try {
-    const { campaignId, uploadedBy } = req.body;
-    if (!req.file) return sendError(next, "No file uploaded", 400);
-
-    const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const json = XLSX.utils.sheet_to_json(sheet, { defval: "" });
-
-    const REQUIRED_FIELDS = [
-      "mobile",
-      "name",
-      "email",
-      "location",
-      "company",
-      // "designation",
-    ];
-    const missingFields = REQUIRED_FIELDS.filter(
-      (field) =>
-        !Object.keys(json[0] || {})
-          .map((f) => f.toLowerCase())
-          .includes(field)
-    );
-
-    if (missingFields.length > 0) {
-      return sendError(next, `Missing Fields: ${missingFields.join(",")}`, 400);
-    }
-    const dbEntries = json.map((row) => ({
-      campaignId,
-      uploadedBy,
-      name: row.name,
-      email: row.email,
-      mobile: row.mobile,
-      location: row.location,
-      company: row.company,
-    }));
-
-    // Save all entries
-    await CampaignDatabase.insertMany(dbEntries);
-
-    return sendResponse(res, 200, "Database uploaded successfully", {
-      count: dbEntries.length,
-    });
-  } catch (err) {
-    return sendError(next, err.message, 500);
-  }
-});
-
 export {
   createCampaign,
   getAllCampaigns,
@@ -408,5 +225,4 @@ export {
   updateCampaign,
   deleteCampaign,
   getCampaignsByUserId,
-  uploadCampaignDatabase,
 };
