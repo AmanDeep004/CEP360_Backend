@@ -6,7 +6,6 @@ import {
   updateCampaign,
   deleteCampaign,
   getCampaignsByUserId,
-  uploadCampaignDatabase,
 } from "../controllers/campaignController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -33,11 +32,11 @@ router.get(
 );
 
 // Get single campaign by ID
-router.get("/:id", protect, getCampaign);
+router.get("/getCampaignById/:id", protect, getCampaign);
 
 // get campaign details by user id   only for pm/agent
 router.get(
-  "/getCampaignById/:userId",
+  "/getCampaignByUserId/:userId",
   protect,
   authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER, AGENT),
   getCampaignsByUserId
@@ -50,12 +49,6 @@ router.put(
   updateCampaign
 );
 
-router.post(
-  "/upload-database",
-  protect,
-  upload.single("file"),
-  uploadCampaignDatabase
-);
 // Delete campaign
 // router.delete("/delete/:id", protect, authorize(ADMIN), deleteCampaign);
 
