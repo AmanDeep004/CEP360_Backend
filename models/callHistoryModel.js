@@ -39,33 +39,33 @@ const callHistorySchema = new mongoose.Schema(
     },
     call_date: { type: Date, required: true },
 
-    status: {
-      type: String,
-      required: true,
-      enum: [
-        "interested",
-        "not_interested",
-        "follow_up",
-        "callback",
-        "wrong_number",
-        "other",
-      ],
-    },
-    remarks: { type: String },
+    // status: {
+    //   type: String,
+    //   required: true,
+    //   enum: [
+    //     "interested",
+    //     "not_interested",
+    //     "follow_up",
+    //     "callback",
+    //     "wrong_number",
+    //     "other",
+    //   ],
+    // },
+    // remarks: { type: String },
     isRegistered: { type: Boolean, default: false },
 
-    lastRemarks: { type: String },
-    lastStatus: {
-      type: String,
-      enum: [
-        "interested",
-        "not_interested",
-        "follow_up",
-        "callback",
-        "wrong_number",
-        "other",
-      ],
-    },
+    // lastRemarks: { type: String },
+    // lastStatus: {
+    //   type: String,
+    //   enum: [
+    //     "interested",
+    //     "not_interested",
+    //     "follow_up",
+    //     "callback",
+    //     "wrong_number",
+    //     "other",
+    //   ],
+    // },
 
     chatHistory: [chatEntrySchema],
   },
