@@ -26,12 +26,28 @@ const assignAgentsToCampaign = asyncHandler(async (req, res, next) => {
     const existingAssignments = await AgentAssigned.find({
       campaign_id: campaignId,
       agent_id: { $in: agentIds },
-      isAssigned: true,
+      //   isAssigned: true,
     }).select("agent_id");
 
     const alreadyAssignedIds = new Set(
       existingAssignments.map((doc) => doc.agent_id.toString())
     );
+
+    if (alreadyAssignedIds.size > 0) {
+      await AgentAssigned.updateMany(
+        {
+          campaign_id: campaignId,
+          agent_id: { $in: Array.from(alreadyAssignedIds) },
+        },
+        {
+          $set: {
+            isAssigned: true,
+            released_date: null,
+            assigned_date: new Date(),
+          },
+        }
+      );
+    }
 
     // Prepare new assignments (skip duplicates)
     const newAssignments = agentIds
@@ -41,6 +57,7 @@ const assignAgentsToCampaign = asyncHandler(async (req, res, next) => {
         campaign_id: campaignId,
         isAssigned: true,
         assigned_date: new Date(),
+        released_date: null,
       }));
 
     if (newAssignments.length > 0) {
@@ -49,7 +66,7 @@ const assignAgentsToCampaign = asyncHandler(async (req, res, next) => {
 
     return sendResponse(res, 200, "Agents assigned successfully", {
       assigned: newAssignments.length,
-      skipped: alreadyAssignedIds.size,
+      updated: alreadyAssignedIds.size,
     });
   } catch (error) {
     return sendError(next, error.message, 500);
@@ -77,20 +94,16 @@ const getAllAgentsByCampaignId = asyncHandler(async (req, res, next) => {
 
 const releaseMultipleAgents = asyncHandler(async (req, res, next) => {
   try {
-    const { campaignId, agentIds } = req.body;
+    const { campaignId, agentId } = req.body;
 
-    if (!campaignId || !Array.isArray(agentIds) || agentIds.length === 0) {
-      return sendError(
-        next,
-        "campaignId and agentIds (array) are required",
-        400
-      );
+    if (!campaignId || !agentId) {
+      return sendError(next, "campaignId and agentId are required", 400);
     }
 
-    const result = await AgentAssigned.updateMany(
+    const result = await AgentAssigned.updateOne(
       {
         campaign_id: campaignId,
-        agent_id: { $in: agentIds },
+        agent_id: agentId,
         isAssigned: true,
       },
       {
@@ -109,11 +122,22 @@ const releaseMultipleAgents = asyncHandler(async (req, res, next) => {
   }
 });
 
-const getAllAgents = asyncHandler(async (req, res, next) => {
+const getAllNonAssignedAgents = asyncHandler(async (req, res, next) => {
   try {
-    const agents = await User.find({ role: UserRoleEnum.AGENT }).select(
-      "_id employeeName email employeeCode"
-    );
+    const { campaignId } = req.params;
+    if (!campaignId) {
+      return sendError(next, "campaignId is required", 400);
+    }
+    const assignedAgents = await AgentAssigned.find({
+      campaign_id: campaignId,
+      isAssigned: true,
+    }).select("agent_id");
+    const assignedAgentIds = assignedAgents.map((a) => a.agent_id.toString());
+
+    const agents = await User.find({
+      role: UserRoleEnum.AGENT,
+      _id: { $nin: assignedAgentIds },
+    }).select("_id employeeName email employeeCode");
 
     return sendResponse(res, 200, "Agents fetched successfully", agents);
   } catch (error) {
@@ -125,5 +149,5 @@ export {
   assignAgentsToCampaign,
   getAllAgentsByCampaignId,
   releaseMultipleAgents,
-  getAllAgents,
+  getAllNonAssignedAgents,
 };

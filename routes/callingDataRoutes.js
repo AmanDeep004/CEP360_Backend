@@ -21,6 +21,6 @@ router.post(
 );
 router.put("/:id", protect, editcallingData);
 router.delete("/:id", protect, deletecallingData);
-router.get("/:CampaignId", protect, getAllCallingData);
+router.get("/getAllUnassignedAgents/:CampaignId", protect, getAllCallingData);
 
 export default router;

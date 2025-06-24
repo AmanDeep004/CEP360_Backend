@@ -3,7 +3,7 @@ import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
 import {
   assignAgentsToCampaign,
-  getAllAgents,
+  getAllNonAssignedAgents,
   getAllAgentsByCampaignId,
   releaseMultipleAgents,
 } from "../controllers/agentController.js";
@@ -18,7 +18,11 @@ router.get(
   protect,
   getAllAgentsByCampaignId
 );
-router.get("/all-agents", protect, getAllAgents);
+router.get(
+  "/getAllNonAssignedAgents/:campaignId",
+  protect,
+  getAllNonAssignedAgents
+);
 router.put("/release-agents", protect, releaseMultipleAgents);
 
 export default router;
