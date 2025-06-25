@@ -6,6 +6,8 @@ import {
   getAllNonAssignedAgents,
   getAllAgentsByCampaignId,
   releaseMultipleAgents,
+  getAllCampaignByAGentId,
+  getCallingDataByAgentAndCampaign,
 } from "../controllers/agentController.js";
 
 const router = Router();
@@ -24,5 +26,6 @@ router.get(
   getAllNonAssignedAgents
 );
 router.put("/release-agents", protect, releaseMultipleAgents);
-
+router.get("/campaigns/:agentId", getAllCampaignByAGentId);
+router.get("/:agentId/:campaignId", getCallingDataByAgentAndCampaign);
 export default router;

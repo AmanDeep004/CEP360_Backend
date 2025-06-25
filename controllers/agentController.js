@@ -3,6 +3,8 @@ import errorHandler from "../utils/index.js";
 import User from "../models/userModel.js";
 
 import { UserRoleEnum } from "../utils/enum.js";
+import campaignModel from "../models/campaignModel.js";
+import callingDataModal from "../models/callingDataModal.js";
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
@@ -145,9 +147,119 @@ const getAllNonAssignedAgents = asyncHandler(async (req, res, next) => {
   }
 });
 
+const getAllCampaignByAGentId12 = asyncHandler(async (req, res, next) => {
+  try {
+    const { agentId } = req.params;
+
+    if (!agentId) {
+      return sendError(next, "agentId is required", 400);
+    }
+
+    const campaigns = await AgentAssigned.find({
+      agent_id: agentId,
+      isAssigned: true,
+    }).populate({
+      path: "campaign_id",
+      select: "name description startDate endDate", // adjust fields as needed
+    });
+
+    const formattedCampaigns = campaigns
+      .filter((c) => c.campaign_id) // ensure campaign exists
+      .map((a) => ({
+        _id: a.campaign_id._id,
+        name: a.campaign_id.name,
+        description: a.campaign_id.description,
+        startDate: a.campaign_id.startDate,
+        endDate: a.campaign_id.endDate,
+        assigned_date: a.assigned_date,
+      }));
+
+    return sendResponse(
+      res,
+      200,
+      "Campaigns retrieved successfully",
+      formattedCampaigns
+    );
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
+const getAllCampaignByAGentId = asyncHandler(async (req, res, next) => {
+  try {
+    let { agentId } = req.params;
+    if (!agentId) {
+      return sendError(next, "agentId is required", 400);
+    }
+
+    agentId = agentId.trim();
+    console.log(agentId, "agentId");
+
+    const assignments = await AgentAssigned.find({
+      agent_id: agentId,
+      isAssigned: true,
+    }).select("campaign_id");
+
+    console.log(assignments, "assignments");
+
+    const campaignIds = assignments.map((a) => a.campaign_id);
+
+    if (campaignIds.length === 0) {
+      return sendResponse(res, 200, "No campaigns assigned to this agent", []);
+    }
+
+    const campaigns = await campaignModel
+      .find({
+        _id: { $in: campaignIds },
+      })
+      .select("_id name brandName clientName startDate endDate");
+
+    return sendResponse(
+      res,
+      200,
+      "Campaigns retrieved successfully",
+      campaigns
+    );
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
+const getCallingDataByAgentAndCampaign = asyncHandler(
+  async (req, res, next) => {
+    try {
+      const { agentId, campaignId } = req.params;
+
+      if (!agentId || !campaignId) {
+        return sendError(next, "Both agentId and campaignId are required", 400);
+      }
+
+      const callingData = await callingDataModal
+        .find({
+          agentId: agentId.trim(),
+          CampaignId: campaignId.trim(),
+        })
+        .populate("CampaignId", "name")
+        .populate("agentId", "employeeName email")
+        .select("-__v");
+
+      return sendResponse(
+        res,
+        200,
+        "Calling data fetched successfully",
+        callingData
+      );
+    } catch (error) {
+      return sendError(next, error.message, 500);
+    }
+  }
+);
+
 export {
   assignAgentsToCampaign,
   getAllAgentsByCampaignId,
   releaseMultipleAgents,
   getAllNonAssignedAgents,
+  getAllCampaignByAGentId,
+  getCallingDataByAgentAndCampaign,
 };
