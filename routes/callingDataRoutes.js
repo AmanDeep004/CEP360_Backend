@@ -4,6 +4,8 @@ import {
   editcallingData,
   deletecallingData,
   getAllCallingData,
+  getDatabaseByAssignment,
+  assignCallingDataToAgents,
 } from "../controllers/callingDataController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -19,8 +21,13 @@ router.post(
   upload.single("file"),
   uploadcallingData
 );
-router.put("/:id", protect, editcallingData);
+router.put("/", protect, editcallingData);
+router.post("/assignCallingDataToAgents", protect, assignCallingDataToAgents);
 router.delete("/:id", protect, deletecallingData);
-router.get("/getAllUnassignedAgents/:CampaignId", protect, getAllCallingData);
+router.get("/getAllCallingData/:CampaignId", protect, getAllCallingData);
+router.get("/campaignDataByAssignment/:CampaignId", getDatabaseByAssignment);
+
+// here  need to add filter based  calling data as well
+// get all non assigned calling data
 
 export default router;

@@ -107,7 +107,7 @@ const uploadcallingData = asyncHandler(async (req, res, next) => {
 const editcallingData = asyncHandler(async (req, res, next) => {
   try {
     const updatedEntry = await CallingData.findByIdAndUpdate(
-      req.params.id,
+      req.body._id,
       req.body,
       { new: true, runValidators: true, lean: true }
     );
@@ -142,7 +142,7 @@ const deletecallingData = asyncHandler(async (req, res, next) => {
  * @route GET /api/callingData/campaign/:CampaignId
  * @access Private
  */
-const getAllCallingData = asyncHandler(async (req, res, next) => {
+const getAllCallingDataold = asyncHandler(async (req, res, next) => {
   try {
     const { CampaignId } = req.params;
     const page = parseInt(req.query.page) || 1;
@@ -168,9 +168,116 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
   }
 });
 
+const getAllCallingData = asyncHandler(async (req, res, next) => {
+  try {
+    const { CampaignId } = req.params;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const filter = { CampaignId };
+
+    // Search by full_Name only
+    if (req.query.search && req.query.search.trim() !== "") {
+      const searchRegex = new RegExp(`\\b${req.query.search.trim()}`, "i");
+      filter.full_Name = searchRegex;
+    }
+
+    // Optional filter: isRegistered=true/false
+    if (req.query.isRegistered !== undefined) {
+      const val = req.query.isRegistered.toLowerCase();
+      if (val === "true" || val === "false") {
+        filter.isRegistered = val === "true";
+      }
+    }
+
+    const [total, data] = await Promise.all([
+      CallingData.countDocuments(filter),
+      CallingData.find(filter).skip(skip).limit(limit).lean(),
+    ]);
+
+    return sendResponse(res, 200, "Database fetched successfully", {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      data,
+    });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
+  try {
+    const { CampaignId } = req.params;
+    const { assignment } = req.query;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const filter = { CampaignId };
+
+    if (assignment === "assigned") {
+      filter.agentId = { $ne: null };
+    } else if (assignment === "notassigned") {
+      filter.agentId = null;
+    }
+
+    const [total, data] = await Promise.all([
+      CallingData.countDocuments(filter),
+      CallingData.find(filter)
+        .populate("agentId", "name email")
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
+
+    return sendResponse(res, 200, "Filtered database fetched successfully", {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      data,
+    });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+const assignCallingDataToAgents = asyncHandler(async (req, res, next) => {
+  try {
+    const { agentId, callingDataIds } = req.body;
+
+    if (
+      !agentId ||
+      !Array.isArray(callingDataIds) ||
+      callingDataIds.length === 0
+    ) {
+      return sendError(next, "agentId and callingDataIds are required", 400);
+    }
+
+    const result = await CallingData.updateMany(
+      { _id: { $in: callingDataIds } },
+      { $set: { agentId } }
+    );
+
+    return sendResponse(
+      res,
+      200,
+      `${result.modifiedCount} calling data records updated successfully`,
+      result
+    );
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
 export {
   uploadcallingData,
   editcallingData,
   deletecallingData,
   getAllCallingData,
+  getDatabaseByAssignment,
+  assignCallingDataToAgents,
 };
