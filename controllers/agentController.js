@@ -73,7 +73,7 @@ const assignAgentsToCampaign = asyncHandler(async (req, res, next) => {
   }
 });
 
-const getAllAgentsByCampaignId = asyncHandler(async (req, res, next) => {
+const getAllocAndUnalloclist = asyncHandler(async (req, res, next) => {
   try {
     const { campaignId } = req.params;
     if (!campaignId) {
@@ -92,7 +92,7 @@ const getAllAgentsByCampaignId = asyncHandler(async (req, res, next) => {
   }
 });
 
-const releaseMultipleAgents = asyncHandler(async (req, res, next) => {
+const releaseAgents = asyncHandler(async (req, res, next) => {
   try {
     const { campaignId, agentId } = req.body;
 
@@ -144,10 +144,34 @@ const getAllNonAssignedAgents = asyncHandler(async (req, res, next) => {
     return sendError(next, error.message, 500);
   }
 });
+const getAllAssignedAgents = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+
+    if (!campaignId) {
+      return sendError(next, "campaignId is required", 400);
+    }
+
+    const assignedAgents = await AgentAssigned.find({
+      campaign_id: campaignId,
+      isAssigned: true,
+    }).populate("agent_id", "_id employeeName email employeeCode");
+
+    return sendResponse(
+      res,
+      200,
+      "Assigned agents fetched successfully",
+      assignedAgents
+    );
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
 
 export {
   assignAgentsToCampaign,
-  getAllAgentsByCampaignId,
-  releaseMultipleAgents,
+  getAllocAndUnalloclist,
+  releaseAgents,
   getAllNonAssignedAgents,
+  getAllAssignedAgents,
 };
