@@ -147,44 +147,6 @@ const getAllNonAssignedAgents = asyncHandler(async (req, res, next) => {
   }
 });
 
-const getAllCampaignByAGentId12 = asyncHandler(async (req, res, next) => {
-  try {
-    const { agentId } = req.params;
-
-    if (!agentId) {
-      return sendError(next, "agentId is required", 400);
-    }
-
-    const campaigns = await AgentAssigned.find({
-      agent_id: agentId,
-      isAssigned: true,
-    }).populate({
-      path: "campaign_id",
-      select: "name description startDate endDate", // adjust fields as needed
-    });
-
-    const formattedCampaigns = campaigns
-      .filter((c) => c.campaign_id) // ensure campaign exists
-      .map((a) => ({
-        _id: a.campaign_id._id,
-        name: a.campaign_id.name,
-        description: a.campaign_id.description,
-        startDate: a.campaign_id.startDate,
-        endDate: a.campaign_id.endDate,
-        assigned_date: a.assigned_date,
-      }));
-
-    return sendResponse(
-      res,
-      200,
-      "Campaigns retrieved successfully",
-      formattedCampaigns
-    );
-  } catch (error) {
-    return sendError(next, error.message, 500);
-  }
-});
-
 const getAllCampaignByAGentId = asyncHandler(async (req, res, next) => {
   try {
     let { agentId } = req.params;
