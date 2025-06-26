@@ -227,7 +227,7 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
     const [total, data] = await Promise.all([
       CallingData.countDocuments(filter),
       CallingData.find(filter)
-        .populate("agentId", "name email")
+        .populate("agentId", "employeeName email")
         .skip(skip)
         .limit(limit)
         .lean(),
@@ -273,6 +273,30 @@ const assignCallingDataToAgents = asyncHandler(async (req, res, next) => {
   }
 });
 
+const unassignCallingDataFromAgents = asyncHandler(async (req, res, next) => {
+  try {
+    const { callingDataIds } = req.body;
+
+    if (!Array.isArray(callingDataIds) || callingDataIds.length === 0) {
+      return sendError(next, "callingDataIds are required", 400);
+    }
+
+    const result = await CallingData.updateMany(
+      { _id: { $in: callingDataIds } },
+      { $unset: { agentId: "" } }
+    );
+
+    return sendResponse(
+      res,
+      200,
+      `${result.modifiedCount} calling data records unassigned successfully`,
+      result
+    );
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
 export {
   uploadcallingData,
   editcallingData,
@@ -280,4 +304,5 @@ export {
   getAllCallingData,
   getDatabaseByAssignment,
   assignCallingDataToAgents,
+  unassignCallingDataFromAgents,
 };
