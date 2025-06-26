@@ -6,6 +6,7 @@ import {
   getAllCallingData,
   getDatabaseByAssignment,
   assignCallingDataToAgents,
+  unassignCallingDataFromAgents,
 } from "../controllers/callingDataController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -23,6 +24,11 @@ router.post(
 );
 router.put("/", protect, editcallingData);
 router.post("/assignCallingDataToAgents", protect, assignCallingDataToAgents);
+router.post(
+  "/unassignCallingDataFromAgents",
+  protect,
+  unassignCallingDataFromAgents
+);
 router.delete("/:id", protect, deletecallingData);
 router.get("/getAllCallingData/:CampaignId", protect, getAllCallingData);
 router.get("/campaignDataByAssignment/:CampaignId", getDatabaseByAssignment);
