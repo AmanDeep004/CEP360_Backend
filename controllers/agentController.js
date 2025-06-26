@@ -174,7 +174,7 @@ const getAllCampaignByAGentId = asyncHandler(async (req, res, next) => {
       .find({
         _id: { $in: campaignIds },
       })
-      .select("_id name brandName clientName startDate endDate");
+      .select("_id name brandName clientName startDate endDate status");
 
     return sendResponse(
       res,

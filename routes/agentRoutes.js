@@ -28,6 +28,9 @@ router.get(
 );
 router.get("/getAllAssignedAgents/:campaignId", protect, getAllAssignedAgents);
 router.put("/releaseAgents", protect, releaseAgents);
-router.get("/campaigns/:agentId", getAllCampaignByAGentId);
-router.get("/:agentId/:campaignId", getCallingDataByAgentAndCampaign);
+router.get("/getCampaignByAgentId/:agentId", getAllCampaignByAGentId);
+router.get(
+  "/getCallingDataByAgentIdAndCampaignId/:agentId/:campaignId",
+  getCallingDataByAgentAndCampaign
+);
 export default router;
