@@ -3,6 +3,7 @@ import {
   createCallHistory,
   updateCallHistory,
   getCallHistoryByCallingDataId,
+  getCallHistoryByCampaignId,
 } from "../controllers/callHistoryController.js";
 import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
@@ -26,16 +27,23 @@ router.put(
 );
 
 // router.get(
-//   "/campaign/:campaignId",
-//   protect,
-//   authorize(ADMIN, PROGRAM_MANAGER, AGENT, PRESALES_MANAGER),
-//   getCallHistoryByCampaignId
+//   "/call-history/:calling-data-id",
+//   //   protect,
+//   //   authorize(ADMIN, PROGRAM_MANAGER, AGENT),
+//   updateCallHistory
 // );
 
 router.get(
+  "/campaign/:campaignId",
+  //protect,
+  // authorize(ADMIN, PROGRAM_MANAGER, AGENT, PRESALES_MANAGER),
+  getCallHistoryByCampaignId
+);
+
+router.get(
   "/calling-data/:callingDataId",
-  protect,
-  authorize(ADMIN, PROGRAM_MANAGER, AGENT),
+  // protect,
+  // authorize(ADMIN, PROGRAM_MANAGER, AGENT),
   getCallHistoryByCallingDataId
 );
 export default router;

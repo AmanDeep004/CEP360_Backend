@@ -28,9 +28,10 @@ router.get(
 );
 router.get("/getAllAssignedAgents/:campaignId", protect, getAllAssignedAgents);
 router.put("/releaseAgents", protect, releaseAgents);
-router.get("/getCampaignByAgentId/:agentId", getAllCampaignByAGentId);
+router.get("/getCampaignByAgentId/:agentId", protect, getAllCampaignByAGentId);
 router.get(
   "/getCallingDataByAgentIdAndCampaignId/:agentId/:campaignId",
+  protect,
   getCallingDataByAgentAndCampaign
 );
 export default router;

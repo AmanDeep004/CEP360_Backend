@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 
 const chatEntrySchema = new mongoose.Schema(
   {
+    contactNo: { type: String, require: true },
     remarks: { type: String, required: true },
     status: {
       type: String,

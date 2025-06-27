@@ -115,9 +115,33 @@ const getCallHistoryByCallingDataId = asyncHandler(async (req, res, next) => {
   }
 });
 
+// const getAllCallHistoryByCallingDataId = asyncHandler(
+//   async (req, res, next) => {
+//     try {
+//       const { callingDataId } = req.params;
+
+//       const histories = await CallHistory.find({
+//         calling_data_id: callingDataId,
+//       })
+//         .populate("calling_data_id")
+//         .lean();
+
+//       return sendResponse(
+//         res,
+//         200,
+//         "All call histories fetched successfully",
+//         histories
+//       );
+//     } catch (err) {
+//       return sendError(next, err.message, 500);
+//     }
+//   }
+// );
+
 export {
   createCallHistory,
   updateCallHistory,
   //   getCallHistoryByCampaignId,
   getCallHistoryByCallingDataId,
+  //getAllCallHistoryByCallingDataId,
 };
