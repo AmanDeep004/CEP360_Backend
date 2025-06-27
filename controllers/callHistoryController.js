@@ -85,63 +85,59 @@ const updateCallHistory = asyncHandler(async (req, res, next) => {
 //     return sendError(next, err.message, 500);
 //   }
 // });
-const getCallHistoryByCallingDataId = asyncHandler(async (req, res, next) => {
-  try {
-    const { callingDataId } = req.params;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const skip = (page - 1) * limit;
+// const getCallHistoryByCallingDataId = asyncHandler(async (req, res, next) => {
+//   try {
+//     const { callingDataId } = req.params;
+//     const page = parseInt(req.query.page) || 1;
+//     const limit = parseInt(req.query.limit) || 20;
+//     const skip = (page - 1) * limit;
 
-    const filter = { calling_data_id: callingDataId };
+//     const filter = { calling_data_id: callingDataId };
 
-    const [total, data] = await Promise.all([
-      CallHistory.countDocuments(filter),
-      CallHistory.find(filter)
-        .skip(skip)
-        .limit(limit)
-        .populate("calling_data_id")
-        .lean(),
-    ]);
-
-    return sendResponse(res, 200, "Call history fetched successfully", {
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-      data,
-    });
-  } catch (err) {
-    return sendError(next, err.message, 500);
-  }
-});
-
-// const getAllCallHistoryByCallingDataId = asyncHandler(
-//   async (req, res, next) => {
-//     try {
-//       const { callingDataId } = req.params;
-
-//       const histories = await CallHistory.find({
-//         calling_data_id: callingDataId,
-//       })
+//     const [total, data] = await Promise.all([
+//       CallHistory.countDocuments(filter),
+//       CallHistory.find(filter)
+//         .skip(skip)
+//         .limit(limit)
 //         .populate("calling_data_id")
-//         .lean();
+//         .lean(),
+//     ]);
 
-//       return sendResponse(
-//         res,
-//         200,
-//         "All call histories fetched successfully",
-//         histories
-//       );
-//     } catch (err) {
-//       return sendError(next, err.message, 500);
-//     }
+//     return sendResponse(res, 200, "Call history fetched successfully", {
+//       total,
+//       page,
+//       limit,
+//       totalPages: Math.ceil(total / limit),
+//       data,
+//     });
+//   } catch (err) {
+//     return sendError(next, err.message, 500);
 //   }
-// );
+// });
+
+const getAllCallHistoryByCallingDataId = asyncHandler(
+  async (req, res, next) => {
+    try {
+      const { callingDataId } = req.params;
+      console.log(callingDataId, "callingDataId");
+      const histories = await CallHistory.find({
+        calling_data_id: callingDataId,
+      });
+
+      return sendResponse(
+        res,
+        200,
+        "All call histories fetched successfully",
+        histories
+      );
+    } catch (err) {
+      return sendError(next, err.message, 500);
+    }
+  }
+);
 
 export {
   createCallHistory,
   updateCallHistory,
-  //   getCallHistoryByCampaignId,
-  getCallHistoryByCallingDataId,
-  //getAllCallHistoryByCallingDataId,
+  getAllCallHistoryByCallingDataId,
 };

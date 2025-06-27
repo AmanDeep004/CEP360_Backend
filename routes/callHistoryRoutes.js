@@ -2,8 +2,7 @@ import { Router } from "express";
 import {
   createCallHistory,
   updateCallHistory,
-  getCallHistoryByCallingDataId,
-  getCallHistoryByCampaignId,
+  getAllCallHistoryByCallingDataId,
 } from "../controllers/callHistoryController.js";
 import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
@@ -33,17 +32,17 @@ router.put(
 //   updateCallHistory
 // );
 
-router.get(
-  "/campaign/:campaignId",
-  //protect,
-  // authorize(ADMIN, PROGRAM_MANAGER, AGENT, PRESALES_MANAGER),
-  getCallHistoryByCampaignId
-);
+// router.get(
+//   "/campaign/:campaignId",
+//   //protect,
+//   // authorize(ADMIN, PROGRAM_MANAGER, AGENT, PRESALES_MANAGER),
+//   getCallHistoryByCampaignId
+// );
 
 router.get(
-  "/calling-data/:callingDataId",
+  "/:callingDataId",
   // protect,
   // authorize(ADMIN, PROGRAM_MANAGER, AGENT),
-  getCallHistoryByCallingDataId
+  getAllCallHistoryByCallingDataId
 );
 export default router;
