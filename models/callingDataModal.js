@@ -30,6 +30,8 @@ const CallingDataSchema = new mongoose.Schema(
       trim: true,
     },
     batch: { type: String, trim: true },
+    pmId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    pmName: { type: String, trim: true },
     agentId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
