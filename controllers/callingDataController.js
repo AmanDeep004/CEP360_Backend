@@ -247,19 +247,25 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
 
 const assignCallingDataToAgents = asyncHandler(async (req, res, next) => {
   try {
-    const { agentId, callingDataIds } = req.body;
+    const { agentId, callingDataIds, pmId, pmName } = req.body;
 
     if (
       !agentId ||
       !Array.isArray(callingDataIds) ||
-      callingDataIds.length === 0
+      callingDataIds.length === 0 ||
+      !pmId ||
+      !pmName
     ) {
-      return sendError(next, "agentId and callingDataIds are required", 400);
+      return sendError(
+        next,
+        "AgentId,ProjectManager Id ,ProjectManager Name, CallingDataIds are required",
+        400
+      );
     }
 
     const result = await CallingData.updateMany(
       { _id: { $in: callingDataIds } },
-      { $set: { agentId } }
+      { $set: { agentId, pmId, pmName } }
     );
 
     return sendResponse(
@@ -283,7 +289,7 @@ const unassignCallingDataFromAgents = asyncHandler(async (req, res, next) => {
 
     const result = await CallingData.updateMany(
       { _id: { $in: callingDataIds } },
-      { $unset: { agentId: "" } }
+      { $unset: { agentId: "", pmId: "", pmName: "" } }
     );
 
     return sendResponse(

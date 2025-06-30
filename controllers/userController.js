@@ -125,11 +125,11 @@ const loginUser = asyncHandler(async (req, res, next) => {
 
     return sendResponse(res, 200, "Login successful", {
       _id: user._id,
-      firstName: user.firstName,
-      lastName: user.lastName,
+      employeeName: user.employeeName,
+      employeeCode: user.employeeCode,
       email: user.email,
       role: user.role,
-      token,
+      // token,
     });
   } catch (error) {
     return sendError(next, error.message, 500);

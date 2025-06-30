@@ -60,19 +60,19 @@ const updateCallHistory = asyncHandler(async (req, res, next) => {
   }
 });
 
-// const getCallHistoryByCampaignId = asyncHandler(async (req, res, next) => {
-//   try {
-//     const { campaignId } = req.params;
-//     const page = parseInt(req.query.page) || 1;
-//     const limit = parseInt(req.query.limit) || 20;
-//     const skip = (page - 1) * limit;
+const getCallHistoryByCampaignId = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
 
-//     const filter = { campaign_id: campaignId };
+    const filter = { campaign_id: campaignId };
 
-//     const [total, data] = await Promise.all([
-//       CallHistory.countDocuments(filter),
-//       CallHistory.find(filter).skip(skip).limit(limit).lean(),
-//     ]);
+    const [total, data] = await Promise.all([
+      CallHistory.countDocuments(filter),
+      CallHistory.find(filter).skip(skip).limit(limit).lean(),
+    ]);
 
 //     return sendResponse(res, 200, "Call history fetched successfully", {
 //       total,
