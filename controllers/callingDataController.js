@@ -208,7 +208,7 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
   }
 });
 
-const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
+const getDatabaseByAssignmentold = asyncHandler(async (req, res, next) => {
   try {
     const { CampaignId } = req.params;
     const { assignment } = req.query;
@@ -239,6 +239,109 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
       limit,
       totalPages: Math.ceil(total / limit),
       data,
+    });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
+  try {
+    const { CampaignId } = req.params;
+    const {
+      assignment,
+      agentId,
+      remark,
+      source,
+      range,
+      page = 1,
+      limit = 20,
+    } = req.query;
+
+    const pageNum = parseInt(page, 10);
+    const limNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limNum;
+
+    // Base filter
+    const filter = { CampaignId };
+
+    // 1) Assignment status
+    if (assignment === "assigned") {
+      filter.agentId = { $ne: null };
+    } else if (assignment === "notassigned") {
+      filter.agentId = null;
+    }
+
+    // 2) Assigned agent
+    if (agentId) {
+      filter.agentId = agentId;
+    }
+
+    // 3) Source (case-insensitive partial match)
+    if (source) {
+      filter.source = { $regex: new RegExp(source, "i") };
+    }
+
+    // Get all data first (filtered, before pagination)
+    let fullQuery = CallingData.find(filter)
+      .populate({
+        path: "agentId",
+        select: "employeeName email",
+      })
+      .populate({
+        path: "callHistory",
+        populate: {
+          path: "chatHistory",
+          model: "CallHistory",
+        },
+      })
+      .lean();
+
+    let data = await fullQuery;
+
+    // 4) Filter by remark (post-query)
+    if (remark) {
+      data = data.filter((entry) => {
+        const history = entry.callHistory?.chatHistory;
+        return (
+          Array.isArray(history) && history.some((c) => c.remarks === remark)
+        );
+      });
+    }
+
+    // 5) Apply range slicing after filtering
+    if (range) {
+      const parts = range.split("-").map((v) => parseInt(v.trim(), 10));
+      if (parts.length !== 2 || parts.some((n) => isNaN(n))) {
+        return sendError(
+          next,
+          "Invalid range format. Use format like 100-200",
+          400
+        );
+      }
+      const [min, max] = parts;
+      if (min > max) {
+        return sendError(
+          next,
+          "Range minimum should be less than maximum",
+          400
+        );
+      }
+
+      // Slice based on index range (1-based range from UI, adjust to 0-based index)
+      data = data.slice(min - 1, max);
+    }
+
+    const total = data.length;
+
+    // 6) Apply pagination on the final filtered data
+    const paginatedData = data.slice(skip, skip + limNum);
+
+    return sendResponse(res, 200, "Filtered database fetched successfully", {
+      total,
+      page: pageNum,
+      limit: limNum,
+      totalPages: Math.ceil(total / limNum),
+      data: paginatedData,
     });
   } catch (err) {
     return sendError(next, err.message, 500);
