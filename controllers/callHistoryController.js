@@ -119,7 +119,6 @@ const getAllCallHistoryByCallingDataId = asyncHandler(
   async (req, res, next) => {
     try {
       const { callingDataId } = req.params;
-      console.log(callingDataId, "callingDataId");
       const histories = await CallHistory.find({
         calling_data_id: callingDataId,
       });

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   uploadcallingData,
+  getCallingDataById,
   editcallingData,
   deletecallingData,
   getAllCallingData,
@@ -22,6 +23,7 @@ router.post(
   upload.single("file"),
   uploadcallingData
 );
+router.get("/getCallingDataById/:id", protect, getCallingDataById);
 router.put("/", protect, editcallingData);
 router.post("/assignCallingDataToAgents", protect, assignCallingDataToAgents);
 router.post(

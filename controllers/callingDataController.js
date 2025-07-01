@@ -99,6 +99,32 @@ const uploadcallingData = asyncHandler(async (req, res, next) => {
   }
 });
 
+const getCallingDataById = asyncHandler(async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const data = await CallingData.findById(id)
+      .populate({ path: "CampaignId" })
+      .populate({
+        path: "agentId",
+        select: "employeeName email",
+      })
+      .populate({
+        path: "callHistory",
+        populate: {
+          path: "chatHistory",
+          model: "CallHistory",
+        },
+      })
+      .lean();
+    if (!data) {
+      return sendError(next, "Entry not found", 404);
+    }
+    return sendResponse(res, 200, "Data fetched successfully", data);
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
 /**
  * @desc Edit a campaign database entry
  * @route PUT /api/callingData/:id
@@ -408,6 +434,7 @@ const unassignCallingDataFromAgents = asyncHandler(async (req, res, next) => {
 
 export {
   uploadcallingData,
+  getCallingDataById,
   editcallingData,
   deletecallingData,
   getAllCallingData,
