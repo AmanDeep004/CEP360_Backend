@@ -2,30 +2,29 @@ import mongoose from "mongoose";
 
 const chatEntrySchema = new mongoose.Schema(
   {
-    contactNo: { type: String, require: true },
-    remarks: { type: String, required: true },
-    status: {
+    contactNo: { type: String, required: true },
+    remarks: {
       type: String,
       required: true,
-      enum: [
-        "interested",
-        "not_interested",
-        "follow_up",
-        "callback",
-        "wrong_number",
-        "other",
-      ],
     },
-    updateDate: { type: Date, default: Date.now },
+    reason: { type: String, required: true },
+    callingDate: { type: Date, default: Date.now },
+    isRegistered: { type: Boolean, default: false },
+    agent_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    agentName: { type: String, required: true },
   },
   { _id: false }
 );
 
 const callHistorySchema = new mongoose.Schema(
   {
-    calling_data_id: {
+    callingData_id: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "CampaignDatabase",
+      ref: "CallingData",
       required: true,
     },
     campaign_id: {
@@ -33,41 +32,8 @@ const callHistorySchema = new mongoose.Schema(
       ref: "Campaign",
       required: true,
     },
-    agent_id: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
-    call_date: { type: Date, required: true },
-
-    // status: {
-    //   type: String,
-    //   required: true,
-    //   enum: [
-    //     "interested",
-    //     "not_interested",
-    //     "follow_up",
-    //     "callback",
-    //     "wrong_number",
-    //     "other",
-    //   ],
-    // },
-    // remarks: { type: String },
     isRegistered: { type: Boolean, default: false },
-
-    // lastRemarks: { type: String },
-    // lastStatus: {
-    //   type: String,
-    //   enum: [
-    //     "interested",
-    //     "not_interested",
-    //     "follow_up",
-    //     "callback",
-    //     "wrong_number",
-    //     "other",
-    //   ],
-    // },
-
+    registrationDate: { type: Date },
     chatHistory: [chatEntrySchema],
   },
   { timestamps: true }

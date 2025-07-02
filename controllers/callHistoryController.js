@@ -1,18 +1,99 @@
 import CallHistory from "../models/callHistoryModel.js";
+import CallingData from "../models/callingDataModal.js";
 import errorHandler from "../utils/index.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
 const createCallHistory = asyncHandler(async (req, res, next) => {
   try {
-    const newEntry = await CallHistory.create(req.body);
+    const {
+      callingData_id,
+      campaign_id,
+      contactNo,
+      remarks,
+      reason,
+      isRegistered,
+      agent_id,
+      agentName,
+    } = req.body;
+
+    if (
+      !callingData_id ||
+      !campaign_id ||
+      !contactNo ||
+      !remarks ||
+      !reason ||
+      !agent_id ||
+      !agentName
+    ) {
+      return sendError(next, "Missing required fields", 400);
+    }
+
+    // Construct chat entry
+    const chatEntry = {
+      contactNo,
+      remarks,
+      reason,
+      callingDate: new Date(),
+      isRegistered: isRegistered || false,
+      agent_id,
+      agentName,
+    };
+
+    // Check for existing call history
+    let existingHistory = await CallHistory.findOne({
+      callingData_id,
+      campaign_id,
+    });
+
+    let savedHistory;
+
+    if (existingHistory) {
+      // Push new chat entry
+      existingHistory.chatHistory.push(chatEntry);
+
+      // Update isRegistered
+      if (isRegistered) {
+        existingHistory.isRegistered = true;
+        existingHistory.registrationDate = new Date();
+      }
+
+      savedHistory = await existingHistory.save();
+    } else {
+      // Create new history
+      const newHistory = new CallHistory({
+        callingData_id,
+        campaign_id,
+        isRegistered,
+        registrationDate: isRegistered ? new Date() : null,
+        chatHistory: [chatEntry],
+      });
+
+      savedHistory = await newHistory.save();
+
+      // Link history to CallingData
+      await CallingData.findByIdAndUpdate(callingData_id, {
+        callHistory: savedHistory._id,
+      });
+    }
+
+    // Update CallingData registration status
+    if (isRegistered) {
+      await CallingData.findByIdAndUpdate(callingData_id, {
+        isRegistered: true,
+        registeredOn: new Date(),
+      });
+    }
+
     return sendResponse(
       res,
       200,
-      "Call history created successfully",
-      newEntry
+      existingHistory
+        ? "Call history updated successfully"
+        : "Call history created successfully",
+      savedHistory
     );
   } catch (err) {
-    return sendError(next, err.message, 500);
+    return sendError(next, err.message || "Server error", 500);
   }
 });
 
