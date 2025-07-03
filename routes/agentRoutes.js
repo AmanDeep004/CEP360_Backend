@@ -9,6 +9,7 @@ import {
   releaseAgents,
   getAllCampaignByAGentId,
   getCallingDataByAgentAndCampaign,
+  getCallingDataByAgentData,
 } from "../controllers/agentController.js";
 
 const router = Router();
@@ -34,4 +35,10 @@ router.get(
   protect,
   getCallingDataByAgentAndCampaign
 );
+router.post(
+  "/getCallingDataByAgent/:agentId",
+  // protect,
+  getCallingDataByAgentData
+);
+
 export default router;
