@@ -1,5 +1,5 @@
 {
-  "name": "crmapi",
+  "name": "vosmos-crm-api",
   "version": "1.0.0",
   "description": "CRM Kestone API",
   "main": "index.js",
