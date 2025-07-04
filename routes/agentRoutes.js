@@ -37,7 +37,7 @@ router.get(
 );
 router.post(
   "/getCallingDataByAgent/:agentId",
-  // protect,
+  protect,
   getCallingDataByAgentData
 );
 
