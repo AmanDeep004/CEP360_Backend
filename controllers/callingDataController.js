@@ -325,12 +325,20 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
     let data = await fullQuery;
 
     // 4) Filter by remark (post-query)
+    // if (remark) {
+    //   data = data.filter((entry) => {
+    //     const history = entry.callHistory?.chatHistory;
+    //     return (
+    //       Array.isArray(history) && history.some((c) => c.remarks === remark)
+    //     );
+    //   });
+    // }
     if (remark) {
       data = data.filter((entry) => {
         const history = entry.callHistory?.chatHistory;
-        return (
-          Array.isArray(history) && history.some((c) => c.remarks === remark)
-        );
+        const lastRemark =
+          Array.isArray(history) && history[history.length - 1];
+        return lastRemark?.remarks === remark;
       });
     }
 
