@@ -34,21 +34,12 @@ const uploadcallingData = asyncHandler(async (req, res, next) => {
     }
 
     const REQUIRED_FIELDS = [
-      "Salutations",
       "Full_Name",
       "Job_Title",
       "Contact_City",
-      "Contact_State",
-      "Contact_Region",
-      "Mobile_No",
-      "Office_Email_1",
-      "Office_Email_2",
-      "Personal_Email1",
-      "Personal_Email2",
-      "Contact_LinkedIn_Profile",
+      "Mobile_No1",
       "Company_Name",
       "Source",
-      "Batch",
     ];
     const sheetHeaders = Object.keys(json[0] || {}).map((h) =>
       h.trim().toLowerCase()
@@ -69,19 +60,20 @@ const uploadcallingData = asyncHandler(async (req, res, next) => {
       CampaignId,
       UploadedBy,
       salutations: row.Salutations || "",
-      full_Name: row.Full_Name || "",
-      job_Title: row.Job_Title || "",
-      contact_City: row.Contact_City || "",
+      full_Name: row.Full_Name,
+      job_Title: row.Job_Title,
+      company_Name: row.Company_Name,
+      contact_City: row.Contact_City,
       contact_State: row.Contact_State || "",
       contact_Region: row.Contact_Region || "",
-      mobile_No: row.Mobile_No || null,
+      mobile_No1: row.Mobile_No1,
+      mobile_No2: row.Mobile_No2 || "",
       office_Email_1: row.Office_Email_1 || "",
       office_Email_2: row.Office_Email_2 || "",
       personal_Email1: row.Personal_Email1 || "",
       personal_Email2: row.Personal_Email2 || "",
       contact_LinkedIn_Profile: row.Contact_LinkedIn_Profile || "",
-      company_Name: row.Company_Name || "",
-      source: row.Source || "",
+      source: row.Source,
       batch: row.Batch || "",
     }));
 
