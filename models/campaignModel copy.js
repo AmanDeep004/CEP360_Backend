@@ -13,22 +13,10 @@ const campaignSchema = new mongoose.Schema(
       unique: [true, "Campaign name must be unique"],
     },
 
-    type: {
-      type: String,
-      required: true,
-      // enum: { values: ALL, message: "Invalid Program Type" },
-    },
-
-    category: {
-      type: String,
-      required: true,
-      enum: ["Virtual Event", "Webinar", "Physical Event"],
-    },
-
+    type: { type: String, required: true },
+    // type: { type: String, enum: { values: ALL }, required: true },
     startDate: { type: Date, required: true },
-
     endDate: { type: Date, required: true },
-
     programManager: {
       type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
       required: true,
@@ -37,51 +25,19 @@ const campaignSchema = new mongoose.Schema(
         "At least one Program Manager is required",
       ],
     },
-
-    keyAccountManager: { type: String, required: false },
-
     status: {
       type: String,
       required: true,
       default: "active",
       enum: ["active", "inactive", "completed"],
     },
-
+    keyAccountManager: { type: String, required: false },
     jcNumber: { type: String, required: false },
-
     brandName: { type: String, required: false },
-
     clientName: { type: String, required: false },
-
     clientEmail: { type: String, required: false },
-
     clientContact: { type: String, required: false },
-
-    registrationTarget: { type: String, required: false },
-
-    attendeeTarget: { type: String, required: false },
-
-    eventTopic: { type: String, required: false },
-
-    hasTargetAccountList: {
-      type: String,
-      required: false,
-      enum: ["Yes", "No", "Not Applicable"],
-    },
-
-    targetDatabaseSize: { type: String, required: false },
-
-    targetCompanyIndustry: { type: String, required: false },
-
-    targetCity: { type: String, required: false },
-
-    targetCompanySize: { type: String, required: false },
-
-    jobTitles: { type: String, required: false },
-
-    jobFunctions: { type: String, required: false },
-
-    comments: { type: String, required: false },
+    comments: { type: String },
   },
   { timestamps: true }
 );

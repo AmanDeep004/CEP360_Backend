@@ -18,78 +18,7 @@ const {
  * @route   POST /api/campaigns
  * @access  Private/Admin/Program Manager
  */
-
 const createCampaign = asyncHandler(async (req, res, next) => {
-  try {
-    const {
-      name,
-      type,
-      category,
-      startDate,
-      endDate,
-      programManager,
-      status,
-      keyAccountManager,
-      jcNumber,
-      brandName,
-      clientName,
-      clientEmail,
-      clientContact,
-      registrationTarget,
-      attendeeTarget,
-      eventTopic,
-      hasTargetAccountList,
-      targetDatabaseSize,
-      targetCompanyIndustry,
-      targetCity,
-      targetCompanySize,
-      jobTitles,
-      jobFunctions,
-      comments,
-    } = req.body;
-
-    // Check for duplicate name
-    const campaignExists = await Campaign.exists({ name: name.trim() });
-
-    if (campaignExists) {
-      return sendError(next, "Campaign with this name already exists", 400);
-    }
-
-    // Create new campaign
-    const campaign = await Campaign.create({
-      name: name.trim(),
-      type,
-      category,
-      startDate,
-      endDate,
-      programManager,
-      status: status || "active",
-      keyAccountManager,
-      jcNumber,
-      brandName,
-      clientName,
-      clientEmail,
-      clientContact,
-      registrationTarget,
-      attendeeTarget,
-      eventTopic,
-      hasTargetAccountList,
-      targetDatabaseSize,
-      targetCompanyIndustry,
-      targetCity,
-      targetCompanySize,
-      jobTitles,
-      jobFunctions,
-      comments,
-    });
-
-    return sendResponse(res, 200, "Campaign created successfully", campaign);
-  } catch (error) {
-    return sendError(next, error.message, 500);
-  }
-});
-
-const createCampaign_not_use = asyncHandler(async (req, res, next) => {
   try {
     const {
       name,
