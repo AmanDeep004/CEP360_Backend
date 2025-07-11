@@ -1,25 +1,34 @@
 import mongoose from "mongoose";
 
-const invoiceGeneratedSchema = new mongoose.Schema({
-  status: {
-    type: Boolean,
-    default: false,
+const invoiceGeneratedSchema = new mongoose.Schema(
+  {
+    status: {
+      type: Boolean,
+      default: false,
+    },
+    genBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+    invoiceUrl: {
+      type: String,
+    },
   },
-  genBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "User",
-  },
-  invoiceUrl: {
-    type: String,
-  },
-});
-
+  { timestamps: true }
+);
+{
+  timestamps: true;
+}
 const invoiceSchema = new mongoose.Schema(
   {
     employeeId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
+    },
+    isMultiCampaign: {
+      type: Boolean,
+      default: false,
     },
     campaign_id: {
       type: mongoose.Schema.Types.ObjectId,
@@ -43,6 +52,7 @@ const invoiceSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
+
     salaryModBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

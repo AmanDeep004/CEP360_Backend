@@ -11,6 +11,7 @@ import callingDataRoutes from "./routes/callingDataRoutes.js";
 import callingHistoryRoutes from "./routes/callHistoryRoutes.js";
 import agentRoutes from "./routes/agentRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
+import invoiceRoutes from "./routes/invoiceRoute.js";
 
 import dashboardRoutes from "./routes/dashboardRoutes.js";
 import { expressWinstonErrorLogger, logger } from "./logger/index.js";
@@ -40,6 +41,7 @@ app.use("/api/callHistory", callingHistoryRoutes);
 app.use("/api/agent", agentRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/invoice", invoiceRoutes);
 
 // Handle 404 - Route not found
 app.use("*", (req, res) => {

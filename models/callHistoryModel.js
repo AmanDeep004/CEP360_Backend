@@ -17,7 +17,8 @@ const chatEntrySchema = new mongoose.Schema(
     },
     agentName: { type: String, required: true },
   },
-  { _id: false }
+  { _id: false },
+  { timestamps: true }
 );
 
 const callHistorySchema = new mongoose.Schema(
