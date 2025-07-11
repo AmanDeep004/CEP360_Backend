@@ -10,6 +10,9 @@ import campaignRoutes from "./routes/campaignRoutes.js";
 import callingDataRoutes from "./routes/callingDataRoutes.js";
 import callingHistoryRoutes from "./routes/callHistoryRoutes.js";
 import agentRoutes from "./routes/agentRoutes.js";
+import uploadRoutes from "./routes/uploadRoutes.js";
+
+import dashboardRoutes from "./routes/dashboardRoutes.js";
 import { expressWinstonErrorLogger, logger } from "./logger/index.js";
 dotenv.config({ path: `.env.local` });
 // Connect to database
