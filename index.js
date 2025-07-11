@@ -10,6 +10,7 @@ import campaignRoutes from "./routes/campaignRoutes.js";
 import callingDataRoutes from "./routes/callingDataRoutes.js";
 import callingHistoryRoutes from "./routes/callHistoryRoutes.js";
 import agentRoutes from "./routes/agentRoutes.js";
+import uploadRoutes from "./routes/uploadRoutes.js";
 import { expressWinstonErrorLogger, logger } from "./logger/index.js";
 dotenv.config({ path: `.env.local` });
 // Connect to database
@@ -35,6 +36,7 @@ app.use("/api/campaign", campaignRoutes);
 app.use("/api/callingData", callingDataRoutes);
 app.use("/api/callHistory", callingHistoryRoutes);
 app.use("/api/agent", agentRoutes);
+app.use("/api/upload", uploadRoutes);
 // Handle 404 - Route not found
 app.use("*", (req, res) => {
   res.status(404).json({
