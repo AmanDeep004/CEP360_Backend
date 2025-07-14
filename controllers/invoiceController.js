@@ -140,9 +140,11 @@ const getInvoicesByPMId = asyncHandler(async (req, res, next) => {
   }
 });
 
+//to trigger it on 25th 11pm evey month (so that all the invoices data gets generated)
 const generateAllInvoices = asyncHandler(async (req, res, next) => {
   try {
     const { salaryStartDate, salaryEndDate } = req.body;
+
     if (!salaryStartDate || !salaryEndDate) {
       return sendError(
         next,
@@ -154,63 +156,261 @@ const generateAllInvoices = asyncHandler(async (req, res, next) => {
     const startDateRef = new Date(salaryStartDate);
     const endDateRef = new Date(salaryEndDate);
 
-    const getAllActiveCamapigns = await Campaign.find({
-      status: "active",
+    if (startDateRef > endDateRef) {
+      return sendError(next, "Start date must be before End date", 400);
+    }
+
+    const campaigns = await Campaign.find({ status: "active" }).lean();
+    const campaignIds = campaigns.map((c) => c._id.toString());
+
+    const assignments = await AgentAssigned.find({
+      campaign_id: { $in: campaignIds },
     })
-      .select("_id")
+      .populate("campaign_id agent_id")
       .lean();
-    const activeCampaignsId = getAllActiveCamapigns.map((c) =>
-      c._id.toString()
-    );
 
-    const agentsData = await AgentAssigned.find({
-      campaign_id: { $in: activeCampaignsId },
-    })
-      .lean()
-      .populate({ path: "campaign_id agent_id" });
+    const invoicesToInsert = [];
 
-    const processedData = agentsData.flatMap((assignment) => {
+    const getDaysInMonth = (date) => {
+      const year = date.getFullYear();
+      const month = date.getMonth();
+      return new Date(year, month + 1, 0).getDate();
+    };
+
+    for (const assignment of assignments) {
+      const agent = assignment.agent_id;
       const campaign = assignment.campaign_id;
 
-      const agentList = Array.isArray(assignment.agent_id)
-        ? assignment.agent_id
-        : [assignment.agent_id];
+      const assignedAt = assignment.assigned_date
+        ? new Date(assignment.assigned_date)
+        : startDateRef;
+      const releasedAt = assignment.released_date
+        ? new Date(assignment.released_date)
+        : null;
 
-      return agentList.map((agent) => {
-        const assignedAt = assignment.assignedAt
-          ? new Date(assignment.assignedAt)
-          : null;
+      let fromDate = assignedAt < startDateRef ? startDateRef : assignedAt;
+      let toDate = releasedAt
+        ? releasedAt
+        : campaign?.endDate
+        ? new Date(campaign.endDate)
+        : endDateRef;
 
-        // FROM DATE LOGIC
-        let fromDate = startDateRef;
-        if (assignedAt && !isNaN(assignedAt)) {
-          fromDate = assignedAt < startDateRef ? startDateRef : assignedAt;
-        }
+      if (toDate > endDateRef) toDate = endDateRef;
 
-        // TO DATE LOGIC
-        let toDate = endDateRef;
-        if (assignment.releaseDate) {
-          toDate = new Date(assignment.releaseDate);
-        } else if (campaign?.end_date) {
-          toDate = new Date(campaign.end_date);
-        }
+      const msPerDay = 1000 * 60 * 60 * 24;
+      const totalDays = Math.floor((toDate - fromDate) / msPerDay) + 1;
+      const noOfDaysWorked = totalDays;
 
-        return {
-          agentId: agent._id,
-          campaignId: campaign._id,
-          fromDate,
-          toDate,
-          agentDetails: agent,
-          campaignDetails: campaign,
-        };
+      const month = fromDate.toLocaleString("default", {
+        month: "long",
+        year: "numeric",
       });
-    });
 
-    //logic for start date and end date
+      const existingInvoice = await Invoice.findOne({
+        employeeId: agent._id,
+        campaign_id: campaign._id,
+        month,
+        startDate: { $eq: fromDate },
+        endDate: { $eq: toDate },
+      });
 
-    return sendResponse(res, 200, "Res Retrieved", {
-      processedData,
+      if (existingInvoice) continue;
+
+      const totalDaysInMonth = getDaysInMonth(fromDate);
+      const daysAvailable = totalDaysInMonth - noOfDaysWorked;
+
+      const invoice = {
+        employeeId: agent._id,
+        campaign_id: campaign._id,
+        isMultiCampaign: false,
+        programManagers: campaign.programManager,
+        startDate: fromDate,
+        endDate: toDate,
+        month,
+        noOfDaysWorked,
+        noOfDaysAbsent: 0,
+        incentive: 0,
+        arrears: 0,
+        extraPay: 0,
+        salaryGenBy: req.user?._id || null,
+        totalDaysGenerated: totalDays,
+        daysAvailabletoGenerate: daysAvailable < 0 ? 0 : daysAvailable,
+        invoiceGenerated: {
+          status: false,
+          genBy: null,
+          invoiceUrl: "",
+        },
+      };
+
+      invoicesToInsert.push(invoice);
+    }
+
+    if (invoicesToInsert.length > 0) {
+      await Invoice.insertMany(invoicesToInsert);
+    }
+
+    return sendResponse(res, 200, "Invoices generated successfully", {
+      totalInvoices: invoicesToInsert.length,
     });
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
+//to get all the invoices of the user for the specific month
+const getAgentInvoicesDataByMonth = asyncHandler(async (req, res, next) => {
+  try {
+    const { agentId, month } = req.query;
+    console.log(agentId, "agentId");
+    if (!agentId || !month) {
+      return sendError(next, "Agent ID and month are required", 400);
+    }
+
+    const normalizedMonth = month
+      .trim()
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+
+    const invoices = await Invoice.find({
+      employeeId: agentId,
+      month: normalizedMonth,
+    })
+      .populate({
+        path: "employeeId",
+        select: "-password -__v -createdAt -updatedAt",
+      })
+      .populate({
+        path: "campaign_id",
+        select: "-__v -createdAt -updatedAt",
+        populate: {
+          path: "programManager",
+          select: "-password -__v -createdAt -updatedAt",
+        },
+      })
+      .populate({
+        path: "programManagers",
+        select: "-password -__v -createdAt -updatedAt",
+      })
+      .populate({
+        path: "salaryGenBy",
+        select: "employeeName email role",
+      })
+      .populate({
+        path: "salaryModBy",
+        select: "employeeName email role",
+      })
+      .lean();
+
+    return sendResponse(res, 200, "Invoices fetched successfully", invoices);
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
+//need to check and modify
+const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
+  try {
+    const {
+      invoiceId,
+      incentive = 0,
+      arrears = 0,
+      extraPay = 0,
+      noOfDaysWorked,
+      noOfDaysAbsent = 0,
+      startDate,
+      endDate,
+      salaryModBy,
+      ctc,
+    } = req.body;
+
+    if (!invoiceId || !noOfDaysWorked || !startDate || !endDate || !ctc) {
+      return sendError(next, "Missing required fields", 400);
+    }
+
+    const gross = Math.round((ctc / 30) * noOfDaysWorked);
+
+    const finalCTC =
+      gross + Number(incentive) + Number(arrears) + Number(extraPay);
+
+    const totalDaysGenerated = Number(noOfDaysWorked) + Number(noOfDaysAbsent);
+    const daysAvailabletoGenerate = 30 - noOfDaysWorked;
+
+    const invoice = await Invoice.findById(invoiceId);
+    if (!invoice) return sendError(next, "Invoice not found", 404);
+
+    invoice.incentive = incentive;
+    invoice.arrears = arrears;
+    invoice.extraPay = extraPay;
+    invoice.noOfDaysWorked = noOfDaysWorked;
+    invoice.noOfDaysAbsent = noOfDaysAbsent;
+    invoice.startDate = new Date(startDate);
+    invoice.endDate = new Date(endDate);
+    invoice.salaryModBy = salaryModBy;
+    invoice.totalDaysGenerated = totalDaysGenerated;
+    invoice.daysAvailabletoGenerate = daysAvailabletoGenerate;
+    invoice.ctc = finalCTC;
+
+    await invoice.save();
+
+    return sendResponse(res, 200, "Invoice updated successfully", {
+      finalCTC,
+      invoice,
+    });
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
+//to get all agents to show it in dropdown
+const getAgentsByProgramManager = asyncHandler(async (req, res, next) => {
+  try {
+    const { programManagerId } = req.params;
+
+    if (!programManagerId) {
+      return sendError(next, "Program Manager ID is required", 400);
+    }
+
+    const campaigns = await Campaign.find({ programManager: programManagerId })
+      .select("_id")
+      .lean();
+    const campaignIds = campaigns.map((c) => c._id.toString());
+
+    if (!campaignIds.length) {
+      return sendResponse(
+        res,
+        200,
+        "No campaigns found for this Program Manager",
+        []
+      );
+    }
+
+    const assignments = await AgentAssigned.find({
+      campaign_id: { $in: campaignIds },
+    })
+      .populate("agent_id", "employeeName email role ctc programName status")
+      .populate("campaign_id", "name startDate endDate");
+
+    const agentDetails = assignments.map((a) => ({
+      agentId: a.agent_id?._id,
+      employeeName: a.agent_id?.employeeName,
+      email: a.agent_id?.email,
+      role: a.agent_id?.role,
+      ctc: a.agent_id?.ctc,
+      programName: a.agent_id?.programName,
+      status: a.agent_id?.status,
+      campaignName: a.campaign_id?.name,
+      campaignId: a.campaign_id?._id,
+      campaignStartDate: a.campaign_id?.startDate,
+      campaignEndDate: a.campaign_id?.endDate,
+      assignedDate: a.assigned_date,
+      releasedDate: a.released_date,
+    }));
+
+    return sendResponse(
+      res,
+      200,
+      "Agents retrieved successfully",
+      agentDetails
+    );
   } catch (error) {
     return sendError(next, error.message, 500);
   }
@@ -223,4 +423,7 @@ export {
   getAllInvoices,
   getInvoicesByPMId,
   generateAllInvoices,
+  getAgentInvoicesDataByMonth,
+  updateAndGenerateInvoice,
+  getAgentsByProgramManager,
 };
