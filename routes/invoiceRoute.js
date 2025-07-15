@@ -19,7 +19,7 @@ import { protect } from "../middleware/authMiddleware.js";
 router.post("/", createInvoice);
 router.get("/", getAllInvoices);
 router.get("/pm/:pmId", getInvoicesByPMId);
-router.put("/:id", updateInvoice);
+// router.put("/:id", updateInvoice);
 router.delete("/:id", deleteInvoice);
 router.post("/generratAllInvoiceData", generateAllInvoices);
 router.get("/getAgentInvoicesDataByMonth", getAgentInvoicesDataByMonth);
