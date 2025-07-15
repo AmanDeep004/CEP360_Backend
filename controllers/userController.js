@@ -20,6 +20,7 @@ const registerUser = asyncHandler(async (req, res, next) => {
       employeeCode,
       email,
       password,
+      mobile,
       role,
       code,
       employeeBase,
@@ -57,6 +58,7 @@ const registerUser = asyncHandler(async (req, res, next) => {
       password,
       role: role || "agent",
       code,
+      mobile,
       employeeBase,
       programName,
       programType,
@@ -181,6 +183,7 @@ const updateUserProfile = asyncHandler(async (req, res, next) => {
       "status",
       "pan",
       "telecmiId",
+      "mobile",
     ];
 
     // console.log("User role:", req.user.role);
@@ -200,13 +203,14 @@ const updateUserProfile = asyncHandler(async (req, res, next) => {
 
     const updatedUser = await user.save();
 
-    return sendResponse(res, 200, "Profile updated successfully", {
-      _id: updatedUser._id,
-      employeeName: updatedUser.employeeName,
-      email: updatedUser.email,
-      role: updatedUser.role,
-      status: updatedUser.status,
-    });
+    // return sendResponse(res, 200, "Profile updated successfully", {
+    //   _id: updatedUser._id,
+    //   employeeName: updatedUser.employeeName,
+    //   email: updatedUser.email,
+    //   role: updatedUser.role,
+    //   status: updatedUser.status,
+    // });
+    return sendResponse(res, 200, "Profile updated successfully", updatedUser);
   } catch (error) {
     return sendError(next, error.message, 500);
   }

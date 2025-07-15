@@ -1,5 +1,4 @@
 import Invoice from "../models/invoiceModel.js";
-import User from "../models/userModel.js";
 import Campaign from "../models/campaignModel.js";
 import AgentAssigned from "../models/agentAssigned.js";
 import errorHandler from "../utils/index.js";
@@ -9,12 +8,29 @@ import FormData from "form-data";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import https from "https";
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
+const insertSignatureFromUrl = (url, doc) => {
+  return new Promise((resolve, reject) => {
+    https.get(url, (response) => {
+      const chunks = [];
+      response
+        .on("data", (chunk) => chunks.push(chunk))
+        .on("end", () => {
+          const buffer = Buffer.concat(chunks);
+          try {
+            doc.image(buffer, 40, 430, { width: 120, height: 60 });
+            resolve();
+          } catch (err) {
+            reject(err);
+          }
+        })
+        .on("error", reject);
+    });
+  });
+};
 /**
  * @desc    Create new invoice with required field checks
  * @route   POST /api/invoices
@@ -320,7 +336,7 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
   try {
     const {
       invoiceId,
-      ctc = 20000,
+      ctc,
       incentive = 0,
       arrears = 0,
       extraPay = 0,
@@ -377,7 +393,11 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
 
     // HEADER
     doc.rect(20, 20, 555, 30).fillAndStroke("#666", "#333");
-    doc.fillColor("#fff").font("Helvetica-Bold").fontSize(18).text("INVOICE", 20, 28, { align: "center", width: 555 });
+    doc
+      .fillColor("#fff")
+      .font("Helvetica-Bold")
+      .fontSize(18)
+      .text("INVOICE", 20, 28, { align: "center", width: 555 });
     doc.fillColor("#000");
 
     // --- TOP INFO BLOCKS ---
@@ -386,11 +406,16 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
     // Left block
     doc.rect(20, 50, 277.5, 110).stroke();
     doc.font("Helvetica-Bold").fontSize(10).text("From :", 30, 60);
-    doc.font("Helvetica").fontSize(10).text(employee.employeeName || "N/A", 80, 60);
+    doc
+      .font("Helvetica")
+      .fontSize(10)
+      .text(employee.employeeName || "N/A", 80, 60);
     doc.font("Helvetica-Bold").text("Employee Code:", 30, 80);
     doc.font("Helvetica").text(employee.employeeCode || "N/A", 120, 80);
     doc.font("Helvetica-Bold").text("Address:", 30, 100);
-    doc.font("Helvetica").text(employee.address || "N/A", 80, 100, { width: 200 });
+    doc
+      .font("Helvetica")
+      .text(employee.location || "N/A", 80, 100, { width: 200 });
 
     // Right block
     doc.rect(297.5, 50, 277.5, 110).stroke();
@@ -406,23 +431,49 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
     // --- TO & INVOICE INFO BLOCKS ---
     doc.rect(20, 160, 277.5, 80).stroke();
     doc.font("Helvetica-Bold").text("TO", 30, 170);
-    doc.font("Helvetica").text("Kestone IMS – A Division of CL Educate Limited", 60, 170, { width: 220 });
-    doc.font("Helvetica").text("#37, 7th Cross, RMJ Mandoth Towers, 3rd Floor, Vasanth Nagar, Bangalore-5600052", 30, 190, { width: 260 });
+    doc
+      .font("Helvetica")
+      .text("Kestone IMS – A Division of CL Educate Limited", 60, 170, {
+        width: 220,
+      });
+    doc
+      .font("Helvetica")
+      .text(
+        "#37, 7th Cross, RMJ Mandoth Towers, 3rd Floor, Vasanth Nagar, Bangalore-5600052",
+        30,
+        190,
+        { width: 260 }
+      );
 
     doc.rect(297.5, 160, 277.5, 80).stroke();
     doc.font("Helvetica-Bold").text("Invoice No :", 307.5, 170);
     doc.font("Helvetica").text(invoice._id, 370, 170);
     doc.font("Helvetica-Bold").text("FY :", 307.5, 185);
-    doc.font("Helvetica").text(new Date(startDate).getFullYear() + "-" + (new Date(startDate).getFullYear() + 1) + "/" + new Date(startDate).toLocaleString("default", { month: "long" }), 340, 185);
+    doc
+      .font("Helvetica")
+      .text(
+        new Date(startDate).getFullYear() +
+          "-" +
+          (new Date(startDate).getFullYear() + 1) +
+          "/" +
+          new Date(startDate).toLocaleString("default", { month: "long" }),
+        340,
+        185
+      );
     doc.font("Helvetica-Bold").text("Date :", 307.5, 200);
-    doc.font("Helvetica").text(new Date(endDate).toLocaleDateString("en-GB"), 350, 200);
+    doc
+      .font("Helvetica")
+      .text(new Date(endDate).toLocaleDateString("en-GB"), 350, 200);
     doc.font("Helvetica-Bold").text("GSTIN No :", 307.5, 215);
     doc.font("Helvetica").text("29AACCB3885C2ZO", 370, 215);
 
     // --- PARTICULARS & AMOUNT TABLE HEADER ---
     doc.rect(20, 240, 370, 30).fillAndStroke("#666", "#333");
     doc.rect(390, 240, 185, 30).fillAndStroke("#666", "#333");
-    doc.fillColor("#fff").font("Helvetica-Bold").fontSize(12)
+    doc
+      .fillColor("#fff")
+      .font("Helvetica-Bold")
+      .fontSize(12)
       .text("PARTICULARS", 25, 250, { width: 360 })
       .text("AMOUNT (Rs)", 395, 250, { width: 175, align: "right" });
     doc.fillColor("#000");
@@ -430,25 +481,45 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
     // --- PARTICULARS & AMOUNT TABLE BODY ---
     doc.rect(20, 270, 370, 80).stroke();
     doc.rect(390, 270, 185, 80).stroke();
-    doc.font("Helvetica").fontSize(10)
-      .text("Professional Charges for the M/O " + new Date(startDate).toLocaleString("default", { month: "long" }) + "' " + new Date(startDate).getFullYear() + " for rendering services as per below detail", 25, 275, { width: 360 });
+    doc
+      .font("Helvetica")
+      .fontSize(10)
+      .text(
+        "Professional Charges for the M/O " +
+          new Date(startDate).toLocaleString("default", { month: "long" }) +
+          "' " +
+          new Date(startDate).getFullYear() +
+          " for rendering services as per below detail",
+        25,
+        275,
+        { width: 360, height: 100 }
+      );
     doc.text(`Gross Fees: INR. ${gross}/-`, 25, 295);
     doc.text(`Incentive or other payment: ${incentive}`, 25, 310);
     doc.text(`Extra Pay: ${extraPay}`, 25, 325);
     doc.text(`Arrears: ${arrears}`, 25, 340);
-    doc.font("Helvetica-Bold").fontSize(16).text(`INR. ${finalCTC}/-`, 395, 310, { width: 175, align: "right" });
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(16)
+      .text(`INR. ${finalCTC}/-`, 395, 310, { width: 175, align: "right" });
 
     // --- TOTAL AMOUNT PAYABLE ---
     doc.rect(20, 350, 370, 30).fillAndStroke("#666", "#333");
     doc.rect(390, 350, 185, 30).fillAndStroke("#666", "#333");
-    doc.fillColor("#fff").font("Helvetica-Bold").fontSize(12)
+    doc
+      .fillColor("#fff")
+      .font("Helvetica-Bold")
+      .fontSize(12)
       .text("TOTAL AMOUNT PAYABLE", 25, 360, { width: 360 })
       .text(`INR. ${finalCTC}/-`, 395, 360, { width: 175, align: "right" });
     doc.fillColor("#000");
 
     // --- AMOUNT IN WORDS ---
     doc.rect(20, 380, 555, 30).fillAndStroke("#666", "#333");
-    doc.fillColor("#fff").font("Helvetica-Bold").fontSize(11)
+    doc
+      .fillColor("#fff")
+      .font("Helvetica-Bold")
+      .fontSize(11)
       .text(`AMOUNT IN WORDS : ${finalCTC} ONLY`, 25, 390, { width: 545 });
     doc.fillColor("#000");
 
@@ -457,14 +528,27 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
     doc.rect(297.5, 410, 277.5, 100).stroke();
 
     // Signature image (if available)
-    const signaturePath = "path/to/signature.png"; // <-- update with your actual path
+    const signaturePath = await insertSignatureFromUrl(
+      employee?.signature,
+      doc
+    );
+    console.log(signaturePath, "signaturePath");
     if (fs.existsSync(signaturePath)) {
       doc.image(signaturePath, 40, 430, { width: 120, height: 60 });
     }
 
     // Name and signature info
-    doc.font("Helvetica-Bold").fontSize(10).text("NAME - Ishant Hingorani", 310, 430);
-    doc.font("Helvetica-Bold").text("DATE - " + new Date(endDate).toLocaleDateString("en-GB"), 310, 450);
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(10)
+      .text("NAME - Ishant Hingorani", 310, 430);
+    doc
+      .font("Helvetica-Bold")
+      .text(
+        "DATE - " + new Date(endDate).toLocaleDateString("en-GB"),
+        310,
+        450
+      );
     doc.font("Helvetica-Bold").text("SIGNATURE - Ishant Hingorani", 310, 470);
 
     doc.end();
@@ -480,9 +564,11 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
           form,
           { headers: form.getHeaders() }
         );
-      //  console.log("Upload API response:", uploadResponse.data);
+        //  console.log("Upload API response:", uploadResponse.data);
 
         const uploadedUrl = uploadResponse?.data?.data?.fileSrc;
+
+        console.log(uploadedUrl, "uploadedUrl");
         if (!uploadedUrl) {
           return sendError(next, "Upload failed: No URL returned", 500);
         }

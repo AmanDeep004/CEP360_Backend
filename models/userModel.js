@@ -97,6 +97,10 @@ const userSchema = new Schema(
       required: [true, "Signature is required"],
       trim: true,
     },
+    mobile: {
+      type: Number,
+      trim: true,
+    },
     programManager: {
       type: String,
       required: [true, "Program manager is required"],
