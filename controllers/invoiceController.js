@@ -480,7 +480,7 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
           form,
           { headers: form.getHeaders() }
         );
-        console.log("Upload API response:", uploadResponse.data);
+      //  console.log("Upload API response:", uploadResponse.data);
 
         const uploadedUrl = uploadResponse?.data?.data?.fileSrc;
         if (!uploadedUrl) {

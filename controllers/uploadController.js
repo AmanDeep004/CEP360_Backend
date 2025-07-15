@@ -1,23 +1,3 @@
-// import { getUploadSingle, uploadToS3 } from "../utils/upload.js";
-
-// const uploadSingle = getUploadSingle();
-
-// export const uploadSingleFile = (req, res, next) => {
-//   uploadSingle.single("file")(req, res, async (err) => {
-//     if (err) {
-//       return res.status(500).json({ error: "Error uploading file", details: err.message });
-//     }
-//     if (!req.file) {
-//       return res.status(400).json({ error: "No file uploaded" });
-//     }
-//     try {
-//       const fileUrl = await uploadToS3(req.file);
-//       res.json({ success: true, fileUrl });
-//     } catch (s3err) {
-//       res.status(500).json({ error: "S3 upload failed", details: s3err.message });
-//     }
-//   });
-// };
 
 import upload from "../services/uploadFilesServices.js";
 import errorHandler from "../utils/index.js";
