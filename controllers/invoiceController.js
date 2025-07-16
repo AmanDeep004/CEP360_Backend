@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Invoice from "../models/invoiceModel.js";
 import Campaign from "../models/campaignModel.js";
 import AgentAssigned from "../models/agentAssigned.js";
@@ -344,10 +345,18 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
       noOfDaysAbsent = 0,
       startDate,
       endDate,
+      genBy,
       salaryModBy,
     } = req.body;
 
-    if (!invoiceId || !noOfDaysWorked || !startDate || !endDate || !ctc) {
+    if (
+      !invoiceId ||
+      !noOfDaysWorked ||
+      !startDate ||
+      !endDate ||
+      !ctc ||
+      !genBy
+    ) {
       return sendError(next, "Missing required fields", 400);
     }
 
@@ -375,6 +384,7 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
     invoice.salaryModBy = salaryModBy;
     invoice.totalDaysGenerated = totalDaysGenerated;
     invoice.daysAvailabletoGenerate = daysAvailabletoGenerate;
+    invoice.invoiceGenerated.genBy = genBy;
     invoice.ctc = finalCTC;
 
     // Generate PDF
@@ -656,6 +666,33 @@ const getAgentsByProgramManager = asyncHandler(async (req, res, next) => {
   }
 });
 
+const getInvoicesByPMAndMonth = asyncHandler(async (req, res, next) => {
+  try {
+    const { pmId } = req.params;
+    const { month } = req.query;
+
+    if (!pmId || !month) {
+      return sendError(next, "Program Manager ID and month are required", 400);
+    }
+
+    const normalizedMonth = month.trim();
+
+    const invoices = await Invoice.find({
+      programManagers: new mongoose.Types.ObjectId(pmId),
+      month: normalizedMonth,
+    })
+      .populate(
+        "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
+      )
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return sendResponse(res, 200, "Invoices retrieved successfully", invoices);
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
 export {
   createInvoice,
   updateInvoice,
@@ -666,4 +703,5 @@ export {
   getAgentInvoicesDataByMonth,
   updateAndGenerateInvoice,
   getAgentsByProgramManager,
+  getInvoicesByPMAndMonth,
 };

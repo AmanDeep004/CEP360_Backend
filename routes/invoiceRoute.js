@@ -11,6 +11,7 @@ import {
   getAgentInvoicesDataByMonth,
   updateAndGenerateInvoice,
   getAgentsByProgramManager,
+  getInvoicesByPMAndMonth,
 } from "../controllers/invoiceController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
@@ -28,5 +29,7 @@ router.get(
   "/getAgentsByProgramManager/:programManagerId",
   getAgentsByProgramManager
 );
+
+router.get("/getInvoicesByPMAndMonth/:pmId", getInvoicesByPMAndMonth);
 
 export default router;
