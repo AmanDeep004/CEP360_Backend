@@ -676,10 +676,10 @@ const getInvoicesByPMAndMonth = asyncHandler(async (req, res, next) => {
     }
 
     const normalizedMonth = month.trim();
-
     const invoices = await Invoice.find({
       programManagers: new mongoose.Types.ObjectId(pmId),
       month: normalizedMonth,
+      "invoiceGenerated.status": true,
     })
       .populate(
         "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
