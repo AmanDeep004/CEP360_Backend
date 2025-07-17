@@ -341,7 +341,7 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
       incentive = 0,
       arrears = 0,
       extraPay = 0,
-      noOfDaysWorked,
+      noOfDaysWorked = 0,
       noOfDaysAbsent = 0,
       startDate,
       endDate,
@@ -351,7 +351,7 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
 
     if (
       !invoiceId ||
-      !noOfDaysWorked ||
+      // !noOfDaysWorked ||
       !startDate ||
       !endDate ||
       !ctc ||
