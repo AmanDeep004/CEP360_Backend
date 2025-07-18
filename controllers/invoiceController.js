@@ -2,16 +2,66 @@ import mongoose from "mongoose";
 import Invoice from "../models/invoiceModel.js";
 import Campaign from "../models/campaignModel.js";
 import AgentAssigned from "../models/agentAssigned.js";
+import Attendance from "../models/attendenceModel.js";
 import errorHandler from "../utils/index.js";
 import PDFDocument from "pdfkit";
 import axios from "axios";
 import FormData from "form-data";
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 import https from "https";
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
+
+async function getAttendanceSummary(userId, startDate, endDate) {
+  const start = new Date(startDate);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(endDate);
+  end.setHours(23, 59, 59, 999);
+
+  const attendanceRecords = await Attendance.find({
+    userId,
+    loginDate: { $gte: start, $lte: end },
+  }).lean();
+
+  const presentDatesSet = new Set(
+    attendanceRecords.map((rec) => rec.loginDate.toISOString().slice(0, 10))
+  );
+
+  const allDates = [];
+  const presentDates = [];
+  const absentDates = [];
+
+  let current = new Date(start);
+  while (current <= end) {
+    const dateStr = current.toISOString().slice(0, 10);
+    const day = current.getDay(); // 0 = Sunday, 6 = Saturday
+
+    allDates.push(dateStr);
+
+    if (day === 0 || day === 6) {
+      // Mark Saturday/Sunday as present
+      presentDates.push(dateStr);
+    } else if (presentDatesSet.has(dateStr)) {
+      presentDates.push(dateStr);
+    } else {
+      absentDates.push(dateStr);
+    }
+
+    current.setDate(current.getDate() + 1);
+  }
+
+  return {
+    allDates,
+    presentDates,
+    absentDates,
+    totalDays: allDates.length,
+    presentDays: presentDates.length,
+    absentDays: absentDates.length,
+    presentDates,
+    absentDates,
+  };
+}
 
 const insertSignatureFromUrl = (url, doc) => {
   return new Promise((resolve, reject) => {
@@ -166,6 +216,7 @@ const getInvoicesByPMId = asyncHandler(async (req, res, next) => {
   }
 });
 
+// here
 //to trigger it on 25th 11pm evey month (so that all the invoices data gets generated)
 const generateAllInvoices = asyncHandler(async (req, res, next) => {
   try {
@@ -197,12 +248,6 @@ const generateAllInvoices = asyncHandler(async (req, res, next) => {
 
     const invoicesToInsert = [];
 
-    const getDaysInMonth = (date) => {
-      const year = date.getFullYear();
-      const month = date.getMonth();
-      return new Date(year, month + 1, 0).getDate();
-    };
-
     for (const assignment of assignments) {
       const agent = assignment.agent_id;
       const campaign = assignment.campaign_id;
@@ -223,9 +268,14 @@ const generateAllInvoices = asyncHandler(async (req, res, next) => {
 
       if (toDate > endDateRef) toDate = endDateRef;
 
-      const msPerDay = 1000 * 60 * 60 * 24;
-      const totalDays = Math.floor((toDate - fromDate) / msPerDay) + 1;
-      const noOfDaysWorked = totalDays;
+      const attendanceSummary = await getAttendanceSummary(
+        agent._id,
+        fromDate,
+        toDate
+      );
+
+      const noOfDaysWorked = attendanceSummary.presentDays;
+      const noOfDaysAbsent = attendanceSummary.absentDays;
 
       const month = fromDate.toLocaleString("default", {
         month: "long",
@@ -236,14 +286,14 @@ const generateAllInvoices = asyncHandler(async (req, res, next) => {
         employeeId: agent._id,
         campaign_id: campaign._id,
         month,
-        startDate: { $eq: fromDate },
-        endDate: { $eq: toDate },
       });
 
       if (existingInvoice) continue;
 
-      const totalDaysInMonth = getDaysInMonth(fromDate);
-      const daysAvailable = totalDaysInMonth - noOfDaysWorked;
+      const totalDaysInRange =
+        Math.ceil((endDateRef - startDateRef) / (1000 * 60 * 60 * 24)) + 1;
+      const daysAvailable = totalDaysInRange - noOfDaysWorked - noOfDaysAbsent;
+      const salary = (agent.ctc / totalDaysInRange) * noOfDaysWorked;
 
       const invoice = {
         employeeId: agent._id,
@@ -254,29 +304,43 @@ const generateAllInvoices = asyncHandler(async (req, res, next) => {
         endDate: toDate,
         month,
         noOfDaysWorked,
-        noOfDaysAbsent: 0,
+        noOfDaysAbsent: attendanceSummary.absentDays,
         incentive: 0,
         arrears: 0,
         extraPay: 0,
         salaryGenBy: req.user?._id || null,
-        totalDaysGenerated: totalDays,
+        totalDaysGenerated: attendanceSummary.totalDays,
         daysAvailabletoGenerate: daysAvailable < 0 ? 0 : daysAvailable,
         invoiceGenerated: {
           status: false,
           genBy: null,
           invoiceUrl: "",
         },
+        salary,
       };
 
       invoicesToInsert.push(invoice);
     }
 
+    let insertedCount = 0;
+
     if (invoicesToInsert.length > 0) {
-      await Invoice.insertMany(invoicesToInsert);
+      await Invoice.insertMany(invoicesToInsert, { ordered: false })
+        .then((docs) => {
+          insertedCount = docs.length;
+        })
+        .catch((err) => {
+          if (err.code === 11000) {
+            console.warn("Some duplicate invoices were skipped.");
+          } else {
+            throw err;
+          }
+        });
     }
 
     return sendResponse(res, 200, "Invoices generated successfully", {
-      totalInvoices: invoicesToInsert.length,
+      totalInvoicesAttempted: invoicesToInsert.length,
+      successfullyInserted: insertedCount,
     });
   } catch (error) {
     return sendError(next, error.message, 500);
@@ -287,7 +351,6 @@ const generateAllInvoices = asyncHandler(async (req, res, next) => {
 const getAgentInvoicesDataByMonth = asyncHandler(async (req, res, next) => {
   try {
     const { agentId, month } = req.query;
-    console.log(agentId, "agentId");
     if (!agentId || !month) {
       return sendError(next, "Agent ID and month are required", 400);
     }
@@ -542,7 +605,6 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
       employee?.signature,
       doc
     );
-    console.log(signaturePath, "signaturePath");
     if (fs.existsSync(signaturePath)) {
       doc.image(signaturePath, 40, 430, { width: 120, height: 60 });
     }
@@ -574,11 +636,7 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
           form,
           { headers: form.getHeaders() }
         );
-        //  console.log("Upload API response:", uploadResponse.data);
-
         const uploadedUrl = uploadResponse?.data?.data?.fileSrc;
-
-        console.log(uploadedUrl, "uploadedUrl");
         if (!uploadedUrl) {
           return sendError(next, "Upload failed: No URL returned", 500);
         }

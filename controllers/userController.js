@@ -1,5 +1,6 @@
 import User from "../models/userModel.js";
 import Campaign from "../models/campaignModel.js";
+import Attendence from "../models/attendenceModel.js";
 import errorHandler from "../utils/index.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 import { UserRoleEnum } from "../utils/enum.js";
@@ -111,7 +112,7 @@ const loginUser = asyncHandler(async (req, res, next) => {
     if (!isMatch) {
       return sendError(next, "Invalid credentials", 401);
     }
-
+    await Attendence.create({ employeeId: user._id });
     // Update last login
     // await user.updateLastLogin();
 

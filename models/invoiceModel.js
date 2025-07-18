@@ -64,6 +64,10 @@ const invoiceSchema = new mongoose.Schema(
     daysAvailabletoGenerate: {
       type: Number,
     },
+    salary: {
+      type: Number,
+      required: true,
+    },
     invoiceGenerated: { type: invoiceGeneratedSchema },
   },
   { timestamps: true }
