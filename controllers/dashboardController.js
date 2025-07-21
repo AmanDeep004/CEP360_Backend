@@ -4,14 +4,8 @@ import User from "../models/userModel.js";
 import CallingData from "../models/callingDataModal.js";
 import { UserRoleEnum } from "../utils/enum.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
-const {
-  ADMIN,
-  PRESALES_MANAGER,
-  PROGRAM_MANAGER,
-  RESOURCE_MANAGER,
-  AGENT,
-  DATABASE_MANAGER,
-} = UserRoleEnum;
+const { ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT } =
+  UserRoleEnum;
 
 const dashboardData = asyncHandler(async (req, res, next) => {
   try {
