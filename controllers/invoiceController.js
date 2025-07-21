@@ -669,7 +669,7 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
     return sendError(next, error.message, 500);
   }
 });
-const getAgentsByProgramManager = asyncHandler(async (req, res, next) => {
+const getAgentsByProgramManagerOld = asyncHandler(async (req, res, next) => {
   try {
     const { programManagerId } = req.params;
 
@@ -723,6 +723,57 @@ const getAgentsByProgramManager = asyncHandler(async (req, res, next) => {
     return sendError(next, error.message, 500);
   }
 });
+const getAgentsByProgramManager = asyncHandler(async (req, res, next) => {
+  try {
+    const { programManagerId } = req.params;
+
+    if (!programManagerId) {
+      return sendError(next, "Program Manager ID is required", 400);
+    }
+
+    const campaigns = await Campaign.find({ programManager: programManagerId })
+      .select("_id")
+      .lean();
+
+    const campaignIds = campaigns.map((c) => c._id.toString());
+
+    if (!campaignIds.length) {
+      return sendResponse(
+        res,
+        200,
+        "No campaigns found for this Program Manager",
+        []
+      );
+    }
+
+    const assignments = await AgentAssigned.find({
+      campaign_id: { $in: campaignIds },
+    }).populate("agent_id", "employeeName email role ctc programName status");
+
+    const uniqueAgentsMap = new Map();
+
+    for (const a of assignments) {
+      const agent = a.agent_id;
+      if (agent && !uniqueAgentsMap.has(agent._id.toString())) {
+        uniqueAgentsMap.set(agent._id.toString(), {
+          agentId: agent._id,
+          employeeName: agent.employeeName,
+          email: agent.email,
+          role: agent.role,
+          ctc: agent.ctc,
+          programName: agent.programName,
+          status: agent.status,
+        });
+      }
+    }
+
+    const uniqueAgents = Array.from(uniqueAgentsMap.values());
+
+    return sendResponse(res, 200, "Unique agents retrieved", uniqueAgents);
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
 
 const getInvoicesByPMAndMonth = asyncHandler(async (req, res, next) => {
   try {
@@ -751,6 +802,27 @@ const getInvoicesByPMAndMonth = asyncHandler(async (req, res, next) => {
   }
 });
 
+const getInvoicesOfAgent = asyncHandler(async (req, res, next) => {
+  try {
+    const { agentId } = req.params;
+    if (!agentId) {
+      return sendError(next, "Agent ID is required", 400);
+    }
+    const invoices = await Invoice.find({
+      employeeId: agentId,
+      "invoiceGenerated.invoiceUrl": { $exists: true, $ne: null },
+    })
+      .populate(
+        "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
+      )
+      .sort({ createdAt: -1 })
+      .lean();
+    return sendResponse(res, 200, "Invoices retrieved successfully", invoices);
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
 export {
   createInvoice,
   updateInvoice,
@@ -762,4 +834,5 @@ export {
   updateAndGenerateInvoice,
   getAgentsByProgramManager,
   getInvoicesByPMAndMonth,
+  getInvoicesOfAgent,
 };

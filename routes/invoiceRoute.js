@@ -12,6 +12,7 @@ import {
   updateAndGenerateInvoice,
   getAgentsByProgramManager,
   getInvoicesByPMAndMonth,
+  getInvoicesOfAgent,
 } from "../controllers/invoiceController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
@@ -29,7 +30,7 @@ router.get(
   "/getAgentsByProgramManager/:programManagerId",
   getAgentsByProgramManager
 );
-
 router.get("/getInvoicesByPMAndMonth/:pmId", getInvoicesByPMAndMonth);
+router.get("/getInvoicesOfAgent/:agentId", getInvoicesOfAgent);
 
 export default router;
