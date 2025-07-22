@@ -669,91 +669,26 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
     return sendError(next, error.message, 500);
   }
 });
-const getAgentsByProgramManagerOld = asyncHandler(async (req, res, next) => {
-  try {
-    const { programManagerId } = req.params;
 
-    if (!programManagerId) {
-      return sendError(next, "Program Manager ID is required", 400);
-    }
-
-    const campaigns = await Campaign.find({ programManager: programManagerId })
-      .select("_id")
-      .lean();
-    const campaignIds = campaigns.map((c) => c._id.toString());
-
-    if (!campaignIds.length) {
-      return sendResponse(
-        res,
-        200,
-        "No campaigns found for this Program Manager",
-        []
-      );
-    }
-
-    const assignments = await AgentAssigned.find({
-      campaign_id: { $in: campaignIds },
-    })
-      .populate("agent_id", "employeeName email role ctc programName status")
-      .populate("campaign_id", "name startDate endDate");
-
-    const agentDetails = assignments.map((a) => ({
-      agentId: a.agent_id?._id,
-      employeeName: a.agent_id?.employeeName,
-      email: a.agent_id?.email,
-      role: a.agent_id?.role,
-      ctc: a.agent_id?.ctc,
-      programName: a.agent_id?.programName,
-      status: a.agent_id?.status,
-      campaignName: a.campaign_id?.name,
-      campaignId: a.campaign_id?._id,
-      campaignStartDate: a.campaign_id?.startDate,
-      campaignEndDate: a.campaign_id?.endDate,
-      assignedDate: a.assigned_date,
-      releasedDate: a.released_date,
-    }));
-
-    return sendResponse(
-      res,
-      200,
-      "Agents retrieved successfully",
-      agentDetails
-    );
-  } catch (error) {
-    return sendError(next, error.message, 500);
-  }
-});
 const getAgentsByProgramManager = asyncHandler(async (req, res, next) => {
   try {
-    const { programManagerId } = req.params;
+    const { programManagerId, month } = req.params;
 
-    if (!programManagerId) {
-      return sendError(next, "Program Manager ID is required", 400);
+    if (!programManagerId || !month) {
+      return sendError(next, "Program Manager ID and month are required", 400);
     }
 
-    const campaigns = await Campaign.find({ programManager: programManagerId })
-      .select("_id")
+    const invoices = await Invoice.find({
+      programManagers: { $in: [new mongoose.Types.ObjectId(programManagerId)] },
+      month,
+    })
+      .populate("employeeId", "employeeName email role ctc programName status")
       .lean();
-
-    const campaignIds = campaigns.map((c) => c._id.toString());
-
-    if (!campaignIds.length) {
-      return sendResponse(
-        res,
-        200,
-        "No campaigns found for this Program Manager",
-        []
-      );
-    }
-
-    const assignments = await AgentAssigned.find({
-      campaign_id: { $in: campaignIds },
-    }).populate("agent_id", "employeeName email role ctc programName status");
 
     const uniqueAgentsMap = new Map();
 
-    for (const a of assignments) {
-      const agent = a.agent_id;
+    for (const invoice of invoices) {
+      const agent = invoice.employeeId;
       if (agent && !uniqueAgentsMap.has(agent._id.toString())) {
         uniqueAgentsMap.set(agent._id.toString(), {
           agentId: agent._id,
@@ -774,7 +709,6 @@ const getAgentsByProgramManager = asyncHandler(async (req, res, next) => {
     return sendError(next, error.message, 500);
   }
 });
-
 const getInvoicesByPMAndMonth = asyncHandler(async (req, res, next) => {
   try {
     const { pmId } = req.params;

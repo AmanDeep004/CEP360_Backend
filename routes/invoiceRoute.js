@@ -28,7 +28,7 @@ router.post("/generratAllInvoiceData", generateAllInvoices);
 router.get("/getAgentInvoicesDataByMonth", getAgentInvoicesDataByMonth);
 router.put("/updateAndGenerateInvoice", updateAndGenerateInvoice);
 router.get(
-  "/getAgentsByProgramManager/:programManagerId",
+  "/getAgentsByProgramManager/:programManagerId/:month",
   getAgentsByProgramManager
 );
 router.get("/getInvoicesByPMAndMonth/:pmId", getInvoicesByPMAndMonth);
