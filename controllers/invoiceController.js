@@ -361,7 +361,7 @@ const getAgentInvoicesDataByMonth = asyncHandler(async (req, res, next) => {
 
     const invoices = await Invoice.find({
       employeeId: agentId,
-      month: normalizedMonth,
+      month: month,
     })
       .populate({
         path: "employeeId",
@@ -823,6 +823,55 @@ const getInvoicesOfAgent = asyncHandler(async (req, res, next) => {
   }
 });
 
+// for exporting excel sheet with all invoices of a program manager month wise
+const getAllInvoicesOfPmMonthWise = asyncHandler(async (req, res, next) => {
+  try {
+    const { pmId, month } = req.params;
+
+    if (!pmId || !month) {
+      return sendError(next, "Program Manager ID and month are required", 400);
+    }
+
+    // const parsedMonth = month.replace(/([a-zA-Z]+)(\d{4})/, "$1 $2");
+    // console.log("Parsed Month:", parsedMonth == "June 2025");
+
+    const invoices = await Invoice.find({
+      programManagers: { $in: [new mongoose.Types.ObjectId(pmId)] },
+      month,
+      "invoiceGenerated.invoiceUrl": { $nin: [null, ""] },
+    })
+      .populate({
+        path: "employeeId",
+        select: "-password -__v -createdAt -updatedAt -signature ",
+      })
+      .populate({
+        path: "campaign_id",
+        select: "-__v -createdAt -updatedAt -programManager",
+        populate: {
+          path: "programManager",
+          // select: "-password -__v -createdAt -updatedAt ",
+          select: "_id employeeName email location ",
+        },
+      })
+      // .populate({
+      //   path: "programManagers",
+      //   select: "-password -__v -createdAt -updatedAt",
+      // })
+      .populate({
+        path: "salaryGenBy",
+        select: "employeeName email role",
+      })
+      .populate({
+        path: "salaryModBy",
+        select: "employeeName email role",
+      })
+      .lean();
+    return sendResponse(res, 200, "Invoices fetched successfully", invoices);
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
 export {
   createInvoice,
   updateInvoice,
@@ -835,4 +884,5 @@ export {
   getAgentsByProgramManager,
   getInvoicesByPMAndMonth,
   getInvoicesOfAgent,
+  getAllInvoicesOfPmMonthWise,
 };
