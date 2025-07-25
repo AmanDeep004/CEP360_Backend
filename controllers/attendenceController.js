@@ -252,7 +252,15 @@ const getAllAttendenceDetailsByPmandByMonth = asyncHandler(
       const dayWiseMap = {};
 
       filteredAttendance.forEach((att) => {
-        const date = new Date(att.createdAt).toISOString().split("T")[0];
+        const createdAt = new Date(att.createdAt);
+        const date = createdAt.toISOString().split("T")[0];
+
+        // Reference time: 9:31 AM on that same date
+        const threshold = new Date(date);
+        threshold.setHours(9, 31, 0, 0);
+
+        att.status = createdAt < threshold ? "Ontime" : "Late";
+
         if (!dayWiseMap[date]) dayWiseMap[date] = [];
         dayWiseMap[date].push(att);
       });
