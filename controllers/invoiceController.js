@@ -639,6 +639,7 @@ const updateAndGenerateInvoiceOld = asyncHandler(async (req, res, next) => {
       "application/pdf"
     );
     const uploadedUrl = uploadResult.src;
+    console.log(uploadedUrl, "uploadedUrl");
 
     // Save to UploadedFiles collection (optional, if you want to keep DB record)
     const fileRecord = new UploadedFiles({
