@@ -397,31 +397,23 @@ const getAgentInvoicesDataByMonth = asyncHandler(async (req, res, next) => {
   }
 });
 
-//need to check and modify
-const updateAndGenerateInvoiceOld = asyncHandler(async (req, res, next) => {
+const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
   try {
     const {
       invoiceId,
       ctc,
-      incentive = 0,
-      arrears = 0,
-      extraPay = 0,
-      noOfDaysWorked = 0,
-      noOfDaysAbsent = 0,
+      incentive,
+      arrears,
+      extraPay,
+      noOfDaysWorked,
+      noOfDaysAbsent,
       startDate,
       endDate,
       genBy,
       salaryModBy,
     } = req.body;
 
-    if (
-      !invoiceId ||
-      // !noOfDaysWorked ||
-      !startDate ||
-      !endDate ||
-      !ctc ||
-      !genBy
-    ) {
+    if (!invoiceId || !startDate || !endDate || !ctc || !genBy) {
       return sendError(next, "Missing required fields", 400);
     }
 
@@ -452,16 +444,15 @@ const updateAndGenerateInvoiceOld = asyncHandler(async (req, res, next) => {
     invoice.invoiceGenerated.genBy = genBy;
     invoice.ctc = finalCTC;
 
-    // Generate PDF
+    // Generate PDF in memory
     const pdfFilename = `invoice-${invoice._id}-${Date.now()}.pdf`;
-    const tempFolderPath = path.resolve("temp"); // avoid __dirname
-    const outputPath = path.join(tempFolderPath, pdfFilename);
-
-    if (!fs.existsSync(tempFolderPath)) fs.mkdirSync(tempFolderPath);
-
     const doc = new PDFDocument({ size: "A4", margin: 40 });
-    const writeStream = fs.createWriteStream(outputPath);
-    doc.pipe(writeStream);
+
+    // Store PDF data in memory
+    const pdfBuffers = [];
+    doc.on("data", (chunk) => {
+      pdfBuffers.push(chunk);
+    });
 
     // Draw outer border
     doc.rect(20, 20, 555, 800).stroke("#333");
@@ -495,9 +486,9 @@ const updateAndGenerateInvoiceOld = asyncHandler(async (req, res, next) => {
     // Right block
     doc.rect(297.5, 50, 277.5, 110).stroke();
     doc.font("Helvetica-Bold").text("Contact Number:", 307.5, 60);
-    doc.font("Helvetica").text(employee.contactNumber || "N/A", 410, 60);
+    doc.font("Helvetica").text(employee.mobile || "N/A", 410, 60);
     doc.font("Helvetica-Bold").text("Mobile Number:", 307.5, 75);
-    doc.font("Helvetica").text(employee.contactNumber || "N/A", 410, 75);
+    doc.font("Helvetica").text(employee.mobile || "N/A", 410, 75);
     doc.font("Helvetica-Bold").text("Permanent Account Number:", 307.5, 90);
     doc.font("Helvetica").text(employee.pan || "N/A", 470, 90);
     doc.font("Helvetica-Bold").text("GSTIN Number:", 307.5, 105);
@@ -603,12 +594,17 @@ const updateAndGenerateInvoiceOld = asyncHandler(async (req, res, next) => {
     doc.rect(297.5, 410, 277.5, 100).stroke();
 
     // Signature image (if available)
-    const signaturePath = await insertSignatureFromUrl(
-      employee?.signature,
-      doc
-    );
-    if (fs.existsSync(signaturePath)) {
-      doc.image(signaturePath, 40, 430, { width: 120, height: 60 });
+    try {
+      const signaturePath = await insertSignatureFromUrl(
+        employee?.signature,
+        doc
+      );
+      if (signaturePath && fs.existsSync(signaturePath)) {
+        doc.image(signaturePath, 40, 430, { width: 120, height: 60 });
+      }
+    } catch (signatureError) {
+      console.error("Signature insertion failed:", signatureError);
+      // Continue without signature
     }
 
     // Name and signature info
@@ -627,317 +623,64 @@ const updateAndGenerateInvoiceOld = asyncHandler(async (req, res, next) => {
 
     doc.end();
 
-    const fileData = fs.readFileSync(outputPath);
-    const fileName = `invoice_${invoice._id}_${Date.now()}.pdf`;
-    const bucketName = process.env.AWS_BUCKET_NAME + "/pdf"; // or whatever folder you want
-
-    // Upload to S3
-    const uploadResult = await uploadFile(
-      bucketName,
-      fileData,
-      fileName,
-      "application/pdf"
-    );
-    const uploadedUrl = uploadResult.src;
-    console.log(uploadedUrl, "uploadedUrl");
-
-    // Save to UploadedFiles collection (optional, if you want to keep DB record)
-    const fileRecord = new UploadedFiles({
-      userId: invoice.employeeId, // or req.user._id, as appropriate
-      type: "pdf",
-      fileSrc: uploadedUrl,
-      extension: "pdf",
-      originalName: fileName,
-      mimeType: "application/pdf",
-    });
-    await fileRecord.save();
-
-    invoice.invoiceGenerated.invoiceUrl = uploadedUrl;
-    invoice.invoiceGenerated.status = true;
-    await invoice.save();
-
-    fs.unlinkSync(outputPath);
-
-    return sendResponse(res, 200, "Invoice updated, generated and uploaded", {
-      invoice,
-      finalCTC,
-      uploadedUrl,
-    });
-  } catch (error) {
-    return sendError(next, error.message, 500);
-  }
-});
-const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
-  try {
-    const {
-      invoiceId,
-      ctc,
-      incentive,
-      arrears,
-      extraPay,
-      // noOfDaysWorked,
-      noOfDaysAbsent,
-      startDate,
-      endDate,
-      genBy,
-      salaryModBy,
-    } = req.body;
-
-    if (
-      !invoiceId ||
-      // !noOfDaysWorked ||
-      !startDate ||
-      !endDate ||
-      !ctc ||
-      !genBy
-    ) {
-      return sendError(next, "Missing required fields", 400);
-    }
-
-    const invoice = await Invoice.findById(invoiceId).populate("employeeId");
-    if (!invoice) return sendError(next, "Invoice not found", 404);
-
-    const employee = invoice.employeeId;
-    if (!employee) return sendError(next, "Employee not found", 404);
-    const noOfDaysWorked = invoice.noOfDaysWorked;
-
-    // Salary Calculations
-    const salaryMonth = new Date(startDate).getMonth();
-    const salaryYear = new Date(startDate).getFullYear();
-    const daysInMonth = new Date(salaryYear, salaryMonth + 1, 0).getDate();
-    console.log(daysInMonth, "daysInMonth");
-    console.log(invoiceId, "invoiceId");
-    const gross = Math.round(
-      (Number(ctc) / daysInMonth) * Number(noOfDaysWorked)
-    );
-    console.log(ctc, daysInMonth, noOfDaysWorked, "ctc");
-    console.log(gross, "gross");
-    const salary =
-      gross +
-      Number(incentive || 0) +
-      Number(arrears || 0) +
-      Number(extraPay || 0);
-
-    const totalDaysGenerated =
-      Number(noOfDaysWorked || 0) + Number(noOfDaysAbsent || 0);
-    const daysAvailabletoGenerate = daysInMonth - totalDaysGenerated;
-
-    // const gross = Math.round((ctc / 30) * Number(noOfDaysWorked));
-    // const finalCTC =
-    //   gross + Number(incentive) + Number(arrears) + Number(extraPay);
-    // const totalDaysGenerated = Number(noOfDaysWorked) + Number(noOfDaysAbsent);
-    // const daysAvailabletoGenerate = 30 - Number(noOfDaysWorked);
-
-    // Update invoice fields
-    invoice.incentive = incentive;
-    invoice.arrears = arrears;
-    invoice.extraPay = extraPay;
-    invoice.noOfDaysWorked = noOfDaysWorked;
-    invoice.noOfDaysAbsent = noOfDaysAbsent;
-    invoice.startDate = new Date(startDate);
-    invoice.endDate = new Date(endDate);
-    invoice.salaryModBy = salaryModBy;
-    invoice.totalDaysGenerated = totalDaysGenerated;
-    invoice.daysAvailabletoGenerate = daysAvailabletoGenerate;
-    invoice.invoiceGenerated.genBy = genBy;
-    invoice.salary = salary;
-
-    // Generate PDF
-    const pdfFilename = `invoice-${invoice._id}-${Date.now()}.pdf`;
-    const tempFolderPath = path.resolve("temp"); // avoid __dirname
-    const outputPath = path.join(tempFolderPath, pdfFilename);
-
-    if (!fs.existsSync(tempFolderPath)) fs.mkdirSync(tempFolderPath);
-
-    const doc = new PDFDocument({ size: "A4", margin: 40 });
-    const writeStream = fs.createWriteStream(outputPath);
-    doc.pipe(writeStream);
-
-    // Draw outer border
-    doc.rect(20, 20, 555, 800).stroke("#333");
-
-    // HEADER
-    doc.rect(20, 20, 555, 30).fillAndStroke("#666", "#333");
-    doc
-      .fillColor("#fff")
-      .font("Helvetica-Bold")
-      .fontSize(18)
-      .text("INVOICE", 20, 28, { align: "center", width: 555 });
-    doc.fillColor("#000");
-
-    // --- TOP INFO BLOCKS ---
-    doc.lineWidth(1).strokeColor("#333");
-
-    // Left block
-    doc.rect(20, 50, 277.5, 110).stroke();
-    doc.font("Helvetica-Bold").fontSize(10).text("From :", 30, 60);
-    doc
-      .font("Helvetica")
-      .fontSize(10)
-      .text(employee.employeeName || "N/A", 80, 60);
-    doc.font("Helvetica-Bold").text("Employee Code:", 30, 80);
-    doc.font("Helvetica").text(employee.employeeCode || "N/A", 120, 80);
-    doc.font("Helvetica-Bold").text("Address:", 30, 100);
-    doc
-      .font("Helvetica")
-      .text(employee.location || "N/A", 80, 100, { width: 200 });
-
-    // Right block
-    doc.rect(297.5, 50, 277.5, 110).stroke();
-    doc.font("Helvetica-Bold").text("Contact Number:", 307.5, 60);
-    doc.font("Helvetica").text(employee.contactNumber || "N/A", 410, 60);
-    doc.font("Helvetica-Bold").text("Mobile Number:", 307.5, 75);
-    doc.font("Helvetica").text(employee.contactNumber || "N/A", 410, 75);
-    doc.font("Helvetica-Bold").text("Permanent Account Number:", 307.5, 90);
-    doc.font("Helvetica").text(employee.pan || "N/A", 470, 90);
-    doc.font("Helvetica-Bold").text("GSTIN Number:", 307.5, 105);
-    doc.font("Helvetica").text(employee.gstin || "N/A", 410, 105);
-
-    // --- TO & INVOICE INFO BLOCKS ---
-    doc.rect(20, 160, 277.5, 80).stroke();
-    doc.font("Helvetica-Bold").text("TO", 30, 170);
-    doc
-      .font("Helvetica")
-      .text("Kestone IMS – A Division of CL Educate Limited", 60, 170, {
-        width: 220,
-      });
-    doc
-      .font("Helvetica")
-      .text(
-        "#37, 7th Cross, RMJ Mandoth Towers, 3rd Floor, Vasanth Nagar, Bangalore-5600052",
-        30,
-        190,
-        { width: 260 }
-      );
-
-    doc.rect(297.5, 160, 277.5, 80).stroke();
-    doc.font("Helvetica-Bold").text("Invoice No :", 307.5, 170);
-    doc.font("Helvetica").text(invoice._id, 370, 170);
-    doc.font("Helvetica-Bold").text("FY :", 307.5, 185);
-    doc
-      .font("Helvetica")
-      .text(
-        new Date(startDate).getFullYear() +
-          "-" +
-          (new Date(startDate).getFullYear() + 1) +
-          "/" +
-          new Date(startDate).toLocaleString("default", { month: "long" }),
-        340,
-        185
-      );
-    doc.font("Helvetica-Bold").text("Date :", 307.5, 200);
-    doc
-      .font("Helvetica")
-      .text(new Date(endDate).toLocaleDateString("en-GB"), 350, 200);
-    doc.font("Helvetica-Bold").text("GSTIN No :", 307.5, 215);
-    doc.font("Helvetica").text("29AACCB3885C2ZO", 370, 215);
-
-    // --- PARTICULARS & AMOUNT TABLE HEADER ---
-    doc.rect(20, 240, 370, 30).fillAndStroke("#666", "#333");
-    doc.rect(390, 240, 185, 30).fillAndStroke("#666", "#333");
-    doc
-      .fillColor("#fff")
-      .font("Helvetica-Bold")
-      .fontSize(12)
-      .text("PARTICULARS", 25, 250, { width: 360 })
-      .text("AMOUNT (Rs)", 395, 250, { width: 175, align: "right" });
-    doc.fillColor("#000");
-
-    // --- PARTICULARS & AMOUNT TABLE BODY ---
-    doc.rect(20, 270, 370, 80).stroke();
-    doc.rect(390, 270, 185, 80).stroke();
-    doc
-      .font("Helvetica")
-      .fontSize(10)
-      .text(
-        "Professional Charges for the M/O " +
-          new Date(startDate).toLocaleString("default", { month: "long" }) +
-          "' " +
-          new Date(startDate).getFullYear() +
-          " for rendering services as per below detail",
-        25,
-        275,
-        { width: 360, height: 100 }
-      );
-    doc.text(`Gross Fees: INR. ${gross}/-`, 25, 295);
-    doc.text(`Incentive or other payment: ${incentive}`, 25, 310);
-    doc.text(`Extra Pay: ${extraPay}`, 25, 325);
-    doc.text(`Arrears: ${arrears}`, 25, 340);
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(16)
-      .text(`INR. ${salary}/-`, 395, 310, { width: 175, align: "right" });
-
-    // --- TOTAL AMOUNT PAYABLE ---
-    doc.rect(20, 350, 370, 30).fillAndStroke("#666", "#333");
-    doc.rect(390, 350, 185, 30).fillAndStroke("#666", "#333");
-    doc
-      .fillColor("#fff")
-      .font("Helvetica-Bold")
-      .fontSize(12)
-      .text("TOTAL AMOUNT PAYABLE", 25, 360, { width: 360 })
-      .text(`INR. ${salary}/-`, 395, 360, { width: 175, align: "right" });
-    doc.fillColor("#000");
-
-    // --- AMOUNT IN WORDS ---
-    doc.rect(20, 380, 555, 30).fillAndStroke("#666", "#333");
-    doc
-      .fillColor("#fff")
-      .font("Helvetica-Bold")
-      .fontSize(11)
-      .text(`AMOUNT IN WORDS : ${salary} ONLY`, 25, 390, { width: 545 });
-    doc.fillColor("#000");
-
-    // --- SIGNATURE & NAME BLOCK ---
-    doc.rect(20, 410, 277.5, 100).stroke();
-    doc.rect(297.5, 410, 277.5, 100).stroke();
-
-    // Signature image (if available)
-    const signaturePath = await insertSignatureFromUrl(
-      employee?.signature,
-      doc
-    );
-    if (fs.existsSync(signaturePath)) {
-      doc.image(signaturePath, 40, 430, { width: 120, height: 60 });
-    }
-
-    // Name and signature info
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(10)
-      .text("NAME - Ishant Hingorani", 310, 430);
-    doc
-      .font("Helvetica-Bold")
-      .text(
-        "DATE - " + new Date(endDate).toLocaleDateString("en-GB"),
-        310,
-        450
-      );
-    doc.font("Helvetica-Bold").text("SIGNATURE - Ishant Hingorani", 310, 470);
-
-    doc.end();
-
-    writeStream.on("finish", async () => {
+    doc.on("end", async () => {
       try {
-        const form = new FormData();
-        form.append("file", fs.createReadStream(outputPath));
-        form.append("type", "pdf");
+        // Combine all PDF chunks into a single buffer
+        const pdfBuffer = Buffer.concat(pdfBuffers);
 
-        const uploadResponse = await axios.post(
-          `${process.env.BASE_URL}api/upload/upload`,
-          form,
-          { headers: form.getHeaders() }
-        );
-        const uploadedUrl = uploadResponse?.data?.data?.fileSrc;
-        if (!uploadedUrl) {
-          return sendError(next, "Upload failed: No URL returned", 500);
+        if (!pdfBuffer || pdfBuffer.length === 0) {
+          throw new Error("PDF buffer is empty or corrupted");
         }
 
-        invoice.invoiceGenerated.invoiceUrl = uploadedUrl;
+        console.log(
+          `PDF generated successfully in memory, Size: ${pdfBuffer.length} bytes`
+        );
+
+        const mimeType = "application/pdf";
+        const type = "pdf";
+
+        // Clean filename for AWS upload
+        const cleanFileName = pdfFilename.replace(/\s+/g, "");
+        const uploadFileName = `${Date.now()}_${cleanFileName}`;
+
+        console.log("Uploading PDF to AWS S3...");
+
+        // Upload to AWS S3
+        const AWSBucket = process.env.AWS_BUCKET_NAME;
+        const awsUpload = await uploadFile(
+          `${AWSBucket}/${type}`,
+          pdfBuffer,
+          uploadFileName,
+          mimeType
+        );
+
+        if (!awsUpload.src) {
+          throw new Error(
+            "AWS upload failed: No URL returned from upload service"
+          );
+        }
+
+        console.log("AWS Upload successful:", awsUpload.src);
+
+        // Save file details to database
+        const userId = genBy; // Using genBy as userId since that's who generated the invoice
+        const uploadedFileRecord = new UploadedFiles({
+          userId,
+          type,
+          subtype: "invoice",
+          fileSrc: awsUpload.src,
+          extension: "pdf",
+          originalName: pdfFilename,
+          mimeType: mimeType,
+        });
+
+        const savedFileRecord = await uploadedFileRecord.save();
+        console.log("File record saved to database:", savedFileRecord._id);
+
+        // Update invoice with the uploaded URL
+        invoice.invoiceGenerated.invoiceUrl = awsUpload.src;
         invoice.invoiceGenerated.status = true;
         await invoice.save();
-
-        fs.unlinkSync(outputPath);
 
         return sendResponse(
           res,
@@ -945,19 +688,23 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
           "Invoice updated, generated and uploaded",
           {
             invoice,
-            salary,
-            uploadedUrl,
+            finalCTC,
+            uploadedUrl: awsUpload.src,
+            fileRecord: savedFileRecord,
           }
         );
       } catch (uploadErr) {
+        console.error("Upload error details:", uploadErr);
         return sendError(next, `Upload failed: ${uploadErr.message}`, 500);
       }
     });
 
-    writeStream.on("error", (err) => {
-      return sendError(next, `PDF write failed: ${err.message}`, 500);
+    doc.on("error", (err) => {
+      console.error("PDF generation error:", err);
+      return sendError(next, `PDF generation failed: ${err.message}`, 500);
     });
   } catch (error) {
+    console.error("Controller error:", error);
     return sendError(next, error.message, 500);
   }
 });
