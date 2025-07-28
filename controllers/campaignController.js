@@ -1,6 +1,7 @@
 import Campaign from "../models/campaignModel.js";
 import errorHandler from "../utils/index.js";
 import User from "../models/userModel.js";
+import AgentAssigned from "../models/agentAssigned.js";
 import { UserRoleEnum } from "../utils/enum.js";
 import XLSX from "xlsx";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
@@ -226,7 +227,7 @@ const updateCampaign = asyncHandler(async (req, res, next) => {
  * @route   GET /api/campaigns/user/:userId
  * @access  Private
  */
-const getCampaignsByUserId = asyncHandler(async (req, res, next) => {
+const getCampaignsByUserIdold = asyncHandler(async (req, res, next) => {
   try {
     const user = await User.findById(req.params.userId).select("role");
     if (!user) return sendError(next, "User not found", 404);
@@ -267,7 +268,92 @@ const getCampaignsByUserId = asyncHandler(async (req, res, next) => {
     return sendError(next, error.message, 500);
   }
 });
+const getCampaignsByUserId = asyncHandler(async (req, res, next) => {
+  try {
+    const user = await User.findById(req.params.userId).select("role");
+    if (!user) return sendError(next, "User not found", 404);
 
+    let campaigns = [];
+
+    switch (user.role) {
+      case PROGRAM_MANAGER:
+        campaigns = await Campaign.find({ programManager: user._id })
+          .populate({
+            path: "programManager",
+            select: "employeeName email role",
+          })
+          .sort({ createdAt: 1 }) // Sort by creation date, earliest first
+          .lean();
+        break;
+
+      case AGENT:
+        // Get all campaign assignments for this agent
+        const agentAssignments = await AgentAssigned.find({
+          agent_id: user._id,
+        })
+          .populate({
+            path: "campaign_id",
+            populate: {
+              path: "programManager",
+              select: "employeeName email role",
+            },
+          })
+          .sort({ assigned_date: 1 }) // Sort by assignment date, earliest first
+          .lean();
+
+        // Extract unique campaigns and remove null/undefined campaigns
+        const campaignMap = new Map();
+
+        agentAssignments.forEach((assignment) => {
+          if (assignment.campaign_id && assignment.campaign_id._id) {
+            const campaignId = assignment.campaign_id._id.toString();
+
+            // Only add if not already in map (keeps the earliest assignment)
+            if (!campaignMap.has(campaignId)) {
+              campaignMap.set(campaignId, {
+                ...assignment.campaign_id,
+                assignmentDetails: {
+                  isAssigned: assignment.isAssigned,
+                  assigned_date: assignment.assigned_date,
+                  released_date: assignment.released_date,
+                },
+              });
+            }
+          }
+        });
+
+        // Convert map to array
+        campaigns = Array.from(campaignMap.values());
+        break;
+
+      case PRESALES_MANAGER:
+      case RESOURCE_MANAGER:
+      case DATABASE_MANAGER:
+      case ADMIN:
+        // These roles can see all campaigns
+        campaigns = await Campaign.find({})
+          .populate({
+            path: "programManager",
+            select: "employeeName email role",
+          })
+          .sort({ createdAt: 1 }) // Sort by creation date, earliest first
+          .lean();
+        break;
+
+      default:
+        return sendError(next, "Invalid user role", 400);
+    }
+
+    return sendResponse(
+      res,
+      200,
+      "Campaigns retrieved successfully",
+      campaigns
+    );
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
 /**
  * @desc    Delete campaign
  * @route   DELETE /api/campaigns/:id
