@@ -84,12 +84,12 @@ const userSchema = new Schema(
     },
     programName: {
       type: String,
-      required: [true, "Program name is required"],
+      // required: [true, "Program name is required"],
       trim: true,
     },
     programType: {
       type: String,
-      required: [true, "Program type is required"],
+      // required: [true, "Program type is required"],
       trim: true,
     },
     signature: {
@@ -103,7 +103,7 @@ const userSchema = new Schema(
     },
     programManager: {
       type: String,
-      required: [true, "Program manager is required"],
+      // required: [true, "Program manager is required"],
       trim: true,
     },
     location: {
