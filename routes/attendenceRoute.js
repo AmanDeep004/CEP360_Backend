@@ -15,4 +15,6 @@ router.get(
   protect,
   getAllAttendenceDetailsByPmandByMonth
 );
+//to get all attendence details within a range for admin and resource manager
+router.get("/getAllAttendenceDetails", protect, getAllAttendenceDetails);
 export default router;
