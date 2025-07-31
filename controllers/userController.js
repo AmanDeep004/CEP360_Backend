@@ -224,7 +224,9 @@ const updateUserProfile = asyncHandler(async (req, res, next) => {
  */
 const getAllUsers = asyncHandler(async (req, res, next) => {
   try {
-    const users = await User.find({}).select("-password");
+    const users = await User.find({ role: { $ne: "admin" } }).select(
+      "-password"
+    );
 
     return sendResponse(res, 200, "Users retrieved successfully", users);
   } catch (error) {
