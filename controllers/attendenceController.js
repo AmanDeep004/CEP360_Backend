@@ -4,23 +4,20 @@ import AgentAssigned from "../models/agentAssigned.js";
 import errorHandler from "../utils/index.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
-const getAllAttendenceDetails = asyncHandler(async (req, res, next) => {
+const getAllAttendenceDetailsOld = asyncHandler(async (req, res, next) => {
   try {
-    const { month } = req.query;
+    const { startDate, endDate } = req.query;
 
-    if (!month) {
-      return sendError(next, "Month is required", 400);
+    if (!startDate || !endDate) {
+      return sendError(next, "startDate and endDate are required", 400);
     }
 
-    const [monthName, yearStr] = month.split(" ");
-    const year = parseInt(yearStr, 10);
-    const monthIndex = new Date(`${monthName} 1, ${year}`).getMonth();
-
-    const startDate = new Date(year, monthIndex, 1);
-    const endDate = new Date(year, monthIndex + 1, 1);
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999); // include entire end date
 
     const allAttendances = await AttendenceModel.find({
-      createdAt: { $gte: startDate, $lt: endDate },
+      createdAt: { $gte: start, $lte: end },
     })
       .sort({ createdAt: 1 })
       .populate("employeeId")
@@ -29,8 +26,6 @@ const getAllAttendenceDetails = asyncHandler(async (req, res, next) => {
     const agentAttendances = allAttendances.filter(
       (att) => att.employeeId?.role === "agent"
     );
-
-    console.log(allAttendances, "allAttendances");
 
     const uniqueAttendanceMap = new Map();
 
@@ -61,6 +56,81 @@ const getAllAttendenceDetails = asyncHandler(async (req, res, next) => {
     });
 
     // Convert to array format
+    const dayWiseAttendance = Object.entries(dayWiseAttendanceMap).map(
+      ([date, entries]) => ({
+        date,
+        entries,
+      })
+    );
+
+    return sendResponse(
+      res,
+      200,
+      "Day-wise attendance fetched successfully",
+      dayWiseAttendance
+    );
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+const getAllAttendenceDetails = asyncHandler(async (req, res, next) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    if (!startDate || !endDate) {
+      return sendError(next, "startDate and endDate are required", 400);
+    }
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+
+    const allAttendances = await AttendenceModel.find({
+      createdAt: { $gte: start, $lte: end },
+    })
+      .sort({ createdAt: 1 })
+      .populate("employeeId")
+      .lean();
+
+    const agentAttendances = allAttendances.filter(
+      (att) => att.employeeId?.role === "agent"
+    );
+
+    const uniqueAttendanceMap = new Map();
+
+    for (const attendance of agentAttendances) {
+      const empId = attendance.employeeId?._id?.toString();
+      const dateKey = new Date(attendance.createdAt)
+        .toISOString()
+        .split("T")[0];
+      const mapKey = `${empId}-${dateKey}`;
+
+      if (!uniqueAttendanceMap.has(mapKey)) {
+        uniqueAttendanceMap.set(mapKey, attendance);
+      }
+    }
+
+    const filteredAttendance = Array.from(uniqueAttendanceMap.values());
+
+    filteredAttendance.forEach((att) => {
+      const createdAt = new Date(att.createdAt);
+      const date = createdAt.toISOString().split("T")[0];
+
+      const threshold = new Date(date);
+      threshold.setHours(9, 31, 0, 0);
+      att.status = createdAt < threshold ? "Ontime" : "Late";
+    });
+
+    const dayWiseAttendanceMap = {};
+
+    filteredAttendance.forEach((att) => {
+      const date = new Date(att.createdAt).toISOString().split("T")[0];
+      if (!dayWiseAttendanceMap[date]) {
+        dayWiseAttendanceMap[date] = [];
+      }
+      dayWiseAttendanceMap[date].push(att);
+    });
+
     const dayWiseAttendance = Object.entries(dayWiseAttendanceMap).map(
       ([date, entries]) => ({
         date,
