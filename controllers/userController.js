@@ -175,6 +175,7 @@ const updateUserProfile = asyncHandler(async (req, res, next) => {
       "employeeName",
       "type",
       "code",
+      "role",
       "employeeBase",
       "programName",
       "programType",
