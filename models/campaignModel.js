@@ -82,6 +82,11 @@ const campaignSchema = new mongoose.Schema(
     jobFunctions: { type: String, required: false },
 
     comments: { type: String, required: false },
+    clientDataType: {
+      type: String,
+      required: false,
+      enum: ["Kestone", "Client", "Both"],
+    },
   },
   { timestamps: true }
 );

@@ -47,6 +47,7 @@ const createCampaign = asyncHandler(async (req, res, next) => {
       jobTitles,
       jobFunctions,
       comments,
+      clientDataType,
     } = req.body;
 
     // Check for duplicate name
@@ -82,6 +83,7 @@ const createCampaign = asyncHandler(async (req, res, next) => {
       jobTitles,
       jobFunctions,
       comments,
+      clientDataType,
     });
 
     return sendResponse(res, 200, "Campaign created successfully", campaign);
