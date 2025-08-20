@@ -206,11 +206,13 @@ const getCampaign = asyncHandler(async (req, res, next) => {
 const updateCampaign = asyncHandler(async (req, res, next) => {
   try {
     const { _id, ...updateData } = req.body;
+    console.log("Update Data:", updateData);
 
     const updatedCampaign = await Campaign.findByIdAndUpdate(_id, updateData, {
       new: true,
       runValidators: true,
     }).populate({ path: "programManager", select: "employeeName email role" });
+    console.log("Updated Campaign:", updatedCampaign);
 
     if (!updatedCampaign) return sendError(next, "Campaign not found", 404);
 
