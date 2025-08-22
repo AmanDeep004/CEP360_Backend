@@ -3,6 +3,8 @@ import User from "./userModel.js";
 import { ProgramType } from "../utils/enum.js";
 const { ALL } = ProgramType;
 
+const briefSchema = new mongoose.Schema({});
+
 const campaignSchema = new mongoose.Schema(
   {
     name: {
@@ -82,10 +84,15 @@ const campaignSchema = new mongoose.Schema(
     jobFunctions: { type: String, required: false },
 
     comments: { type: String, required: false },
-    clientDataType: {
+    dataSourceType: {
       type: String,
       required: false,
-      enum: ["Kestone", "Client", "Both"],
+      enum: ["Kestone", "Client", "Both", "ThirdParty"],
+    },
+
+    brief: {
+      type: [briefSchema],
+      required: false,
     },
   },
   { timestamps: true }
