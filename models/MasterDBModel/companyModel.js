@@ -1,5 +1,5 @@
-import mongoose, { connection } from "mongoose";
 import mongoose from "mongoose";
+import { getSecondaryConnection } from "../../config/db";
 
 const CompanySchema = new mongoose.Schema(
   {
@@ -22,7 +22,4 @@ const CompanySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-const getCompanyModel = (connection) =>
-  connection.model("Company", companySchema);
-export { getCompanyModel };
-// export default mongoose.model("Company", CompanySchema);
+export default getSecondaryConnection().model("Company", CompanySchema);

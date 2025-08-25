@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { getPrimaryConnection } from "../config/db.js";
 
 const CallingDataSchema = new mongoose.Schema(
   {
@@ -105,4 +106,4 @@ const CallingDataSchema = new mongoose.Schema(
   }
 );
 
-export default mongoose.model("CallingData", CallingDataSchema);
+export default getPrimaryConnection().model("CallingData", CallingDataSchema);

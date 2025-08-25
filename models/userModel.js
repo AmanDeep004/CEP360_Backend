@@ -2,6 +2,7 @@ import { Schema, model } from "mongoose";
 import pkg from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { UserRoleEnum } from "../utils/enum.js";
+import { getPrimaryConnection } from "../config/db.js";
 const { genSalt, hash, compare } = pkg;
 const { sign } = jwt;
 

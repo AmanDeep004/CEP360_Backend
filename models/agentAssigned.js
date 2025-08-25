@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { getPrimaryConnection } from "../config/db.js";
 
 const agentAssignedSchema = new mongoose.Schema(
   {
@@ -19,4 +20,7 @@ const agentAssignedSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-export default mongoose.model("AgentAssigned", agentAssignedSchema);
+export default getPrimaryConnection().model(
+  "AgentAssigned",
+  agentAssignedSchema
+);

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { getSecondaryConnection } from "../../config/db";
 const EngagementSchema = new mongoose.Schema(
   {
     contact_id: {
@@ -15,4 +16,7 @@ const EngagementSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-export default mongoose.model("EngagementHistory", EngagementSchema);
+export default getSecondaryConnection().model(
+  "EngagementHistory",
+  EngagementSchema
+);

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { getSecondaryConnection } from "../../config/db";
 const ContactSchema = new mongoose.Schema(
   {
     contact_id: { type: String, required: true, unique: true, trim: true },
@@ -50,4 +51,4 @@ const ContactSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-export default mongoose.model("Contact", ContactSchema);
+export default getSecondaryConnection().model("Contact", ContactSchema);

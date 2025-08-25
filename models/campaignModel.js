@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { getPrimaryConnection } from "../config/db.js";
 import User from "./userModel.js";
 import { ProgramType } from "../utils/enum.js";
 const { ALL } = ProgramType;
@@ -98,4 +99,4 @@ const campaignSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-export default mongoose.model("Campaign", campaignSchema);
+export default getPrimaryConnection().model("Campaign", campaignSchema);

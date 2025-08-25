@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { getSecondaryConnection } from "../../config/db";
 const DndSchema = new mongoose.Schema(
   {
     contact_id: {
@@ -15,4 +16,4 @@ const DndSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-export default mongoose.model("DndDetail", DndSchema);
+export default getSecondaryConnection().model("DndDetail", DndSchema);

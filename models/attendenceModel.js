@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { getPrimaryConnection } from "../config/db.js";
 const attendenceSchema = new mongoose.Schema(
   {
     employeeId: {
@@ -10,4 +11,4 @@ const attendenceSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-export default mongoose.model("Attendence", attendenceSchema);
+export default getPrimaryConnection().model("Attendence", attendenceSchema);

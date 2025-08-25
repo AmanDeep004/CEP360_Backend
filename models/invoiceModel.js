@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { getPrimaryConnection } from "../config/db.js";
 
 const invoiceGeneratedSchema = new mongoose.Schema(
   {
@@ -73,4 +74,4 @@ const invoiceSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-export default mongoose.model("Invoice", invoiceSchema);
+export default getPrimaryConnection().model("Invoice", invoiceSchema);
