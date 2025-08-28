@@ -170,4 +170,5 @@ userSchema.methods.matchPassword = async function (enteredPassword) {
   return await compare(enteredPassword, user.password);
 };
 
-export default model("User", userSchema);
+const User = getPrimaryConnection().model("User", userSchema);
+export default User;

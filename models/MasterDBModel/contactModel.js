@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { getSecondaryConnection } from "../../config/db";
+import { getSecondaryConnection } from "../../config/db.js";
 const ContactSchema = new mongoose.Schema(
   {
     contact_id: { type: String, required: true, unique: true, trim: true },

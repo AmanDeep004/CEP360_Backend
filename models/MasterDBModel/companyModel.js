@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { getSecondaryConnection } from "../../config/db";
+import { getSecondaryConnection } from "../../config/db.js";
 
 const CompanySchema = new mongoose.Schema(
   {
