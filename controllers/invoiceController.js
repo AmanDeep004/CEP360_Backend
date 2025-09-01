@@ -12,6 +12,8 @@ import path from "path";
 import https from "https";
 import uploadFile from "../services/aws-helper.js";
 import UploadedFiles from "../models/uploadFilesModel.js";
+import pkg from "number-to-words";
+const { toWords } = pkg;
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
@@ -443,6 +445,8 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
     invoice.daysAvailabletoGenerate = daysAvailabletoGenerate;
     invoice.invoiceGenerated.genBy = genBy;
     invoice.ctc = finalCTC;
+    const inWords = toWords(finalCTC);
+    const ctcInWords = inWords.charAt(0).toUpperCase() + inWords.slice(1);
 
     // Generate PDF in memory
     const pdfFilename = `invoice-${invoice._id}-${Date.now()}.pdf`;
@@ -586,7 +590,7 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
       .fillColor("#fff")
       .font("Helvetica-Bold")
       .fontSize(11)
-      .text(`AMOUNT IN WORDS : ${finalCTC} ONLY`, 25, 390, { width: 545 });
+      .text(`AMOUNT IN WORDS : ${ctcInWords} Only`, 25, 390, { width: 545 });
     doc.fillColor("#000");
 
     // --- SIGNATURE & NAME BLOCK ---
