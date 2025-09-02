@@ -5,7 +5,6 @@ const ContactSchema = new mongoose.Schema(
     contact_id: { type: String, required: true, unique: true, trim: true },
     contact_source: { type: String, trim: true },
     contact_create_date: { type: Date },
-
     salutation: { type: String, trim: true },
     first_name: { type: String, trim: true },
     last_name: { type: String, trim: true },
@@ -41,7 +40,7 @@ const ContactSchema = new mongoose.Schema(
     personal_email2: { type: String, trim: true, lowercase: true },
 
     contact_linkedIn_profile: { type: String, trim: true },
-
+    batchName: { type: String, required: true, trim: true },
     company_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Company",
