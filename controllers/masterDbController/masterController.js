@@ -215,7 +215,60 @@ const getAllData = asyncHandler(async (req, res, next) => {
     return sendError(next, err.message || "Fetch failed", 500);
   }
 });
+const getAllCompanyData = asyncHandler(async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit);
+    const skip = (page - 1) * limit;
 
+    const filters = { ...req.query };
+    delete filters.page;
+    delete filters.limit;
+    const search = filters.search;
+    delete filters.search;
+
+    // Build search filter if search param is present
+    let searchFilter = {};
+    if (search && search.trim()) {
+      const regex = new RegExp(search.trim(), "i");
+      searchFilter = {
+        $or: [
+          { company_name: regex },
+          { year_founded: regex },
+          { employees_range: regex },
+          { industry: regex },
+          { sub_industry: regex },
+          { mobile_no: regex },
+          { company_segment: regex },
+          { website: regex },
+          { company_linkedIn_profile: regex },
+          { company_phone1: regex },
+          { company_phone2: regex },
+        ],
+      };
+    }
+
+    // Combine filters and searchFilter
+    const finalFilter = Object.keys(searchFilter).length
+      ? { ...filters, ...searchFilter }
+      : filters;
+
+    const [total, data] = await Promise.all([
+      Company.countDocuments(finalFilter),
+      Company.find(finalFilter).skip(skip).limit(limit).lean(),
+    ]);
+
+    return sendResponse(res, 200, "Companies fetched successfully", {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      data,
+    });
+  } catch (err) {
+    return sendError(next, err.message || "Fetch failed", 500);
+  }
+});
 const updateData = asyncHandler(async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -267,7 +320,7 @@ const updateData = asyncHandler(async (req, res, next) => {
     const updatedContact = await Contact.findByIdAndUpdate(id, updatePayload, {
       new: true,
       runValidators: true,
-    }).populate("company_id", "company_name website industry"); // optional populate
+    }).populate("company_id", "company_name website industry");
 
     return sendResponse(
       res,
@@ -281,4 +334,57 @@ const updateData = asyncHandler(async (req, res, next) => {
   }
 });
 
-export { batchCreateFromExcel, getAllData, updateData };
+const createANewCompany = asyncHandler(async (req, res, next) => {
+  try {
+    const data = req.body;
+    const user = req.user;
+
+    if (!data.company_name || !data.website) {
+      return sendError(next, "Company name and website are required", 400);
+    }
+
+    const existing = await Company.findOne({
+      company_name: data.company_name.trim(),
+      website: data.website.trim(),
+    });
+    if (existing) {
+      return sendError(
+        next,
+        "Company with this name and website already exists",
+        400
+      );
+    }
+
+    const newCompanyData = {
+      company_name: data.company_name.trim(),
+      company_id_kestone: data.company_id_kestone || "",
+      affinity_id_dell: data.affinity_id_dell || "",
+      company_id_google: data.company_id_google || "",
+      company_source: data.company_source || "",
+      year_founded: data.year_founded || "",
+      turnover_range: data.turnover_range || "",
+      employees_range: data.employees_range || "",
+      industry: data.industry || "",
+      sub_industry: data.sub_industry || "",
+      company_segment: data.company_segment || "",
+      website: data.website.trim(),
+      company_linkedIn_profile: data.company_linkedIn_profile || "",
+      company_phone1: data.company_phone1 || "",
+      company_phone2: data.company_phone2 || "",
+    };
+
+    const company = await Company.create(newCompanyData);
+
+    return sendResponse(res, 201, "Company created successfully", company);
+  } catch (err) {
+    return sendError(next, err.message || "Failed to create company", 500);
+  }
+});
+
+export {
+  batchCreateFromExcel,
+  getAllData,
+  getAllCompanyData,
+  updateData,
+  createANewCompany,
+};
