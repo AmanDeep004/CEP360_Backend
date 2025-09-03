@@ -10,7 +10,16 @@ const ContactHistorySchema = new mongoose.Schema(
     },
     snapshot: { type: Object },
     updatedFields: { type: [String] },
-    updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    updatedBy: {
+      id: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      name: { type: String },
+      employeeName: { type: String },
+      email: { type: String },
+      role: { type: String },
+      mobile: { type: String },
+      location: { type: String },
+      designation: { type: String },
+    },
     updatedAt: { type: Date, default: Date.now },
     changeType: {
       type: String,

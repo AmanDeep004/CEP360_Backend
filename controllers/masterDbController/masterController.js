@@ -215,4 +215,70 @@ const getAllData = asyncHandler(async (req, res, next) => {
     return sendError(next, err.message || "Fetch failed", 500);
   }
 });
-export { batchCreateFromExcel, getAllData };
+
+const updateData = asyncHandler(async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const updatePayload = req.body;
+    const user = req.user;
+
+    console.log(user, "user data");
+
+    const existing = await Contact.findById(id);
+    if (!existing) return sendError(next, "Contact not found", 404);
+
+    // Validate company_id if provided
+    if (updatePayload.company_id) {
+      const company = await Company.findById(updatePayload.company_id);
+      if (!company) return sendError(next, "Invalid company_id", 400);
+    }
+
+    //  Find fields which are changed
+    const updatedFields = Object.keys(updatePayload).filter((field) => {
+      return (
+        String(existing[field] ?? "") !== String(updatePayload[field] ?? "")
+      );
+    });
+
+    // Agar koi field change hi nahi hui to directly return
+    if (updatedFields.length === 0) {
+      return sendResponse(res, 200, "No changes detected", existing);
+    }
+
+    //  Save snapshot to ContactHistory
+    await ContactHistory.create({
+      contact_id: existing._id,
+      snapshot: existing.toObject(), // old data snapshot
+      updatedFields, // kaunse fields change hue
+      updatedBy: {
+        id: user._id,
+        name: user.employeeName,
+        email: user.email,
+        employeeCode: user.employeeCode,
+        role: user.role,
+        mobile: user.mobile,
+        location: user.location,
+        designation: user.designation,
+      },
+      changeType: "update",
+    });
+
+    //  Update main Contact
+    const updatedContact = await Contact.findByIdAndUpdate(id, updatePayload, {
+      new: true,
+      runValidators: true,
+    }).populate("company_id", "company_name website industry"); // optional populate
+
+    return sendResponse(
+      res,
+      200,
+      "Contact updated successfully",
+      updatedContact
+    );
+  } catch (err) {
+    console.error("Update contact error:", err);
+    return sendError(next, err.message || "Update failed", 500);
+  }
+});
+
+export { batchCreateFromExcel, getAllData, updateData };

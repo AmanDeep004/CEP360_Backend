@@ -4,6 +4,7 @@ import { protect, authorize } from "../../middleware/authMiddleware.js";
 import {
   getAllData,
   batchCreateFromExcel,
+  updateData,
 } from "../../controllers/masterDbController/masterController.js";
 import { UserRoleEnum } from "../../utils/enum.js";
 const router = Router();
@@ -18,6 +19,7 @@ router.post(
   batchCreateFromExcel
 );
 
+router.put("/update/:id", protect, updateData);
 router.get("/getAllData", protect, getAllData);
 
 export default router;
