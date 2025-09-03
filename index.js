@@ -33,8 +33,8 @@ const startServer = async () => {
 
     const app = express();
 
-    app.use(express.json({ limit: "10mb" }));
-    app.use(express.urlencoded({ extended: false, limit: "10mb" }));
+    app.use(express.json({ limit: "1500mb" }));
+    app.use(express.urlencoded({ extended: false, limit: "1500mb" }));
 
     const corsOptions = {
       origin: process.env.CLIENT_URL || "http://localhost:4021",
