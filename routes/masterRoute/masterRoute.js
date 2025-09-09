@@ -7,6 +7,7 @@ import {
   updateData,
   getAllCompanyData,
   createANewCompany,
+  getAllCompanyName,
 } from "../../controllers/masterDbController/masterController.js";
 import { UserRoleEnum } from "../../utils/enum.js";
 const router = Router();
@@ -24,5 +25,6 @@ router.post("/AddNewCompany", protect, createANewCompany);
 router.put("/update/:id", protect, updateData);
 router.get("/getAllData", protect, getAllData);
 router.get("/getAllCompanyData", protect, getAllCompanyData);
+router.get("/getAllCompanyName", protect, getAllCompanyName);
 
 export default router;

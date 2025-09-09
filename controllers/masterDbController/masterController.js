@@ -269,6 +269,23 @@ const getAllCompanyData = asyncHandler(async (req, res, next) => {
     return sendError(next, err.message || "Fetch failed", 500);
   }
 });
+const getAllCompanyName = asyncHandler(async (req, res, next) => {
+  try {
+    const companies = await Company.find(
+      {},
+      { _id: 1, company_name: 1 }
+    ).lean();
+    // 👆 Fetch only _id and company_name
+
+    return sendResponse(res, 200, "Companies fetched successfully", {
+      total: companies.length,
+      data: companies,
+    });
+  } catch (err) {
+    return sendError(next, err.message || "Fetch failed", 500);
+  }
+});
+
 const updateData = asyncHandler(async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -387,4 +404,5 @@ export {
   getAllCompanyData,
   updateData,
   createANewCompany,
+  getAllCompanyName,
 };
