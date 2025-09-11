@@ -145,7 +145,7 @@ const batchCreateFromExcel = asyncHandler(async (req, res, next) => {
     // Cleanup temp file
     fs.unlinkSync(req.file.path);
 
-    return sendResponse(res, 201, "Batch insert successful", {
+    return sendResponse(res, 200, "Batch insert successful", {
       companiesCreated: newCompanies.length,
       contactsCreated: insertedContacts.length,
       skippedContacts: existingContactIds.size,
@@ -392,7 +392,7 @@ const createANewCompany = asyncHandler(async (req, res, next) => {
 
     const company = await Company.create(newCompanyData);
 
-    return sendResponse(res, 201, "Company created successfully", company);
+    return sendResponse(res, 200, "Company created successfully", company);
   } catch (err) {
     return sendError(next, err.message || "Failed to create company", 500);
   }
