@@ -398,6 +398,209 @@ const createANewCompany = asyncHandler(async (req, res, next) => {
   }
 });
 
+const getDropdownFiltersOld = asyncHandler(async (req, res, next) => {
+  try {
+    const user = req.user;
+
+    const industries = await Company.distinct("industry", {
+      industry: { $ne: null, $ne: "" },
+    });
+    const subIndustries = await Company.distinct("sub_industry", {
+      sub_industry: { $ne: null, $ne: "" },
+    });
+    const segments = await Company.distinct("company_segment", {
+      company_segment: { $ne: null, $ne: "" },
+    });
+    const employeeRanges = await Company.distinct("employees_range", {
+      employees_range: { $ne: null, $ne: "" },
+    });
+    const turnovers = await Company.distinct("turnover_range", {
+      turnover_range: { $ne: null, $ne: "" },
+    });
+
+    return sendResponse(
+      res,
+      200,
+      "Unique company filters fetched successfully",
+      {
+        industries,
+        subIndustries,
+        segments,
+        employeeRanges,
+        turnovers,
+      }
+    );
+  } catch (err) {
+    return sendError(next, err.message || "Failed to fetch filters", 500);
+  }
+});
+
+const getDropdownFilters = asyncHandler(async (req, res, next) => {
+  try {
+    const [companyFilters, contactFilters] = await Promise.all([
+      Company.aggregate([
+        {
+          $group: {
+            _id: null,
+            industries: { $addToSet: "$industry" },
+            subIndustries: { $addToSet: "$sub_industry" },
+            segments: { $addToSet: "$company_segment" },
+            employeeRanges: { $addToSet: "$employees_range" },
+            turnovers: { $addToSet: "$turnover_range" },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            industries: {
+              $filter: {
+                input: "$industries",
+                as: "val",
+                cond: {
+                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                },
+              },
+            },
+            subIndustries: {
+              $filter: {
+                input: "$subIndustries",
+                as: "val",
+                cond: {
+                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                },
+              },
+            },
+            segments: {
+              $filter: {
+                input: "$segments",
+                as: "val",
+                cond: {
+                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                },
+              },
+            },
+            employeeRanges: {
+              $filter: {
+                input: "$employeeRanges",
+                as: "val",
+                cond: {
+                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                },
+              },
+            },
+            turnovers: {
+              $filter: {
+                input: "$turnovers",
+                as: "val",
+                cond: {
+                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                },
+              },
+            },
+          },
+        },
+      ]),
+
+      Contact.aggregate([
+        {
+          $group: {
+            _id: null,
+            countries: { $addToSet: "$contact_country" },
+            states: { $addToSet: "$contact_state" },
+            regions: { $addToSet: "$contact_region" },
+            cities: { $addToSet: "$contact_city" },
+            jobSeniorities: { $addToSet: "$job_seniority" },
+            jobFunctions: { $addToSet: "$job_function" },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            countries: {
+              $filter: {
+                input: "$countries",
+                as: "val",
+                cond: {
+                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                },
+              },
+            },
+            states: {
+              $filter: {
+                input: "$states",
+                as: "val",
+                cond: {
+                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                },
+              },
+            },
+            regions: {
+              $filter: {
+                input: "$regions",
+                as: "val",
+                cond: {
+                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                },
+              },
+            },
+            cities: {
+              $filter: {
+                input: "$cities",
+                as: "val",
+                cond: {
+                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                },
+              },
+            },
+            jobSeniorities: {
+              $filter: {
+                input: "$jobSeniorities",
+                as: "val",
+                cond: {
+                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                },
+              },
+            },
+            jobFunctions: {
+              $filter: {
+                input: "$jobFunctions",
+                as: "val",
+                cond: {
+                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                },
+              },
+            },
+          },
+        },
+      ]),
+    ]);
+
+    const companyData = companyFilters[0] || {
+      industries: [],
+      subIndustries: [],
+      segments: [],
+      employeeRanges: [],
+      turnovers: [],
+    };
+
+    const contactData = contactFilters[0] || {
+      countries: [],
+      states: [],
+      regions: [],
+      cities: [],
+      jobSeniorities: [],
+      jobFunctions: [],
+    };
+
+    return sendResponse(res, 200, "Unique filters fetched successfully", {
+      ...companyData,
+      ...contactData,
+    });
+  } catch (err) {
+    return sendError(next, err.message || "Failed to fetch filters", 500);
+  }
+});
+
 export {
   batchCreateFromExcel,
   getAllData,
@@ -405,4 +608,5 @@ export {
   updateData,
   createANewCompany,
   getAllCompanyName,
+  getDropdownFilters,
 };
