@@ -26,6 +26,9 @@ const startServer = async () => {
       .default;
     const dashboardRoutes = (await import("./routes/dashboardRoutes.js"))
       .default;
+    const callingDataFiltrationRoutes = (
+      await import("./routes/callingDataFiltrationRoute.js")
+    ).default;
     const masterDBRoutes = (await import("./routes/masterRoute/masterRoute.js"))
       .default;
 
@@ -63,6 +66,7 @@ const startServer = async () => {
     app.use("/api/invoice", invoiceRoutes);
     app.use("/api/attendence", attendenceRoutes);
     app.use("/api/masterdb", masterDBRoutes);
+    app.use("/api/filtration", callingDataFiltrationRoutes);
 
     app.use("*", (req, res) => {
       res.status(404).json({
