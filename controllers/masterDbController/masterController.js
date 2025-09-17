@@ -441,7 +441,7 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
       Company.aggregate([
         {
           $group: {
-            _id: null,
+            _id: "null",
             industries: { $addToSet: "$industry" },
             subIndustries: { $addToSet: "$sub_industry" },
             segments: { $addToSet: "$company_segment" },
@@ -601,6 +601,234 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
   }
 });
 
+const getFiltersStats1 = asyncHandler(async (req, res, next) => {
+  try {
+    const {
+      industries = [],
+      companySize = [],
+      regions = [],
+      countries = [],
+      departments = [],
+      designations = [],
+    } = req.body;
+
+    // Build filters
+    const companyMatch = {};
+    if (industries.length) companyMatch.industry = { $in: industries };
+    if (companySize.length) companyMatch.employees_range = { $in: companySize };
+
+    const contactMatch = {};
+    if (regions.length) contactMatch.contact_region = { $in: regions };
+    if (countries.length) contactMatch.contact_country = { $in: countries };
+    if (departments.length) contactMatch.job_function = { $in: departments };
+    if (designations.length) contactMatch.designation = { $in: designations };
+
+    // Aggregate contacts joined with companies
+    const result = await Contact.aggregate([
+      {
+        $lookup: {
+          from: "companies",
+          localField: "company_id",
+          foreignField: "_id",
+          as: "company",
+        },
+      },
+      { $unwind: "$company" },
+      { $match: { ...contactMatch, ...companyMatch } },
+      {
+        $group: {
+          _id: {
+            designation: "$designation",
+            department: "$job_function",
+          },
+          count: { $sum: 1 },
+        },
+      },
+      {
+        $group: {
+          _id: "$_id.designation",
+          departments: {
+            $push: {
+              department: "$_id.department",
+              count: "$count",
+            },
+          },
+          total: { $sum: "$count" },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          designation: "$_id",
+          total,
+          departments: 1,
+        },
+      },
+    ]);
+
+    return sendResponse(res, 200, "Counts fetched successfully", result);
+  } catch (err) {
+    console.error("Aggregation error:", err);
+    return sendError(next, err.message || "Failed to fetch counts", 500);
+  }
+});
+const getFiltersStatsWork = asyncHandler(async (req, res, next) => {
+  try {
+    const {
+      industries = [],
+      companySize = [],
+      regions = [],
+      countries = [],
+      departments = [],
+      designations = [],
+    } = req.body;
+
+    // Build filters
+    const companyMatch = {};
+    if (industries.length)
+      companyMatch["company.industry"] = { $in: industries };
+    if (companySize.length)
+      companyMatch["company.employees_range"] = { $in: companySize };
+
+    const contactMatch = {};
+    if (regions.length) contactMatch.contact_region = { $in: regions };
+    if (countries.length) contactMatch.contact_country = { $in: countries };
+    if (departments.length) contactMatch.job_function = { $in: departments };
+    if (designations.length) contactMatch.designation = { $in: designations };
+
+    // Aggregate contacts joined with companies
+    const result = await Contact.aggregate([
+      {
+        $lookup: {
+          from: "companies",
+          localField: "company_id",
+          foreignField: "_id",
+          as: "company",
+        },
+      },
+      { $unwind: "$company" },
+      { $match: { ...contactMatch, ...companyMatch } },
+      {
+        $group: {
+          _id: {
+            designation: "$designation",
+            department: "$job_function",
+          },
+          count: { $sum: 1 },
+        },
+      },
+      {
+        $group: {
+          _id: "$_id.designation",
+          departments: {
+            $push: {
+              department: "$_id.department",
+              count: "$count",
+            },
+          },
+          total: { $sum: "$count" },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          designation: "$_id",
+          total: "$total", // ✅ FIXED
+          departments: 1,
+        },
+      },
+    ]);
+
+    return sendResponse(res, 200, "Counts fetched successfully", result);
+  } catch (err) {
+    console.error("Aggregation error:", err);
+    return sendError(next, err.message || "Failed to fetch counts", 500);
+  }
+});
+const getFiltersStats = asyncHandler(async (req, res, next) => {
+  try {
+    const {
+      industries = [],
+      companySize = [],
+      regions = [],
+      countries = [],
+      departments = [],
+      designations = [],
+    } = req.body;
+
+    // Build filters
+    const companyMatch = {};
+    if (industries.length)
+      companyMatch["company.industry"] = { $in: industries };
+    if (companySize.length)
+      companyMatch["company.employees_range"] = { $in: companySize };
+
+    const contactMatch = {};
+    if (regions.length) contactMatch.contact_region = { $in: regions };
+    if (countries.length) contactMatch.contact_country = { $in: countries };
+    if (departments.length) contactMatch.job_function = { $in: departments };
+    if (designations.length) contactMatch.designation = { $in: designations };
+
+    // Aggregate contacts joined with companies
+    const result = await Contact.aggregate([
+      {
+        $lookup: {
+          from: "companies",
+          localField: "company_id",
+          foreignField: "_id",
+          as: "company",
+        },
+      },
+      { $unwind: "$company" },
+      { $match: { ...contactMatch, ...companyMatch } },
+      {
+        $group: {
+          _id: {
+            designation: "$designation",
+            department: "$job_function",
+          },
+          contactIds: { $addToSet: "$_id" }, // 👈 collect unique ids
+          count: { $sum: 1 },
+        },
+      },
+      {
+        $group: {
+          _id: "$_id.designation",
+          departments: {
+            $push: {
+              department: "$_id.department",
+              count: "$count",
+            },
+          },
+          total: { $sum: "$count" },
+          uniqueIds: { $push: "$contactIds" }, // 👈 push unique sets
+        },
+      },
+      {
+        $addFields: {
+          uniqueTotal: {
+            $size: { $setUnion: "$uniqueIds" }, // 👈 merge & count unique
+          },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          designation: "$_id",
+          total: 1,
+          departments: 1,
+          uniqueTotal: 1, // 👈 include uniqueTotal
+        },
+      },
+    ]);
+
+    return sendResponse(res, 200, "Counts fetched successfully", result);
+  } catch (err) {
+    console.error("Aggregation error:", err);
+    return sendError(next, err.message || "Failed to fetch counts", 500);
+  }
+});
+
 export {
   batchCreateFromExcel,
   getAllData,
@@ -609,4 +837,5 @@ export {
   createANewCompany,
   getAllCompanyName,
   getDropdownFilters,
+  getFiltersStats,
 };
