@@ -623,7 +623,11 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
                 input: "$industries",
                 as: "val",
                 cond: {
-                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                  $and: [
+                    { $ne: ["$$val", null] },
+                    { $ne: ["$$val", ""] },
+                    { $ne: ["$$val", "Blank"] },
+                  ],
                 },
               },
             },
@@ -632,7 +636,11 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
                 input: "$subIndustries",
                 as: "val",
                 cond: {
-                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                  $and: [
+                    { $ne: ["$$val", null] },
+                    { $ne: ["$$val", ""] },
+                    { $ne: ["$$val", "Blank"] },
+                  ],
                 },
               },
             },
@@ -641,7 +649,11 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
                 input: "$segments",
                 as: "val",
                 cond: {
-                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                  $and: [
+                    { $ne: ["$$val", null] },
+                    { $ne: ["$$val", ""] },
+                    { $ne: ["$$val", "Blank"] },
+                  ],
                 },
               },
             },
@@ -650,7 +662,11 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
                 input: "$employeeRanges",
                 as: "val",
                 cond: {
-                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                  $and: [
+                    { $ne: ["$$val", null] },
+                    { $ne: ["$$val", ""] },
+                    { $ne: ["$$val", "Blank"] },
+                  ],
                 },
               },
             },
@@ -659,7 +675,11 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
                 input: "$turnovers",
                 as: "val",
                 cond: {
-                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                  $and: [
+                    { $ne: ["$$val", null] },
+                    { $ne: ["$$val", ""] },
+                    { $ne: ["$$val", "Blank"] },
+                  ],
                 },
               },
             },
@@ -687,7 +707,11 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
                 input: "$countries",
                 as: "val",
                 cond: {
-                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                  $and: [
+                    { $ne: ["$$val", null] },
+                    { $ne: ["$$val", ""] },
+                    { $ne: ["$$val", "Blank"] },
+                  ],
                 },
               },
             },
@@ -696,7 +720,11 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
                 input: "$states",
                 as: "val",
                 cond: {
-                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                  $and: [
+                    { $ne: ["$$val", null] },
+                    { $ne: ["$$val", ""] },
+                    { $ne: ["$$val", "Blank"] },
+                  ],
                 },
               },
             },
@@ -705,7 +733,11 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
                 input: "$regions",
                 as: "val",
                 cond: {
-                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                  $and: [
+                    { $ne: ["$$val", null] },
+                    { $ne: ["$$val", ""] },
+                    { $ne: ["$$val", "Blank"] },
+                  ],
                 },
               },
             },
@@ -714,7 +746,11 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
                 input: "$cities",
                 as: "val",
                 cond: {
-                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                  $and: [
+                    { $ne: ["$$val", null] },
+                    { $ne: ["$$val", ""] },
+                    { $ne: ["$$val", "Blank"] },
+                  ],
                 },
               },
             },
@@ -723,7 +759,11 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
                 input: "$jobSeniorities",
                 as: "val",
                 cond: {
-                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                  $and: [
+                    { $ne: ["$$val", null] },
+                    { $ne: ["$$val", ""] },
+                    { $ne: ["$$val", "Blank"] },
+                  ],
                 },
               },
             },
@@ -732,7 +772,11 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
                 input: "$jobFunctions",
                 as: "val",
                 cond: {
-                  $and: [{ $ne: ["$$val", null] }, { $ne: ["$$val", ""] }],
+                  $and: [
+                    { $ne: ["$$val", null] },
+                    { $ne: ["$$val", ""] },
+                    { $ne: ["$$val", "Blank"] },
+                  ],
                 },
               },
             },
@@ -757,6 +801,38 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
       jobSeniorities: [],
       jobFunctions: [],
     };
+
+    const parseRange = (str) => {
+      if (!str) return Infinity;
+
+      const plusMatch = str.match(/^(\d+)[\s&+A-Za-z]*/);
+      if (plusMatch) return parseInt(plusMatch[1], 10);
+
+      if (str.includes("B")) return 10_000_000;
+
+      const rangeMatch = str.match(/(\d+)\s*to\s*(\d+)/);
+      if (rangeMatch) return parseInt(rangeMatch[1], 10);
+
+      return Infinity;
+    };
+
+    companyData.turnovers = companyData.turnovers.sort(
+      (a, b) => parseRange(a) - parseRange(b)
+    );
+    companyData.employeeRanges = companyData.employeeRanges.sort(
+      (a, b) => parseRange(a) - parseRange(b)
+    );
+
+    companyData.industries = companyData.industries.sort();
+    companyData.subIndustries = companyData.subIndustries.sort();
+    companyData.segments = companyData.segments.sort();
+
+    contactData.countries = contactData.countries.sort();
+    contactData.states = contactData.states.sort();
+    contactData.regions = contactData.regions.sort();
+    contactData.cities = contactData.cities.sort();
+    contactData.jobSeniorities = contactData.jobSeniorities.sort();
+    contactData.jobFunctions = contactData.jobFunctions.sort();
 
     return sendResponse(res, 200, "Unique filters fetched successfully", {
       ...companyData,
