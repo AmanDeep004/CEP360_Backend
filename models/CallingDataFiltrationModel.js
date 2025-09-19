@@ -41,7 +41,7 @@ const CampaignFilterSchema = new Schema(
     status: {
       type: String,
       enum: {
-        values: ["Approved", "AddOn", "KestoneData", "Rejected "],
+        values: ["Pending", "Approved", "AddOn", "KestoneData", "Rejected"],
         message: "{VALUE} is not a valid status",
       },
       default: "Own Data",

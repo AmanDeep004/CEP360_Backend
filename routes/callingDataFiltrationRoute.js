@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   callingDataFilter,
+  callingDataFilterLightweight,
   getCampaignFiltersByCampaignId,
 } from "../controllers/callingDataFiltrationController.js";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -21,6 +22,12 @@ router.post(
   protect,
   authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER),
   callingDataFilter
+);
+router.post(
+  "/callingDataFilterLight",
+  protect,
+  authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER),
+  callingDataFilterLightweight
 );
 
 export default router;
