@@ -68,12 +68,32 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
       return sendError(next, "Campaign ID is required", 400);
     }
 
-    const query = buildMongoQuery(filters, exclusions);
+    const fieldMapping = {
+      Contact_Country: "Contact_Country",
+      Contact_Region: "Contact_Region",
+      Job_Function: "Job_Function",
+      Job_Seniority: "Job_Seniority",
+      Industry: "company_info.Industry",
+      Employees_Range: "company_info.Employees_Range",
+    };
 
-    req.setTimeout(300000); // 5 minutes
+    const buildMongoQuery = (filtersArr, operator = "$in") => {
+      const q = {};
+      filtersArr.forEach(({ field, value }) => {
+        const mappedField = fieldMapping[field] || field;
+        if (Array.isArray(value) && value.length > 0) {
+          q[mappedField] = { [operator]: value };
+        }
+      });
+      return q;
+    };
+
+    const includeQuery = buildMongoQuery(filters, "$in");
+    const excludeQuery = buildMongoQuery(exclusions, "$nin");
+
+    req.setTimeout(300000);
 
     const statsPipeline = [
-      { $match: query },
       {
         $lookup: {
           from: "companies",
@@ -86,6 +106,12 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
         $unwind: {
           path: "$company_info",
           preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $match: {
+          ...includeQuery,
+          ...excludeQuery,
         },
       },
       {
@@ -133,7 +159,18 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
     const [statsResult, uniqueCompaniesCount] = await Promise.all([
       Contact.aggregate(statsPipeline),
       Contact.aggregate([
-        { $match: query },
+        {
+          $lookup: {
+            from: "companies",
+            localField: "Company_ID",
+            foreignField: "_id",
+            as: "company_info",
+          },
+        },
+        {
+          $unwind: { path: "$company_info", preserveNullAndEmptyArrays: true },
+        },
+        { $match: { ...includeQuery, ...excludeQuery } },
         { $group: { _id: "$Company_ID" } },
         { $count: "uniqueCompanies" },
       ]),
@@ -144,13 +181,11 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
 
     const crossTabData = stats.crossTabData || [];
 
-    // Unique lists
     const industries = [...new Set(crossTabData.map((i) => i.industry))].sort();
     const seniorities = [
       ...new Set(crossTabData.map((i) => i.seniority)),
     ].sort();
 
-    // Build table
     const crossTabTable = {};
     const industryTotals = {};
     const seniorityTotals = {};
@@ -197,7 +232,6 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
       contacts: [],
     };
 
-    // 🔄 Find last revision for this campaign
     const lastFilter = await CampaignFilter.findOne({ campaignId }).sort({
       revisionNo: -1,
     });
@@ -458,8 +492,36 @@ const callingDataFilterLightweight = asyncHandler(async (req, res, next) => {
     );
   }
 });
+
+const getPrevCampFiltersByCampaignId = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    if (!campaignId) {
+      return sendError(next, "Camapign Id is required", 400);
+    }
+    const filters = await CampaignFilter.find({ campaignId })
+      .sort({
+        revisionNo: -1,
+        createdAt: -1,
+      })
+      .lean();
+    return sendResponse(res, 200, "Campaign filters fetched successfully", {
+      count: filters.length,
+      filters,
+    });
+  } catch (err) {
+    console.error("Error fetching previous campaign filters", err);
+    return sendError(
+      next,
+      err.message || "Failed to fetch campaign filters",
+      500
+    );
+  }
+});
+
 export {
   callingDataFilter,
   callingDataFilterLightweight,
   getCampaignFiltersByCampaignId,
+  getPrevCampFiltersByCampaignId,
 };

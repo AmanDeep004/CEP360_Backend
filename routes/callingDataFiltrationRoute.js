@@ -3,6 +3,7 @@ import {
   callingDataFilter,
   callingDataFilterLightweight,
   getCampaignFiltersByCampaignId,
+  getPrevCampFiltersByCampaignId,
 } from "../controllers/callingDataFiltrationController.js";
 import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
@@ -17,12 +18,20 @@ router.get(
   getCampaignFiltersByCampaignId
 );
 
+router.get(
+  "/getPrevCampFiltersByCampaignId/:campaignId",
+  protect,
+  // authorize(ADMIN, PRESALES_MANAGER),
+  getPrevCampFiltersByCampaignId
+);
+
 router.post(
   "/callingDataFilter",
   protect,
   authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER),
   callingDataFilter
 );
+
 router.post(
   "/callingDataFilterLight",
   protect,
