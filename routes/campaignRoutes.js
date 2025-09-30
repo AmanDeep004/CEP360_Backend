@@ -6,6 +6,8 @@ import {
   updateCampaign,
   deleteCampaign,
   getCampaignsByUserId,
+  updateCampaignDataSourceType,
+  updateCampaignStage,
 } from "../controllers/campaignController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -47,6 +49,20 @@ router.put(
   protect,
   authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER),
   updateCampaign
+);
+
+router.put(
+  "/updateCampaignDataSourceType/:id",
+  protect,
+  authorize(ADMIN, PRESALES_MANAGER),
+  updateCampaignDataSourceType
+);
+
+router.put(
+  "/updateCampaignStage/:id",
+  protect,
+  authorize(ADMIN, PRESALES_MANAGER),
+  updateCampaignStage
 );
 
 // Delete campaign

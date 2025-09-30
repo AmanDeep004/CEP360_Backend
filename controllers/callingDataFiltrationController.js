@@ -1,6 +1,8 @@
 import CampaignFilter from "../models/CallingDataFiltrationModel.js";
 import Contact from "../models/MasterDBModel/contactModel.js";
 import errorHandler from "../utils/index.js";
+import CallingData from "../models/callingDataModal.js";
+import mongoose from "mongoose";
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
@@ -492,17 +494,18 @@ const callingDataFilterLightweight = asyncHandler(async (req, res, next) => {
     );
   }
 });
-
+// here
 const getPrevCampFiltersByCampaignId = asyncHandler(async (req, res, next) => {
   try {
     const { campaignId } = req.params;
     if (!campaignId) {
       return sendError(next, "Camapign Id is required", 400);
     }
+    console.log("Fetching previous campaign filters for ID:", campaignId);
     const filters = await CampaignFilter.find({ campaignId })
       .sort({
-        revisionNo: -1,
-        createdAt: -1,
+        revisionNo: 1,
+        createdAt: 1,
       })
       .lean();
     return sendResponse(res, 200, "Campaign filters fetched successfully", {
@@ -519,9 +522,188 @@ const getPrevCampFiltersByCampaignId = asyncHandler(async (req, res, next) => {
   }
 });
 
+//assign all the calling data filtration to the particular campaign
+
+const assignCallingDataToCampaign = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId, uploadedBy, batch, dataSourceType } = req.body;
+
+    if (!campaignId || !uploadedBy) {
+      return sendError(next, "Required fields missing", 400);
+    }
+
+    // Get the last entered filter for this campaign
+    const lastFilter = await CampaignFilter.findOne({ campaignId })
+      .sort({ revisionNo: -1, createdAt: -1 })
+      .lean();
+
+    if (!lastFilter) {
+      return sendError(next, "No campaign filter found for this campaign", 404);
+    }
+
+    const fieldMapping = {
+      Contact_Country: "Contact_Country",
+      Contact_Region: "Contact_Region",
+      Job_Function: "Job_Function",
+      Job_Seniority: "Job_Seniority",
+      Industry: "company_info.Industry",
+      Employees_Range: "company_info.Employees_Range",
+    };
+
+    const buildMongoQuery = (filtersArr, operator = "$in") => {
+      const q = {};
+      filtersArr.forEach(({ field, value }) => {
+        const mappedField = fieldMapping[field] || field;
+        if (Array.isArray(value) && value.length > 0) {
+          q[mappedField] = { [operator]: value };
+        }
+      });
+      return q;
+    };
+
+    const includeQuery = buildMongoQuery(lastFilter.filters || [], "$in");
+    const excludeQuery = buildMongoQuery(lastFilter.exclusions || [], "$nin");
+
+    // Use aggregation pipeline to get contacts with company lookup
+    const contactsPipeline = [
+      {
+        $lookup: {
+          from: "companies",
+          localField: "Company_ID",
+          foreignField: "_id",
+          as: "company_info",
+        },
+      },
+      {
+        $unwind: {
+          path: "$company_info",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $match: {
+          ...includeQuery,
+          ...excludeQuery,
+        },
+      },
+    ];
+
+    // Get all contacts matching the last filter
+    const contacts = await Contact.aggregate(contactsPipeline);
+
+    if (!contacts.length) {
+      return sendError(next, "No contacts found for this filter", 404);
+    }
+
+    const callingDataEntries = contacts.map((row) => ({
+      CampaignId: new mongoose.Types.ObjectId(campaignId),
+      UploadedBy: new mongoose.Types.ObjectId(uploadedBy),
+      source: "MasterDB",
+      batch: batch || "",
+      dataSourceType: dataSourceType || "Kestone",
+      // isDataSourceApproved: isDataSourceApproved || false,
+
+      // Contact fields
+      Contact_ID: row.Contact_ID,
+      Contact_Source: row.Contact_Source,
+      Contact_Create_Date: row.Contact_Create_Date,
+      Salutation: row.Salutation,
+      First_Name: row.First_Name,
+      Last_Name: row.Last_Name,
+      Full_Name: row.Full_Name,
+      Gender: row.Gender,
+      Job_Title: row.Job_Title,
+      Job_Seniority: row.Job_Seniority,
+      Job_Function: row.Job_Function,
+      Contact_Address_1: row.Contact_Address_1,
+      Contact_Address_2: row.Contact_Address_2,
+      Contact_Address_3: row.Contact_Address_3,
+      Contact_City: row.Contact_City,
+      Contact_Pin: row.Contact_Pin,
+      Contact_State: row.Contact_State,
+      Contact_Region: row.Contact_Region,
+      Contact_Country: row.Contact_Country,
+      Contact_STD_ISD_Code: row.Contact_STD_ISD_Code,
+      Contact_Location_Tier: row.Contact_Location_Tier,
+      Contact_Direct_Phone1: row.Contact_Direct_Phone1,
+      Contact_Direct_Phone2: row.Contact_Direct_Phone2,
+      Contact_Extn_No: row.Contact_Extn_No,
+      Mobile_No: row.Mobile_No,
+      Office_Email_1: row.Office_Email_1,
+      Office_Email_2: row.Office_Email_2,
+      Personal_Email1: row.Personal_Email1,
+      Personal_Email2: row.Personal_Email2,
+      Contact_LinkedIn_Profile: row.Contact_LinkedIn_Profile,
+      Unsubscribe_Flag: row.Unsubscribe_Flag,
+      Unsubscribe_Account_Tag: row.Unsubscribe_Account_Tag,
+      DND_Flag: row.DND_Flag,
+      DND_Account_Tag: row.DND_Account_Tag,
+      Last_Engagement: row.Last_Engagement,
+      Last_Engagement_Date: row.Last_Engagement_Date,
+      Last_Engagement_Campaign: row.Last_Engagement_Campaign,
+      Telecalling_Remarks: row.Telecalling_Remarks,
+      Company_ID: row.company_info?._id
+        ? new mongoose.Types.ObjectId(row.company_info._id)
+        : null,
+      Company_Name: row.company_info?.Company_Name || "",
+      Company_ID_Kestone: row.company_info?.Company_ID_Kestone || "",
+      Affinity_ID_Dell: row.company_info?.Affinity_ID_Dell || "",
+      Company_ID_Google: row.company_info?.Company_ID_Google || "",
+      Company_Source: row.company_info?.Company_Source || "",
+      Year_Founded: row.company_info?.Year_Founded || "",
+      Turnover_Range: row.company_info?.Turnover_Range || "",
+      Employees_Range: row.company_info?.Employees_Range || "",
+      Industry: row.company_info?.Industry || "",
+      Sub_Industry: row.company_info?.Sub_Industry || "",
+      Company_Segment: row.company_info?.Company_Segment || "",
+      Website: row.company_info?.Website || "",
+      Company_LinkedIn_Profile:
+        row.company_info?.Company_LinkedIn_Profile || "",
+      Company_Phone1: row.company_info?.Company_Phone1 || "",
+      Company_Phone2: row.company_info?.Company_Phone2 || "",
+    }));
+
+    //testing with single entry
+    // const testDoc = callingDataEntries[0];
+    // await CallingData.create(testDoc);
+
+    const batchSize = 1000;
+    let insertedCount = 0;
+    for (let i = 0; i < callingDataEntries.length; i += batchSize) {
+      const batch = callingDataEntries.slice(i, i + batchSize);
+      try {
+        await CallingData.insertMany(batch, { ordered: false });
+        insertedCount += batch.length;
+      } catch (err) {
+        console.error("InsertMany error:", err);
+      }
+    }
+
+    return sendResponse(
+      res,
+      200,
+      "Calling data assigned to campaign successfully",
+      {
+        // count: insertedCount,
+        contacts,
+        campaignId,
+        insertedCount,
+      }
+    );
+  } catch (err) {
+    console.error("Error assigning calling data to campaign:", err);
+    return sendError(
+      next,
+      err.message || "Failed to assign calling data to campaign",
+      500
+    );
+  }
+});
+
 export {
   callingDataFilter,
   callingDataFilterLightweight,
   getCampaignFiltersByCampaignId,
   getPrevCampFiltersByCampaignId,
+  assignCallingDataToCampaign,
 };

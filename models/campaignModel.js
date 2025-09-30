@@ -4,7 +4,7 @@ import User from "./userModel.js";
 import { ProgramType } from "../utils/enum.js";
 const { ALL } = ProgramType;
 
-const briefSchema = new mongoose.Schema({});
+// const briefSchema = new mongoose.Schema({});
 
 const campaignSchema = new mongoose.Schema(
   {
@@ -85,16 +85,29 @@ const campaignSchema = new mongoose.Schema(
     jobFunctions: { type: String, required: false },
 
     comments: { type: String, required: false },
+    // for the data source type
     dataSourceType: {
       type: String,
       required: false,
       enum: ["Kestone", "Client", "Both", "ThirdParty"],
     },
 
-    brief: {
-      type: [briefSchema],
-      required: false,
+    stage: {
+      type: String,
+      required: true,
+      default: "NotFiltered",
+      enum: [
+        "NotFiltered",
+        "SuggestToClient",
+        "RevisionRequested",
+        "Finalized",
+      ],
     },
+
+    // brief: {
+    //   type: [briefSchema],
+    //   required: false,
+    // },
   },
   { timestamps: true }
 );

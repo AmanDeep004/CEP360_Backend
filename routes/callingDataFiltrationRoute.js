@@ -4,6 +4,7 @@ import {
   callingDataFilterLightweight,
   getCampaignFiltersByCampaignId,
   getPrevCampFiltersByCampaignId,
+  assignCallingDataToCampaign,
 } from "../controllers/callingDataFiltrationController.js";
 import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
@@ -37,6 +38,11 @@ router.post(
   protect,
   authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER),
   callingDataFilterLightweight
+);
+router.post(
+  "/assignCallingDataToCampaign",
+  protect,
+  assignCallingDataToCampaign
 );
 
 export default router;

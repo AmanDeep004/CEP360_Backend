@@ -379,6 +379,56 @@ const deleteCampaign = asyncHandler(async (req, res, next) => {
   }
 });
 
+//update camapign data source type
+const updateCampaignDataSourceType = asyncHandler(async (req, res, next) => {
+  try {
+    const { dataSourceType } = req.body;
+
+    if (!dataSourceType) {
+      return sendError(next, "dataSourceType is required", 400);
+    }
+
+    const campaign = await Campaign.findById(req.params.id);
+    if (!campaign) {
+      return sendError(next, "Campaign not found", 404);
+    }
+
+    campaign.dataSourceType = dataSourceType;
+    await campaign.save();
+
+    return sendResponse(
+      res,
+      200,
+      "Data Source Type updated successfully",
+      campaign
+    );
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
+//update campaign stage
+const updateCampaignStage = asyncHandler(async (req, res, next) => {
+  try {
+    const { stage } = req.body;
+
+    if (!stage) {
+      return sendError(next, "Stage is required", 400);
+    }
+
+    const campaign = await Campaign.findById(req.params.id);
+    if (!campaign) {
+      return sendError(next, "Campaign not found", 404);
+    }
+
+    campaign.stage = stage;
+    await campaign.save();
+
+    return sendResponse(res, 200, "Stage updated successfully", campaign);
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
 export {
   createCampaign,
   getAllCampaigns,
@@ -386,4 +436,6 @@ export {
   updateCampaign,
   deleteCampaign,
   getCampaignsByUserId,
+  updateCampaignDataSourceType,
+  updateCampaignStage,
 };
