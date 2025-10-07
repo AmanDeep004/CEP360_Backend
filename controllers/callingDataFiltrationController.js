@@ -1,7 +1,11 @@
 import CampaignFilter from "../models/CallingDataFiltrationModel.js";
 import Contact from "../models/MasterDBModel/contactModel.js";
+import Company from "../models/MasterDBModel/companyModel.js";
 import errorHandler from "../utils/index.js";
 import CallingData from "../models/callingDataModal.js";
+import XLSX from "xlsx";
+import csv from "csvtojson";
+import fs from "fs";
 import mongoose from "mongoose";
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
@@ -704,10 +708,138 @@ const assignCallingDataToCampaign = asyncHandler(async (req, res, next) => {
   }
 });
 
+const companiesMatchedDataWithExcel = asyncHandler(async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return sendError(next, "Please upload an Excel or CSV file", 400);
+    }
+
+    const filePath = req.file.path;
+    let companyNames = [];
+
+    const ext = (req.file.originalname || filePath).toLowerCase();
+    if (ext.endsWith(".xlsx") || ext.endsWith(".xls")) {
+      const workbook = XLSX.readFile(filePath);
+      const sheetName = workbook.SheetNames[0];
+      const sheet = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+      companyNames = sheet
+        .map(
+          (row) =>
+            row.CompanyName ||
+            row.Company_Name ||
+            row.company_name ||
+            row.company ||
+            row.companyNames ||
+            null
+        )
+        .filter(Boolean);
+    } else if (ext.endsWith(".csv")) {
+      const rows = await csv().fromFile(filePath);
+      companyNames = rows
+        .map(
+          (row) =>
+            row.CompanyName ||
+            row.Company_Name ||
+            row.company_name ||
+            row.company ||
+            row.companyNames ||
+            null
+        )
+        .filter(Boolean);
+    } else {
+      fs.unlinkSync(filePath);
+      return sendError(
+        next,
+        "Unsupported file format. Upload .csv or .xlsx",
+        400
+      );
+    }
+
+    fs.unlinkSync(filePath);
+
+    if (!Array.isArray(companyNames) || companyNames.length === 0) {
+      return sendError(next, "No valid company names found in the file", 400);
+    }
+
+    const regexArr = companyNames.map((name) => ({
+      Company_Name: {
+        $regex: name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        $options: "i",
+      },
+    }));
+
+    const allMatches = await Company.find({ $or: regexArr }).lean();
+
+    function similarity(a, b) {
+      if (!a || !b) return 0;
+      a = a.toLowerCase();
+      b = b.toLowerCase();
+      if (a === b) return 1;
+      const aWords = new Set(a.split(/\s+/));
+      const bWords = new Set(b.split(/\s+/));
+      const intersection = new Set([...aWords].filter((x) => bWords.has(x)));
+      const union = new Set([...aWords, ...bWords]);
+      return intersection.size / union.size;
+    }
+
+    const completelyMatched = [];
+    const partiallyMatched = [];
+
+    for (const inputName of companyNames) {
+      const matches = allMatches.filter(
+        (c) =>
+          c.Company_Name &&
+          c.Company_Name.toLowerCase().includes(inputName.toLowerCase())
+      );
+
+      const exact = matches.find(
+        (c) =>
+          c.Company_Name &&
+          c.Company_Name.trim().toLowerCase() === inputName.trim().toLowerCase()
+      );
+
+      if (exact) {
+        completelyMatched.push({
+          _id: exact._id,
+          Company_Name: exact.Company_Name,
+          matchedWith: inputName,
+        });
+        continue;
+      }
+
+      const partials = matches
+        .map((c) => ({
+          _id: c._id,
+          Company_Name: c.Company_Name,
+          matchedWith: inputName,
+          matchPercent: Math.round(similarity(inputName, c.Company_Name) * 100),
+        }))
+        .filter((obj) => obj.matchPercent > 0);
+
+      if (partials.length > 0) {
+        partials.sort((a, b) => b.matchPercent - a.matchPercent);
+        partiallyMatched.push({
+          input: inputName,
+          suggestions: partials,
+        });
+      }
+    }
+
+    return sendResponse(res, 200, "Company name match results", {
+      completelyMatched,
+      partiallyMatched,
+    });
+  } catch (err) {
+    console.error("Error in companiesMatchedDataWithExcel:", err);
+    return sendError(next, err.message || "Failed to match companies", 500);
+  }
+});
+
 export {
   callingDataFilter,
   callingDataFilterLightweight,
   getCampaignFiltersByCampaignId,
   getPrevCampFiltersByCampaignId,
   assignCallingDataToCampaign,
+  companiesMatchedDataWithExcel,
 };
