@@ -64,10 +64,13 @@ function buildMongoQuery(filters = [], exclusions = []) {
 
 const callingDataFilter = asyncHandler(async (req, res, next) => {
   try {
-    const { campaignId, filters = [], exclusions = [] } = req.body;
+    const { campaignId, filters = [], exclusions = [], datatype } = req.body;
 
     if (!campaignId) {
       return sendError(next, "Campaign ID is required", 400);
+    }
+    if (!datatype) {
+      return sendError(next, "Data Type is required", 400);
     }
 
     const fieldMapping = {
@@ -252,6 +255,7 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
       revisionNo,
       listName,
       filteredData,
+      dataType: datatype,
       contactCount: stats.totalContacts,
       status: "Pending",
     });

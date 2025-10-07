@@ -9,6 +9,13 @@ const CampaignFilterSchema = new Schema(
       required: [true, "Campaign ID is required"],
       index: true,
     },
+    //for the filtration to check whether the data is client data or kestone data or both
+    dataType: {
+      type: String,
+      enum: {
+        values: ["ClientData", "KestoneData", "Both"],
+      },
+    },
 
     filters: [
       {
