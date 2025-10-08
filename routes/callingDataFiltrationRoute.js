@@ -6,6 +6,8 @@ import {
   getPrevCampFiltersByCampaignId,
   assignCallingDataToCampaign,
   companiesMatchedDataWithExcel,
+  clientCallingDataFilter,
+  assignCallingDataToCampaignClientSuggested,
 } from "../controllers/callingDataFiltrationController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -54,5 +56,13 @@ router.post(
   protect,
   companiesMatchedDataWithExcel
 );
+
+router.post(
+  "/assignCallingDataToCampaignClientSuggested",
+  protect,
+  assignCallingDataToCampaignClientSuggested
+);
+
+router.post("/clientCallingDataFilter", protect, clientCallingDataFilter);
 
 export default router;

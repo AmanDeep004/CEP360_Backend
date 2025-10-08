@@ -54,6 +54,7 @@ const CampaignFilterSchema = new Schema(
       default: "Own Data",
       required: true,
     },
+    misc: { type: Object },
   },
   {
     timestamps: true,

@@ -3,6 +3,7 @@ import Contact from "../models/MasterDBModel/contactModel.js";
 import Company from "../models/MasterDBModel/companyModel.js";
 import errorHandler from "../utils/index.js";
 import CallingData from "../models/callingDataModal.js";
+import ClientCompanyList from "../models/clientCompanyList.js";
 import XLSX from "xlsx";
 import csv from "csvtojson";
 import fs from "fs";
@@ -509,7 +510,6 @@ const getPrevCampFiltersByCampaignId = asyncHandler(async (req, res, next) => {
     if (!campaignId) {
       return sendError(next, "Camapign Id is required", 400);
     }
-    console.log("Fetching previous campaign filters for ID:", campaignId);
     const filters = await CampaignFilter.find({ campaignId })
       .sort({
         revisionNo: 1,
@@ -531,7 +531,6 @@ const getPrevCampFiltersByCampaignId = asyncHandler(async (req, res, next) => {
 });
 
 //assign all the calling data filtration to the particular campaign
-
 const assignCallingDataToCampaign = asyncHandler(async (req, res, next) => {
   try {
     const { campaignId, uploadedBy, batch, dataSourceType } = req.body;
@@ -708,11 +707,13 @@ const assignCallingDataToCampaign = asyncHandler(async (req, res, next) => {
   }
 });
 
+//for client suggestion apis
 const companiesMatchedDataWithExcel = asyncHandler(async (req, res, next) => {
   try {
     if (!req.file) {
       return sendError(next, "Please upload an Excel or CSV file", 400);
     }
+    const { campaignId, dataType } = req.body;
 
     const filePath = req.file.path;
     let companyNames = [];
@@ -756,6 +757,11 @@ const companiesMatchedDataWithExcel = asyncHandler(async (req, res, next) => {
     }
 
     fs.unlinkSync(filePath);
+    await ClientCompanyList.create({
+      campaignId,
+      dataType,
+      companyNames,
+    });
 
     if (!Array.isArray(companyNames) || companyNames.length === 0) {
       return sendError(next, "No valid company names found in the file", 400);
@@ -835,6 +841,437 @@ const companiesMatchedDataWithExcel = asyncHandler(async (req, res, next) => {
   }
 });
 
+const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
+  try {
+    const {
+      campaignId,
+      filters = [],
+      exclusions = [],
+      datatype = datatype || "clientData",
+      companyIds = [],
+    } = req.body;
+
+    if (!campaignId) {
+      return sendError(next, "Campaign ID is required", 400);
+    }
+    if (!datatype) {
+      return sendError(next, "Data Type is required", 400);
+    }
+
+    const fieldMapping = {
+      Contact_Country: "Contact_Country",
+      Contact_Region: "Contact_Region",
+      Job_Function: "Job_Function",
+      Job_Seniority: "Job_Seniority",
+      Industry: "company_info.Industry",
+      Employees_Range: "company_info.Employees_Range",
+    };
+
+    const buildMongoQuery = (filtersArr, operator = "$in") => {
+      const q = {};
+      filtersArr.forEach(({ field, value }) => {
+        const mappedField = fieldMapping[field] || field;
+        if (Array.isArray(value) && value.length > 0) {
+          q[mappedField] = { [operator]: value };
+        }
+      });
+      return q;
+    };
+
+    const includeQuery = buildMongoQuery(filters, "$in");
+    const excludeQuery = buildMongoQuery(exclusions, "$nin");
+
+    const companyIdFilter =
+      Array.isArray(companyIds) && companyIds.length > 0
+        ? {
+            Company_ID: {
+              $in: companyIds.map((id) => new mongoose.Types.ObjectId(id)),
+            },
+          }
+        : {};
+
+    req.setTimeout(300000);
+
+    const statsPipeline = [
+      {
+        $lookup: {
+          from: "companies",
+          localField: "Company_ID",
+          foreignField: "_id",
+          as: "company_info",
+        },
+      },
+      {
+        $unwind: {
+          path: "$company_info",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $match: {
+          ...includeQuery,
+          ...excludeQuery,
+          ...companyIdFilter,
+        },
+      },
+      {
+        $addFields: {
+          normalizedIndustry: {
+            $cond: [
+              { $ifNull: ["$company_info.Industry", false] },
+              "$company_info.Industry",
+              "Unknown",
+            ],
+          },
+          normalizedSeniority: {
+            $cond: [
+              { $ifNull: ["$Job_Seniority", false] },
+              "$Job_Seniority",
+              "Unknown",
+            ],
+          },
+        },
+      },
+      {
+        $group: {
+          _id: {
+            industry: "$normalizedIndustry",
+            seniority: "$normalizedSeniority",
+          },
+          count: { $sum: 1 },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          crossTabData: {
+            $push: {
+              industry: "$_id.industry",
+              seniority: "$_id.seniority",
+              count: "$count",
+            },
+          },
+          totalContacts: { $sum: "$count" },
+        },
+      },
+    ];
+
+    // Parallel query for unique companies
+    const [statsResult, uniqueCompaniesCount] = await Promise.all([
+      Contact.aggregate(statsPipeline),
+      Contact.aggregate([
+        {
+          $lookup: {
+            from: "companies",
+            localField: "Company_ID",
+            foreignField: "_id",
+            as: "company_info",
+          },
+        },
+        {
+          $unwind: { path: "$company_info", preserveNullAndEmptyArrays: true },
+        },
+        {
+          $match: {
+            ...includeQuery,
+            ...excludeQuery,
+            ...companyIdFilter,
+          },
+        },
+        { $group: { _id: "$Company_ID" } },
+        { $count: "uniqueCompanies" },
+      ]),
+    ]);
+
+    const stats = statsResult[0] || { crossTabData: [], totalContacts: 0 };
+    const uniqueCompanies = uniqueCompaniesCount[0]?.uniqueCompanies || 0;
+
+    const crossTabData = stats.crossTabData || [];
+
+    const industries = [...new Set(crossTabData.map((i) => i.industry))].sort();
+    const seniorities = [
+      ...new Set(crossTabData.map((i) => i.seniority)),
+    ].sort();
+
+    const crossTabTable = {};
+    const industryTotals = {};
+    const seniorityTotals = {};
+
+    industries.forEach((ind) => {
+      crossTabTable[ind] = {};
+      industryTotals[ind] = 0;
+      seniorities.forEach((sen) => {
+        crossTabTable[ind][sen] = 0;
+      });
+    });
+
+    seniorities.forEach((sen) => {
+      seniorityTotals[sen] = 0;
+    });
+
+    crossTabData.forEach(({ industry, seniority, count }) => {
+      crossTabTable[industry][seniority] = count;
+      industryTotals[industry] += count;
+      seniorityTotals[seniority] += count;
+    });
+
+    const formattedStats = {
+      totalContacts: stats.totalContacts,
+      uniqueCompanies,
+      crossTabulation: {
+        industries,
+        seniorities,
+        data: crossTabTable,
+        industryTotals,
+        seniorityTotals,
+      },
+      industryBreakdown: Object.entries(industryTotals)
+        .sort((a, b) => b[1] - a[1])
+        .reduce((acc, [ind, count]) => ({ ...acc, [ind]: count }), {}),
+      seniorityBreakdown: Object.entries(seniorityTotals)
+        .sort((a, b) => b[1] - a[1])
+        .reduce((acc, [sen, count]) => ({ ...acc, [sen]: count }), {}),
+    };
+
+    const filteredData = {
+      contactCount: stats.totalContacts,
+      summary: formattedStats,
+      contacts: [],
+    };
+
+    const lastFilter = await CampaignFilter.findOne({ campaignId }).sort({
+      revisionNo: -1,
+    });
+
+    let revisionNo = 1;
+    let listName = "List1";
+    if (lastFilter) {
+      revisionNo = lastFilter.revisionNo + 1;
+      listName = `List${revisionNo}`;
+    }
+
+    const campaignFilter = await CampaignFilter.create({
+      campaignId,
+      filters,
+      exclusions,
+      revisionNo,
+      listName,
+      filteredData,
+      dataType: datatype,
+      contactCount: stats.totalContacts,
+      status: "Pending",
+      misc: { companyIdsUsed: companyIds },
+    });
+
+    return sendResponse(
+      res,
+      200,
+      "Campaign Industry vs Job_Seniority stats generated successfully",
+      {
+        filteredData,
+        campaignFilterId: campaignFilter._id,
+        revisionNo,
+        listName,
+      }
+    );
+  } catch (err) {
+    console.error("Campaign filter error:", err);
+    return sendError(
+      next,
+      err.message || "Failed to create campaign filter",
+      500
+    );
+  }
+});
+
+const assignCallingDataToCampaignClientSuggested = asyncHandler(
+  async (req, res, next) => {
+    try {
+      const {
+        campaignId,
+        uploadedBy,
+        batch = "ClientSuggested",
+        dataSourceType = "ClientData",
+      } = req.body;
+
+      if (!campaignId || !uploadedBy) {
+        return sendError(next, "Required fields missing", 400);
+      }
+
+      const lastFilter = await CampaignFilter.findOne({
+        campaignId,
+        dataType: "ClientData",
+      })
+        .sort({ revisionNo: -1, createdAt: -1 })
+        .lean();
+
+      if (!lastFilter) {
+        return sendError(
+          next,
+          "No campaign filter found for this campaign",
+          404
+        );
+      }
+
+      const fieldMapping = {
+        Contact_Country: "Contact_Country",
+        Contact_Region: "Contact_Region",
+        Job_Function: "Job_Function",
+        Job_Seniority: "Job_Seniority",
+        Industry: "company_info.Industry",
+        Employees_Range: "company_info.Employees_Range",
+      };
+
+      const buildMongoQuery = (filtersArr, operator = "$in") => {
+        const q = {};
+        filtersArr.forEach(({ field, value }) => {
+          const mappedField = fieldMapping[field] || field;
+          if (Array.isArray(value) && value.length > 0) {
+            q[mappedField] = { [operator]: value };
+          }
+        });
+        return q;
+      };
+
+      const includeQuery = buildMongoQuery(lastFilter.filters || [], "$in");
+      const excludeQuery = buildMongoQuery(lastFilter.exclusions || [], "$nin");
+
+      // Use aggregation pipeline to get contacts with company lookup
+      const contactsPipeline = [
+        {
+          $lookup: {
+            from: "companies",
+            localField: "Company_ID",
+            foreignField: "_id",
+            as: "company_info",
+          },
+        },
+        {
+          $unwind: {
+            path: "$company_info",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $match: {
+            ...includeQuery,
+            ...excludeQuery,
+          },
+        },
+      ];
+
+      // Get all contacts matching the last filter
+      const contacts = await Contact.aggregate(contactsPipeline);
+
+      if (!contacts.length) {
+        return sendError(next, "No contacts found for this filter", 404);
+      }
+
+      const callingDataEntries = contacts.map((row) => ({
+        CampaignId: new mongoose.Types.ObjectId(campaignId),
+        UploadedBy: new mongoose.Types.ObjectId(uploadedBy),
+        source: "ClientSuggested",
+        batch: batch || "",
+        dataSourceType: dataSourceType || "Client",
+        // isDataSourceApproved: isDataSourceApproved || false,
+
+        // Contact fields
+        Contact_ID: row.Contact_ID,
+        Contact_Source: row.Contact_Source,
+        Contact_Create_Date: row.Contact_Create_Date,
+        Salutation: row.Salutation,
+        First_Name: row.First_Name,
+        Last_Name: row.Last_Name,
+        Full_Name: row.Full_Name,
+        Gender: row.Gender,
+        Job_Title: row.Job_Title,
+        Job_Seniority: row.Job_Seniority,
+        Job_Function: row.Job_Function,
+        Contact_Address_1: row.Contact_Address_1,
+        Contact_Address_2: row.Contact_Address_2,
+        Contact_Address_3: row.Contact_Address_3,
+        Contact_City: row.Contact_City,
+        Contact_Pin: row.Contact_Pin,
+        Contact_State: row.Contact_State,
+        Contact_Region: row.Contact_Region,
+        Contact_Country: row.Contact_Country,
+        Contact_STD_ISD_Code: row.Contact_STD_ISD_Code,
+        Contact_Location_Tier: row.Contact_Location_Tier,
+        Contact_Direct_Phone1: row.Contact_Direct_Phone1,
+        Contact_Direct_Phone2: row.Contact_Direct_Phone2,
+        Contact_Extn_No: row.Contact_Extn_No,
+        Mobile_No: row.Mobile_No,
+        Office_Email_1: row.Office_Email_1,
+        Office_Email_2: row.Office_Email_2,
+        Personal_Email1: row.Personal_Email1,
+        Personal_Email2: row.Personal_Email2,
+        Contact_LinkedIn_Profile: row.Contact_LinkedIn_Profile,
+        Unsubscribe_Flag: row.Unsubscribe_Flag,
+        Unsubscribe_Account_Tag: row.Unsubscribe_Account_Tag,
+        DND_Flag: row.DND_Flag,
+        DND_Account_Tag: row.DND_Account_Tag,
+        Last_Engagement: row.Last_Engagement,
+        Last_Engagement_Date: row.Last_Engagement_Date,
+        Last_Engagement_Campaign: row.Last_Engagement_Campaign,
+        Telecalling_Remarks: row.Telecalling_Remarks,
+        Company_ID: row.company_info?._id
+          ? new mongoose.Types.ObjectId(row.company_info._id)
+          : null,
+        Company_Name: row.company_info?.Company_Name || "",
+        Company_ID_Kestone: row.company_info?.Company_ID_Kestone || "",
+        Affinity_ID_Dell: row.company_info?.Affinity_ID_Dell || "",
+        Company_ID_Google: row.company_info?.Company_ID_Google || "",
+        Company_Source: row.company_info?.Company_Source || "",
+        Year_Founded: row.company_info?.Year_Founded || "",
+        Turnover_Range: row.company_info?.Turnover_Range || "",
+        Employees_Range: row.company_info?.Employees_Range || "",
+        Industry: row.company_info?.Industry || "",
+        Sub_Industry: row.company_info?.Sub_Industry || "",
+        Company_Segment: row.company_info?.Company_Segment || "",
+        Website: row.company_info?.Website || "",
+        Company_LinkedIn_Profile:
+          row.company_info?.Company_LinkedIn_Profile || "",
+        Company_Phone1: row.company_info?.Company_Phone1 || "",
+        Company_Phone2: row.company_info?.Company_Phone2 || "",
+      }));
+
+      const batchSize = 1000;
+      let insertedCount = 0;
+      for (let i = 0; i < callingDataEntries.length; i += batchSize) {
+        const batch = callingDataEntries.slice(i, i + batchSize);
+        try {
+          await CallingData.insertMany(batch, { ordered: false });
+          insertedCount += batch.length;
+        } catch (err) {
+          console.error("InsertMany error:", err);
+        }
+      }
+
+      return sendResponse(
+        res,
+        200,
+        "Calling data assigned to campaign (client suggested) successfully",
+        {
+          contacts,
+          campaignId,
+          insertedCount,
+        }
+      );
+    } catch (err) {
+      console.error(
+        "Error assigning calling data to campaign (client suggested):",
+        err
+      );
+      return sendError(
+        next,
+        err.message ||
+          "Failed to assign calling data to campaign (client suggested)",
+        500
+      );
+    }
+  }
+);
+
 export {
   callingDataFilter,
   callingDataFilterLightweight,
@@ -842,4 +1279,6 @@ export {
   getPrevCampFiltersByCampaignId,
   assignCallingDataToCampaign,
   companiesMatchedDataWithExcel,
+  clientCallingDataFilter,
+  assignCallingDataToCampaignClientSuggested,
 };
