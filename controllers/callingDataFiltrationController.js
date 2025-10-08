@@ -1091,7 +1091,7 @@ const assignCallingDataToCampaignClientSuggested = asyncHandler(
         campaignId,
         uploadedBy,
         batch = "ClientSuggested",
-        dataSourceType = "ClientData",
+        dataSourceType = "Client",
       } = req.body;
 
       if (!campaignId || !uploadedBy) {
