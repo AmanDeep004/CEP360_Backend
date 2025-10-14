@@ -1,6 +1,7 @@
 import CampaignFilter from "../models/CallingDataFiltrationModel.js";
 import Contact from "../models/MasterDBModel/contactModel.js";
 import Company from "../models/MasterDBModel/companyModel.js";
+import Campaign from "../models/campaignModel.js";
 import errorHandler from "../utils/index.js";
 import CallingData from "../models/callingDataModal.js";
 import ClientCompanyList from "../models/clientCompanyList.js";
@@ -685,6 +686,13 @@ const assignCallingDataToCampaign = asyncHandler(async (req, res, next) => {
         console.error("InsertMany error:", err);
       }
     }
+
+    //update campaign  here
+    await Campaign.findByIdAndUpdate(
+      { _id: campaignId },
+      { isCallingDataAssigned: true },
+      { new: true }
+    );
 
     return sendResponse(
       res,

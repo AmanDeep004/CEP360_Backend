@@ -103,6 +103,7 @@ const campaignSchema = new mongoose.Schema(
         "Finalized",
       ],
     },
+    isCallingDataAssigned: { type: Boolean, default: false },
 
     // brief: {
     //   type: [briefSchema],
