@@ -8,6 +8,7 @@ import {
   companiesMatchedDataWithExcel,
   clientCallingDataFilter,
   assignCallingDataToCampaignClientSuggested,
+  assignCallingDataToCampaignBoth,
 } from "../controllers/callingDataFiltrationController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -61,6 +62,11 @@ router.post(
   "/assignCallingDataToCampaignClientSuggested",
   protect,
   assignCallingDataToCampaignClientSuggested
+);
+router.post(
+  "/assignCallingDataToCampaignBoth",
+  protect,
+  assignCallingDataToCampaignBoth
 );
 
 router.post("/clientCallingDataFilter", protect, clientCallingDataFilter);
