@@ -887,7 +887,7 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
       campaignId,
       filters = [],
       exclusions = [],
-      datatype = datatype || "clientData",
+      datatype = datatype || "Client",
       companyIds = [],
     } = req.body;
 

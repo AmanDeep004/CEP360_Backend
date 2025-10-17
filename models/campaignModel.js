@@ -24,7 +24,7 @@ const campaignSchema = new mongoose.Schema(
 
     category: {
       type: String,
-      required: true,
+      required: false,
       enum: ["Virtual Event", "Webinar", "Physical Event"],
     },
 
