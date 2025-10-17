@@ -276,6 +276,7 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
       contactCount: stats.totalContacts,
       status: "Pending",
     });
+    await Campaign.findByIdAndUpdate(campaignId, { stage: "Filtered" });
 
     return sendResponse(
       res,

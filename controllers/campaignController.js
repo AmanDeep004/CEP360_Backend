@@ -424,7 +424,12 @@ const updateCampaignStage = asyncHandler(async (req, res, next) => {
     campaign.stage = stage;
     await campaign.save();
 
-    return sendResponse(res, 200, "Stage updated successfully", campaign);
+    return sendResponse(
+      res,
+      200,
+      `Stage updated to ${stage} successfully`,
+      campaign
+    );
   } catch (error) {
     return sendError(next, error.message, 500);
   }

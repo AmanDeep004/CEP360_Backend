@@ -98,11 +98,13 @@ const campaignSchema = new mongoose.Schema(
       default: "NotFiltered",
       enum: {
         values: [
-          // "NotFiltered",
-          // "SuggestToClient",
-          "ClientSuggestMoreFilters",
+          "NotFiltered",
+          "Filtered",
+          "SuggestedToClient",
+          "ClientSuggestedMoreFilters",
           "RevisionRequested",
           "Finalized",
+          "CallingDataAssigned",
         ],
         message: "{VALUE} is not a valid stage",
       },
