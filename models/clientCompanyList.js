@@ -11,8 +11,9 @@ const clientCompanyListSchema = new mongoose.Schema(
     dataType: {
       type: String,
       enum: {
-        values: ["ClientData", "KestoneData", "Both"],
+        values: ["Kestone", "Client", "Both", "ThirdParty"],
       },
+      default: "Kestone",
     },
     companyNames: [
       {
