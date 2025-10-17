@@ -1153,7 +1153,7 @@ const assignCallingDataToCampaignClientSuggested = asyncHandler(
 
       const lastFilter = await CampaignFilter.findOne({
         campaignId,
-        dataType: "ClientData",
+        dataType: "Client",
       })
         .sort({ revisionNo: -1, createdAt: -1 })
         .lean();
