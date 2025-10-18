@@ -1312,6 +1312,12 @@ const assignCallingDataToCampaignClientSuggested = asyncHandler(
           console.error("InsertMany error:", err);
         }
       }
+      //update campaign  here
+      await Campaign.findByIdAndUpdate(
+        { _id: campaignId },
+        { isCallingDataAssigned: true },
+        { new: true }
+      );
 
       return sendResponse(
         res,
@@ -1691,6 +1697,13 @@ const assignCallingDataToCampaignBoth = asyncHandler(async (req, res, next) => {
     const clientCount = callingDataEntries.filter(
       (e) => e.batch === "Client"
     ).length;
+
+    //update campaign  here
+    await Campaign.findByIdAndUpdate(
+      { _id: campaignId },
+      { isCallingDataAssigned: true },
+      { new: true }
+    );
 
     return sendResponse(
       res,
