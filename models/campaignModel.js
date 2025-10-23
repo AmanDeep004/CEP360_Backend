@@ -89,6 +89,7 @@ const campaignSchema = new mongoose.Schema(
     dataSourceType: {
       type: String,
       required: false,
+      default: "Kestone",
       enum: ["Kestone", "Client", "Both", "ThirdParty"],
     },
 
