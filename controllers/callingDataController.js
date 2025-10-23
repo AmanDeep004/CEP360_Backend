@@ -2,6 +2,7 @@ import Campaign from "../models/campaignModel.js";
 import errorHandler from "../utils/index.js";
 import User from "../models/userModel.js";
 import CallingData from "../models/callingDataModal.js";
+import CallingDataEditApproval from "../models/callingDataEditApprovalModel.js";
 import { UserRoleEnum } from "../utils/enum.js";
 import XLSX from "xlsx";
 
@@ -169,17 +170,43 @@ const getCallingDataById = asyncHandler(async (req, res, next) => {
  * @route PUT /api/callingData/:id
  * @access Private
  */
+
 const editcallingData = asyncHandler(async (req, res, next) => {
   try {
-    const updatedEntry = await CallingData.findByIdAndUpdate(
-      req.body._id,
-      req.body,
-      { new: true, runValidators: true, lean: true }
-    );
-    if (!updatedEntry) {
+    const { _id, ...updateFields } = req.body;
+    const existingEntry = await CallingData.findById(_id).lean();
+    if (!existingEntry) {
       return sendError(next, "Entry not found", 404);
     }
-    return sendResponse(res, 200, "Entry updated successfully", updatedEntry);
+
+    const changedFields = [];
+    Object.keys(updateFields).forEach((key) => {
+      if (existingEntry[key] !== updateFields[key]) {
+        changedFields.push({
+          field: key,
+          oldValue: existingEntry[key],
+          newValue: updateFields[key],
+        });
+      }
+    });
+
+    if (changedFields.length === 0) {
+      return sendError(next, "No changes detected", 400);
+    }
+
+    await CallingDataEditApproval.create({
+      callingDataId: _id,
+      contact_Id: existingEntry.Contact_ID,
+      requestedBy: req.user?._id,
+      changedFields,
+      status: "Pending",
+      requestedAt: new Date(),
+    });
+
+    return sendResponse(res, 200, "Edit request submitted for approval", {
+      callingDataId: _id,
+      changedFields,
+    });
   } catch (err) {
     return sendError(next, err.message, 500);
   }
