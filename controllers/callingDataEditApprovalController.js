@@ -1,4 +1,4 @@
-import CallingDataEditApproval from "../models/callingDataEditApprovalModel";
+import CallingDataEditApproval from "../models/callingDataEditApprovalModel.js";
 import errorHandler from "../utils/index.js";
 import { updateData } from "./masterDbController/masterController.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
@@ -45,20 +45,17 @@ const approveOrRejectEditRequest = asyncHandler(async (req, res, next) => {
     await editRequest.save();
 
     if (status === "Approved") {
-      // Build update payload from changedFields
       const updatePayload = {};
       editRequest.changedFields.forEach((change) => {
         updatePayload[change.field] = change.newValue;
       });
 
-      // Call updateData controller logic directly
-      req.params.id = editRequest.callingDataId; // Set contact ID
+      req.params.id = editRequest.callingDataId;
       req.body = updatePayload;
       await updateData(req, res, next); // This will send the response
       return; // Prevent double response
     }
 
-    // If rejected, just send response
     return sendResponse(res, 200, "Edit request status updated", {
       id: editRequest._id,
       status: editRequest.status,

@@ -31,6 +31,9 @@ const startServer = async () => {
     ).default;
     const masterDBRoutes = (await import("./routes/masterRoute/masterRoute.js"))
       .default;
+    const callingDataEditApprovalRoutes = (
+      await import("./routes/callingDataEditApprovalRoute.js")
+    ).default;
 
     console.log("Routes loaded successfully");
 
@@ -67,6 +70,7 @@ const startServer = async () => {
     app.use("/api/attendence", attendenceRoutes);
     app.use("/api/masterdb", masterDBRoutes);
     app.use("/api/filtration", callingDataFiltrationRoutes);
+    app.use("/api/callingDataEditApproval", callingDataEditApprovalRoutes);
 
     app.use("*", (req, res) => {
       res.status(404).json({
