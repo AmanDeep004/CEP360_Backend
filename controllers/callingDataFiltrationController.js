@@ -1137,7 +1137,7 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
   }
 });
 
-const assignCallingDataToCampaignClientSuggested = asyncHandler(
+const assignCallingDataToCampaignClientSuggestedOld = asyncHandler(
   async (req, res, next) => {
     try {
       const {
@@ -1327,6 +1327,219 @@ const assignCallingDataToCampaignClientSuggested = asyncHandler(
           contacts,
           campaignId,
           insertedCount,
+        }
+      );
+    } catch (err) {
+      console.error(
+        "Error assigning calling data to campaign (client suggested):",
+        err
+      );
+      return sendError(
+        next,
+        err.message ||
+          "Failed to assign calling data to campaign (client suggested)",
+        500
+      );
+    }
+  }
+);
+const assignCallingDataToCampaignClientSuggested = asyncHandler(
+  async (req, res, next) => {
+    try {
+      const {
+        campaignId,
+        uploadedBy,
+        batch = "ClientSuggested",
+        dataSourceType = "Client",
+      } = req.body;
+
+      if (!campaignId || !uploadedBy) {
+        return sendError(next, "Required fields missing", 400);
+      }
+
+      // 🔹 Find the latest client-specific filter for the campaign
+      const lastFilter = await CampaignFilter.findOne({
+        campaignId,
+        dataType: "Client",
+      })
+        .sort({ revisionNo: -1, createdAt: -1 })
+        .lean();
+
+      if (!lastFilter) {
+        return sendError(next, "No client filter found for this campaign", 404);
+      }
+
+      // 🔹 Map between filter fields and DB schema fields
+      const fieldMapping = {
+        Industry: "company_info.Industry",
+        Sub_Industry: "company_info.Sub_Industry",
+        Company_Segment: "company_info.Company_Segment",
+        Employees_Range: "company_info.Employees_Range",
+        Turnover_Range: "company_info.Turnover_Range",
+        Contact_Country: "Contact_Country",
+        Contact_State: "Contact_State",
+        Contact_Region: "Contact_Region",
+        Contact_City: "Contact_City",
+        Job_Function: "Job_Function",
+        Job_Seniority: "Job_Seniority",
+      };
+
+      // 🔹 Helper to build Mongo queries dynamically
+      const buildMongoQuery = (filtersArr, operator = "$in") => {
+        const q = {};
+        if (!Array.isArray(filtersArr) || filtersArr.length === 0) {
+          return q;
+        }
+
+        filtersArr.forEach(({ field, value }) => {
+          const mappedField = fieldMapping[field] || field;
+          if (Array.isArray(value) && value.length > 0) {
+            q[mappedField] = { [operator]: value };
+          }
+        });
+        return q;
+      };
+
+      // 🔹 Build include and exclude queries
+      const includeQuery = buildMongoQuery(lastFilter.filters || [], "$in");
+      const excludeQuery = buildMongoQuery(lastFilter.exclusions || [], "$nin");
+
+      // 🔹 Build aggregation pipeline with proper $match stage
+      const contactsPipeline = [
+        {
+          $lookup: {
+            from: "companies",
+            localField: "Company_ID",
+            foreignField: "_id",
+            as: "company_info",
+          },
+        },
+        {
+          $unwind: {
+            path: "$company_info",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $match: {
+            // Filter by specific companies used in the filter
+            ...(lastFilter.misc?.companyIdsUsed &&
+            lastFilter.misc.companyIdsUsed.length > 0
+              ? {
+                  Company_ID: {
+                    $in: lastFilter.misc.companyIdsUsed.map(
+                      (id) => new mongoose.Types.ObjectId(id)
+                    ),
+                  },
+                }
+              : {}),
+            ...includeQuery,
+            ...excludeQuery,
+          },
+        },
+      ];
+
+      // 🔹 Execute the aggregation
+      const contacts = await Contact.aggregate(contactsPipeline);
+
+      if (!contacts.length) {
+        return sendError(next, "No contacts found for this filter", 404);
+      }
+
+      // 🔹 Prepare calling data entries
+      const callingDataEntries = contacts.map((row) => ({
+        CampaignId: new mongoose.Types.ObjectId(campaignId),
+        UploadedBy: new mongoose.Types.ObjectId(uploadedBy),
+        source: "ClientSuggested",
+        batch,
+        dataSourceType,
+        Contact_ID: row.Contact_ID,
+        Contact_Source: row.Contact_Source,
+        Contact_Create_Date: row.Contact_Create_Date,
+        Salutation: row.Salutation,
+        First_Name: row.First_Name,
+        Last_Name: row.Last_Name,
+        Full_Name: row.Full_Name,
+        Gender: row.Gender,
+        Job_Title: row.Job_Title,
+        Job_Seniority: row.Job_Seniority,
+        Job_Function: row.Job_Function,
+        Contact_Address_1: row.Contact_Address_1,
+        Contact_Address_2: row.Contact_Address_2,
+        Contact_Address_3: row.Contact_Address_3,
+        Contact_City: row.Contact_City,
+        Contact_Pin: row.Contact_Pin,
+        Contact_State: row.Contact_State,
+        Contact_Region: row.Contact_Region,
+        Contact_Country: row.Contact_Country,
+        Contact_STD_ISD_Code: row.Contact_STD_ISD_Code,
+        Contact_Location_Tier: row.Contact_Location_Tier,
+        Contact_Direct_Phone1: row.Contact_Direct_Phone1,
+        Contact_Direct_Phone2: row.Contact_Direct_Phone2,
+        Contact_Extn_No: row.Contact_Extn_No,
+        Mobile_No: row.Mobile_No,
+        Office_Email_1: row.Office_Email_1,
+        Office_Email_2: row.Office_Email_2,
+        Personal_Email1: row.Personal_Email1,
+        Personal_Email2: row.Personal_Email2,
+        Contact_LinkedIn_Profile: row.Contact_LinkedIn_Profile,
+        Unsubscribe_Flag: row.Unsubscribe_Flag,
+        Unsubscribe_Account_Tag: row.Unsubscribe_Account_Tag,
+        DND_Flag: row.DND_Flag,
+        DND_Account_Tag: row.DND_Account_Tag,
+        Last_Engagement: row.Last_Engagement,
+        Last_Engagement_Date: row.Last_Engagement_Date,
+        Last_Engagement_Campaign: row.Last_Engagement_Campaign,
+        Telecalling_Remarks: row.Telecalling_Remarks,
+        Company_ID: row.company_info?._id
+          ? new mongoose.Types.ObjectId(row.company_info._id)
+          : null,
+        Company_Name: row.company_info?.Company_Name || "",
+        Company_ID_Kestone: row.company_info?.Company_ID_Kestone || "",
+        Affinity_ID_Dell: row.company_info?.Affinity_ID_Dell || "",
+        Company_ID_Google: row.company_info?.Company_ID_Google || "",
+        Company_Source: row.company_info?.Company_Source || "",
+        Year_Founded: row.company_info?.Year_Founded || "",
+        Turnover_Range: row.company_info?.Turnover_Range || "",
+        Employees_Range: row.company_info?.Employees_Range || "",
+        Industry: row.company_info?.Industry || "",
+        Sub_Industry: row.company_info?.Sub_Industry || "",
+        Company_Segment: row.company_info?.Company_Segment || "",
+        Website: row.company_info?.Website || "",
+        Company_LinkedIn_Profile:
+          row.company_info?.Company_LinkedIn_Profile || "",
+        Company_Phone1: row.company_info?.Company_Phone1 || "",
+        Company_Phone2: row.company_info?.Company_Phone2 || "",
+      }));
+
+      // 🔹 Insert data in batches
+      const batchSize = 1000;
+      let insertedCount = 0;
+      for (let i = 0; i < callingDataEntries.length; i += batchSize) {
+        const batch = callingDataEntries.slice(i, i + batchSize);
+        try {
+          await CallingData.insertMany(batch, { ordered: false });
+          insertedCount += batch.length;
+        } catch (err) {
+          console.error("InsertMany error:", err);
+        }
+      }
+
+      // 🔹 Mark campaign as data assigned
+      await Campaign.findByIdAndUpdate(
+        { _id: campaignId },
+        { isCallingDataAssigned: true },
+        { new: true }
+      );
+
+      return sendResponse(
+        res,
+        200,
+        "Client-suggested calling data assigned successfully",
+        {
+          contactsCount: contacts.length,
+          insertedCount,
+          campaignId,
         }
       );
     } catch (err) {
