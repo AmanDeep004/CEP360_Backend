@@ -95,8 +95,14 @@ const userSchema = new Schema(
     },
     signature: {
       type: String,
-      required: [true, "Signature is required"],
+      // required: [true, "Signature is required"],
       trim: true,
+      default:
+        "https://cdn.vosmos.live/CxoAdmin/image/1761718616440_download.png",
+      set: (v) =>
+        v && v.trim() !== ""
+          ? v
+          : "https://cdn.vosmos.live/CxoAdmin/image/1761718616440_download.png",
     },
     mobile: {
       type: Number,
