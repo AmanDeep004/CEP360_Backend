@@ -8,6 +8,7 @@ import {
   getUsersByRole,
   deleteUser,
   logout,
+  resetUserPassword,
   // getUsers,
 } from "../controllers/userController.js";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -23,13 +24,16 @@ const {
   ALL,
 } = UserRoleEnum;
 const router = Router();
+
 router.post(
   "/register",
   protect,
   authorize(ADMIN, RESOURCE_MANAGER),
   registerUser
 );
+
 router.post("/login", loginUser);
+
 router.get("/user", protect, authorize(...ALL), getUserProfile);
 router.put(
   "/user",
@@ -42,6 +46,12 @@ router.get(
   protect,
   authorize(ADMIN, RESOURCE_MANAGER, PROGRAM_MANAGER),
   getAllUsers
+);
+router.put(
+  "/resetPassword",
+  protect,
+  authorize(RESOURCE_MANAGER, ADMIN),
+  resetUserPassword
 );
 
 router.get("/users-by-role", protect, authorize(...ALL), getUsersByRole);

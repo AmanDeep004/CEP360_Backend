@@ -86,6 +86,34 @@ const registerUser = asyncHandler(async (req, res, next) => {
   }
 });
 
+const resetUserPassword = asyncHandler(async (req, res, next) => {
+  try {
+    const { userId, newPassword } = req.body;
+
+    if (!userId || !newPassword) {
+      return sendError(next, "User ID and new password are required", 400);
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return sendError(next, "User not found", 404);
+    }
+
+    // const salt = await bcrypt.genSalt(10);
+    // const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    user.password = newPassword;
+    await user.save();
+
+    return sendResponse(res, 200, "Password reset successfully", {
+      userId: user._id,
+      employeeName: user.employeeName,
+      email: user.email,
+    });
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
 /**
  * @desc    Authenticate a user
  * @route   POST /api/users/login
@@ -342,6 +370,7 @@ const logout = asyncHandler(async (req, res, next) => {
 });
 
 export {
+  resetUserPassword,
   registerUser,
   loginUser,
   updateUserProfile,
