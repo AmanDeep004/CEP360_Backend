@@ -17,7 +17,7 @@ function parseDate(value) {
   return isNaN(d.getTime()) ? null : d;
 }
 
-const batchCreateFromExcel = asyncHandler(async (req, res, next) => {
+const batchCreateFromExcelOld = asyncHandler(async (req, res, next) => {
   try {
     if (!req.file) {
       return sendError(next, "No file uploaded", 400);
@@ -365,6 +365,335 @@ const batchCreateFromExcel = asyncHandler(async (req, res, next) => {
     return sendError(next, err.message || "Batch insert failed", 500);
   }
 });
+const batchCreateFromExcel = asyncHandler(async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return sendError(next, "No file uploaded", 400);
+    }
+
+    // 1. Parse Excel (keep original headers)
+    const workbook = XLSX.readFile(req.file.path);
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+    let skippedContacts = 0;
+    let contactsCreated = 0;
+    let companiesCreated = 0;
+    const skippedLogs = [];
+
+    // Parse date function
+    const parseDate = (dateStr) => {
+      if (!dateStr) return null;
+      const date = new Date(dateStr);
+      return isNaN(date.getTime()) ? null : date;
+    };
+
+    // --- Step 1: Collect all unique companies ---
+    const uniqueCompanies = new Set();
+    const companyRowMap = new Map(); // Cache first occurrence of each company
+
+    for (const r of rows) {
+      if (r.Company_Name && r.Company_Name.trim()) {
+        const companyName = r.Company_Name.trim();
+        uniqueCompanies.add(companyName);
+        if (!companyRowMap.has(companyName)) {
+          companyRowMap.set(companyName, r);
+        }
+      }
+    }
+
+    // --- Step 2: Bulk upsert companies ---
+    const companyOps = [];
+    for (const companyName of uniqueCompanies) {
+      const companyRow = companyRowMap.get(companyName);
+
+      companyOps.push({
+        updateOne: {
+          filter: { Company_Name: companyName },
+          update: {
+            $set: {
+              Company_ID_Kestone: companyRow.Company_ID_Kestone || "",
+              Affinity_ID_Dell: companyRow.Affinity_ID_Dell || "",
+              Company_ID_Google: companyRow.Company_ID_Google || "",
+              Company_Source: companyRow.Company_Source || "",
+              Company_Name: companyRow.Company_Name,
+              Year_Founded: companyRow.Year_Founded || "",
+              Turnover_Range: companyRow.Turnover_Range || "",
+              Employees_Range: companyRow.Employees_Range || "",
+              Industry: companyRow.Industry || "",
+              Sub_Industry: companyRow.Sub_Industry || "",
+              Company_Segment: companyRow.Company_Segment || "",
+              Website: companyRow.Website || "",
+              Company_LinkedIn_Profile:
+                companyRow.Company_LinkedIn_Profile || "",
+              Company_Phone1: companyRow.Company_Phone1 || "",
+              Company_Phone2: companyRow.Company_Phone2 || "",
+            },
+          },
+          upsert: true,
+        },
+      });
+    }
+
+    // Process companies in chunks
+    const companyChunkSize = 1000;
+    for (let i = 0; i < companyOps.length; i += companyChunkSize) {
+      const chunk = companyOps.slice(i, i + companyChunkSize);
+      const companyResult = await Company.bulkWrite(chunk, {
+        ordered: false,
+        writeConcern: { w: 1 },
+      });
+      companiesCreated += companyResult.upsertedCount;
+    }
+
+    // --- Step 3: Get company mapping in one query ---
+    const allCompanyDocs = await Company.find(
+      { Company_Name: { $in: [...uniqueCompanies] } },
+      { Company_Name: 1 }
+    ).lean();
+
+    const companyMap = new Map();
+    for (const c of allCompanyDocs) {
+      companyMap.set(c.Company_Name, c._id);
+    }
+
+    // --- Step 4: Bulk duplicate check optimization ---
+    const safeString = (value) => {
+      if (value == null || value === "") return "";
+      return String(value).trim();
+    };
+
+    const phonesToCheck = new Set();
+    const emailsToCheck = new Set();
+
+    for (const r of rows) {
+      const phone1 = safeString(r.Contact_Direct_Phone1);
+      const phone2 = safeString(r.Contact_Direct_Phone2);
+      const email1 = safeString(r.Personal_Email1);
+      const email2 = safeString(r.Personal_Email2);
+
+      if (phone1) phonesToCheck.add(phone1);
+      if (phone2) phonesToCheck.add(phone2);
+      if (email1) emailsToCheck.add(email1.toLowerCase());
+      if (email2) emailsToCheck.add(email2.toLowerCase());
+    }
+
+    const existingContacts = await Contact.find(
+      {
+        $or: [
+          { Contact_Direct_Phone1: { $in: [...phonesToCheck] } },
+          { Contact_Direct_Phone2: { $in: [...phonesToCheck] } },
+          { Personal_Email1: { $in: [...emailsToCheck] } },
+          { Personal_Email2: { $in: [...emailsToCheck] } },
+        ],
+      },
+      {
+        Contact_Direct_Phone1: 1,
+        Contact_Direct_Phone2: 1,
+        Personal_Email1: 1,
+        Personal_Email2: 1,
+        Contact_ID: 1,
+      }
+    ).lean();
+
+    const duplicatePhoneMap = new Set();
+    const duplicateEmailMap = new Set();
+
+    for (const contact of existingContacts) {
+      if (contact.Contact_Direct_Phone1)
+        duplicatePhoneMap.add(contact.Contact_Direct_Phone1);
+      if (contact.Contact_Direct_Phone2)
+        duplicatePhoneMap.add(contact.Contact_Direct_Phone2);
+      if (contact.Personal_Email1)
+        duplicateEmailMap.add(contact.Personal_Email1.toLowerCase());
+      if (contact.Personal_Email2)
+        duplicateEmailMap.add(contact.Personal_Email2.toLowerCase());
+    }
+
+    // --- 🧠 Step 5a: Get latest sequential Contact_ID before processing ---
+    const lastContact = await Contact.findOne({}, { Contact_ID: 1 })
+      .sort({ _id: -1 })
+      .lean();
+
+    let lastNumber = 0;
+    if (lastContact?.Contact_ID) {
+      const match = lastContact.Contact_ID.match(/CEP-A-(\d+)/);
+      if (match) lastNumber = parseInt(match[1]);
+    }
+
+    // --- Step 5b: Build contact bulk ops with optimized duplicate checks ---
+    const contactOps = [];
+    const validRows = [];
+
+    for (const r of rows) {
+      // ✅ Only skip if Company_Name is missing
+      if (!r.Company_Name) {
+        skippedContacts++;
+        skippedLogs.push({
+          reason: "Missing Company_Name",
+          Contact_ID: r.Contact_ID || "N/A",
+          Company_Name: r.Company_Name || "N/A",
+        });
+        continue;
+      }
+
+      // ✅ Generate Contact_ID sequentially if missing
+      if (!r.Contact_ID || String(r.Contact_ID).trim() === "") {
+        lastNumber += 1;
+        r.Contact_ID = `CEP-A-${String(lastNumber).padStart(6, "0")}`;
+      }
+
+      const companyId = companyMap.get(r.Company_Name);
+      if (!companyId) {
+        skippedContacts++;
+        skippedLogs.push({
+          reason: "Company not found after upsert",
+          Contact_ID: r.Contact_ID,
+          Company_Name: r.Company_Name,
+        });
+        continue;
+      }
+
+      let isDuplicate = false;
+      let duplicateReason = "";
+
+      const phone1 = safeString(r.Contact_Direct_Phone1);
+      const phone2 = safeString(r.Contact_Direct_Phone2);
+      const email1 = safeString(r.Personal_Email1);
+      const email2 = safeString(r.Personal_Email2);
+
+      if (phone1 && duplicatePhoneMap.has(phone1)) {
+        isDuplicate = true;
+        duplicateReason = "Contact_Direct_Phone1 exists";
+      } else if (phone2 && duplicatePhoneMap.has(phone2)) {
+        isDuplicate = true;
+        duplicateReason = "Contact_Direct_Phone2 exists";
+      } else if (email1 && duplicateEmailMap.has(email1.toLowerCase())) {
+        isDuplicate = true;
+        duplicateReason = "Personal_Email1 exists";
+      } else if (email2 && duplicateEmailMap.has(email2.toLowerCase())) {
+        isDuplicate = true;
+        duplicateReason = "Personal_Email2 exists";
+      }
+
+      if (isDuplicate) {
+        skippedContacts++;
+        skippedLogs.push({
+          reason: `Duplicate: ${duplicateReason}`,
+          Contact_ID: r.Contact_ID,
+          Company_Name: r.Company_Name,
+        });
+        continue;
+      }
+
+      validRows.push({ row: r, companyId });
+    }
+
+    // --- Step 6: Build and insert contacts ---
+    for (const { row: r, companyId } of validRows) {
+      contactOps.push({
+        updateOne: {
+          filter: { Contact_ID: r.Contact_ID },
+          update: {
+            $set: {
+              Contact_ID: safeString(r.Contact_ID),
+              Contact_Source: safeString(r.Contact_Source),
+              Contact_Create_Date: parseDate(r.Contact_Create_Date),
+              Salutation: safeString(r.Salutation),
+              First_Name: safeString(r.First_Name),
+              Last_Name: safeString(r.Last_Name),
+              Full_Name: safeString(r.Full_Name),
+              Gender: safeString(r.Gender),
+              Job_Title: safeString(r.Job_Title),
+              Job_Seniority: safeString(r.Job_Seniority),
+              Job_Function: safeString(r.Job_Function),
+              Contact_Address_1: safeString(r.Contact_Address_1),
+              Contact_Address_2: safeString(r.Contact_Address_2),
+              Contact_Address_3: safeString(r.Contact_Address_3),
+              Contact_City: safeString(r.Contact_City),
+              Contact_Pin: safeString(r.Contact_Pin),
+              Contact_State: safeString(r.Contact_State),
+              Contact_Region: safeString(r.Contact_Region),
+              Contact_Country: safeString(r.Contact_Country),
+              Contact_STD_ISD_Code: safeString(r.Contact_STD_ISD_Code),
+              Contact_Location_Tier: safeString(r.Contact_Location_Tier),
+              Contact_Direct_Phone1: safeString(r.Contact_Direct_Phone1),
+              Contact_Direct_Phone2: safeString(r.Contact_Direct_Phone2),
+              Contact_Extn_No: safeString(r.Contact_Extn_No),
+              Mobile_No: safeString(r.Mobile_No),
+              Office_Email_1: safeString(r.Office_Email_1).toLowerCase(),
+              Office_Email_2: safeString(r.Office_Email_2).toLowerCase(),
+              Personal_Email1: safeString(r.Personal_Email1).toLowerCase(),
+              Personal_Email2: safeString(r.Personal_Email2).toLowerCase(),
+              Contact_LinkedIn_Profile: safeString(r.Contact_LinkedIn_Profile),
+              Unsubscribe_Flag: safeString(r["Unsubscribe Flag (Yes/No)"]),
+              Unsubscribe_Account_Tag: safeString(r.Unsubscribe_Account_Tag),
+              DND_Flag: safeString(r["DND Flag (Yes/No)"]),
+              DND_Account_Tag: safeString(r.DND_Account_Tag),
+              Last_Engagement: safeString(r.Last_Engagement),
+              Last_Engagement_Date: parseDate(r.Last_Engagement_Date),
+              Last_Engagement_Campaign: safeString(r.Last_Engagement_Campaign),
+              Telecalling_Remarks: safeString(r.Telecalling_Remarks),
+              BatchName: req.body.batchName || "default_batch",
+              Company_ID: companyId,
+            },
+          },
+          upsert: true,
+        },
+      });
+    }
+
+    // --- Step 7: Process contacts in chunks ---
+    const contactChunkSize = 2000;
+    const promises = [];
+    const maxConcurrency = 3;
+
+    for (let i = 0; i < contactOps.length; i += contactChunkSize) {
+      const chunk = contactOps.slice(i, i + contactChunkSize);
+      const promise = Contact.bulkWrite(chunk, {
+        ordered: false,
+        writeConcern: { w: 1 },
+      }).then((result) => {
+        contactsCreated += result.upsertedCount;
+      });
+      promises.push(promise);
+      if (promises.length >= maxConcurrency) {
+        await Promise.all(promises);
+        promises.length = 0;
+      }
+    }
+
+    if (promises.length > 0) {
+      await Promise.all(promises);
+    }
+
+    if (req.file?.path) {
+      import("fs")
+        .then(({ unlink }) => unlink(req.file.path, () => {}))
+        .catch(() => {});
+    }
+
+    return sendResponse(res, 200, "Batch insert successful", {
+      totalRows: rows.length,
+      companiesProcessed: companyOps.length,
+      companiesCreated,
+      contactsProcessed: contactOps.length,
+      contactsCreated,
+      skippedContacts,
+      skippedLogs: skippedLogs.slice(0, 10),
+      processingTimeOptimized: true,
+    });
+  } catch (err) {
+    console.error("Batch insert error:", err);
+    if (req.file?.path) {
+      import("fs")
+        .then(({ unlink }) => unlink(req.file.path, () => {}))
+        .catch(() => {});
+    }
+    return sendError(next, err.message || "Batch insert failed", 500);
+  }
+});
 
 const getAllData = asyncHandler(async (req, res, next) => {
   try {
@@ -435,7 +764,6 @@ const getAllCompanyData = asyncHandler(async (req, res, next) => {
     delete filters.limit;
     const search = filters.search;
     delete filters.search;
-    console.log(filters, "filters");
 
     let searchFilter = {};
     if (search && search.trim()) {
@@ -499,8 +827,6 @@ const updateData = asyncHandler(async (req, res, next) => {
     const { id } = req.params;
     const updatePayload = req.body;
     const user = req.user;
-
-    console.log(user, "user data");
 
     const existing = await Contact.findById(id);
     if (!existing) return sendError(next, "Contact not found", 404);
