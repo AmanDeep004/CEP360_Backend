@@ -6,6 +6,7 @@ import {
   updateInvoice,
   deleteInvoice,
   getAllInvoices,
+  getAllInvoicesData,
   getInvoicesByPMId,
   generateAllInvoices,
   getAgentInvoicesDataByMonth,
@@ -20,7 +21,10 @@ import { protect } from "../middleware/authMiddleware.js";
 
 // Protected Routes
 router.post("/", createInvoice);
+// invoices of a pm data
 router.get("/", getAllInvoices);
+// all invoice data
+router.get("/allInvoiceData", getAllInvoicesData);
 router.get("/pm/:pmId", getInvoicesByPMId);
 // router.put("/:id", updateInvoice);
 router.delete("/:id", deleteInvoice);

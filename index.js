@@ -4,6 +4,7 @@ import cors from "cors";
 import expressWinston from "express-winston";
 import cookieParser from "cookie-parser";
 import { connectDB } from "./config/db.js";
+import cron from "node-cron";
 import { errorHandler } from "./middleware/errorMiddleware.js";
 import { expressWinstonErrorLogger, logger } from "./logger/index.js";
 dotenv.config({ path: `.env.local` });
@@ -72,6 +73,36 @@ const startServer = async () => {
     app.use("/api/filtration", callingDataFiltrationRoutes);
     app.use("/api/callingDataEditApproval", callingDataEditApprovalRoutes);
 
+    // Schedule: At 23:00 on day-of-month 25
+    cron.schedule(
+      "30 23 25 * *", // 11:00 PM on 25th of every month
+      // "56 11 6 * *", // 11:30 AM on 6th of every month
+      async () => {
+        const now = new Date().toLocaleString("en-IN", {
+          timeZone: "Asia/Kolkata",
+        });
+        console.log(`[CRON] Triggered at ${now} (IST)`);
+
+        try {
+          // Dynamically import to avoid circular dependencies
+          const { runInvoiceGeneration } = await import(
+            "./controllers/invoiceController.js"
+          );
+
+          console.log("[CRON] Invoice generation started...");
+          await runInvoiceGeneration(); // Should be a pure function (not req/res)
+          console.log("[CRON] Invoice generation completed successfully.");
+        } catch (err) {
+          console.error(
+            "[CRON] Invoice generation failed:",
+            err?.message || err
+          );
+        }
+      },
+      {
+        timezone: "Asia/Kolkata", // run on Indian time
+      }
+    );
     app.use("*", (req, res) => {
       res.status(404).json({
         success: false,
