@@ -160,6 +160,7 @@ const loginUser = asyncHandler(async (req, res, next) => {
       employeeCode: user.employeeCode,
       email: user.email,
       role: user.role,
+      status: user.status,
       // token,
     });
   } catch (error) {

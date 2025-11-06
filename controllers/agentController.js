@@ -139,6 +139,7 @@ const getAllNonAssignedAgents = asyncHandler(async (req, res, next) => {
     const agents = await User.find({
       role: UserRoleEnum.AGENT,
       _id: { $nin: assignedAgentIds },
+      status: "active",
     }).select("_id employeeName email employeeCode");
 
     return sendResponse(res, 200, "Agents fetched successfully", agents);
