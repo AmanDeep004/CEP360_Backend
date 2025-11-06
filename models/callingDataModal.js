@@ -80,6 +80,19 @@ const CallingDataSchema = new mongoose.Schema(
     pmId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     pmName: { type: String, trim: true },
     agentId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    reassigned_to: {
+      status: { type: Boolean, default: false },
+      previously_assigned_to: [
+        {
+          unassignedAt: { type: Date },
+          agentId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            required: true,
+          },
+        },
+      ],
+    },
     isRegistered: { type: Boolean, default: false },
     registeredOn: { type: Date, default: null },
     callHistory: { type: mongoose.Schema.Types.ObjectId, ref: "CallHistory" },

@@ -8,6 +8,7 @@ import {
   getDatabaseByAssignment,
   assignCallingDataToAgents,
   unassignCallingDataFromAgents,
+  reassignCallingDatatoAgents,
 } from "../controllers/callingDataController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -26,6 +27,11 @@ router.post(
 router.get("/getCallingDataById/:id", protect, getCallingDataById);
 router.put("/", protect, editcallingData);
 router.post("/assignCallingDataToAgents", protect, assignCallingDataToAgents);
+router.post(
+  "/reassignCallingDatatoAgents",
+  protect,
+  reassignCallingDatatoAgents
+);
 router.post(
   "/unassignCallingDataFromAgents",
   protect,

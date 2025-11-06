@@ -714,9 +714,15 @@ const getAllData = asyncHandler(async (req, res, next) => {
         $or: [
           { First_Name: regex },
           { Last_Name: regex },
+          { Full_Name: regex },
+
           { Job_Title: regex },
           { Office_Email_1: regex },
           { Office_Email_2: regex },
+          { Personal_Email1: regex },
+          { Personal_Email2: regex },
+          { Contact_Direct_Phone1: regex },
+          { Contact_Direct_Phone2: regex },
           { Mobile_No: regex },
           { Contact_City: regex },
           { Contact_State: regex },

@@ -505,6 +505,65 @@ const unassignCallingDataFromAgents = asyncHandler(async (req, res, next) => {
     return sendError(next, err.message, 500);
   }
 });
+const reassignCallingDatatoAgents = asyncHandler(async (req, res, next) => {
+  try {
+    const { callingDataIds, newAgentId } = req.body;
+
+    if (
+      !Array.isArray(callingDataIds) ||
+      callingDataIds.length === 0 ||
+      !newAgentId
+    ) {
+      return sendError(
+        next,
+        "CallingData Ids and New AgentId are required",
+        400
+      );
+    }
+
+    const records = await CallingData.find(
+      { _id: { $in: callingDataIds } },
+      { agentId: 1 } // fetch only agentId field
+    );
+
+    if (records.length === 0) {
+      return sendError(
+        next,
+        "No records found for provided callingDataIds",
+        404
+      );
+    }
+
+    const bulkOps = records.map((rec) => ({
+      updateOne: {
+        filter: { _id: rec._id },
+        update: {
+          $set: {
+            agentId: newAgentId,
+            "reassigned_to.status": true,
+          },
+          $push: {
+            "reassigned_to.previously_assigned_to": {
+              agentId: rec.agentId,
+              unassignedAt: new Date(),
+            },
+          },
+        },
+      },
+    }));
+
+    const result = await CallingData.bulkWrite(bulkOps);
+
+    return sendResponse(
+      res,
+      200,
+      `${result.modifiedCount} records reassigned successfully`,
+      result
+    );
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
 
 export {
   uploadcallingData,
@@ -515,4 +574,5 @@ export {
   getDatabaseByAssignment,
   assignCallingDataToAgents,
   unassignCallingDataFromAgents,
+  reassignCallingDatatoAgents,
 };
