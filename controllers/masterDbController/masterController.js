@@ -827,65 +827,225 @@ const getAllCompanyName = asyncHandler(async (req, res, next) => {
     return sendError(next, err.message || "Fetch failed", 500);
   }
 });
-
-const updateData = asyncHandler(async (req, res, next) => {
+const getCompanyDataById = asyncHandler(async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const updatePayload = req.body;
-    const user = req.user;
+    const companyId = req.query.companyId; // <-- NEW
 
-    const existing = await Contact.findById(id);
-    if (!existing) return sendError(next, "Contact not found", 404);
+    // ✅ If companyId is passed → return one company directly
+    if (companyId) {
+      const company = await Company.findById(companyId).lean();
+      if (!company) return sendError(next, "Company not found", 404);
 
-    if (updatePayload.Company_ID) {
-      const company = await Company.findById(updatePayload.Company_ID);
-      if (!company) return sendError(next, "Invalid Company_ID", 400);
+      return sendResponse(res, 200, "Company fetched successfully", company);
     }
 
-    const updatedFields = Object.keys(updatePayload).filter((field) => {
-      return (
-        String(existing[field] ?? "") !== String(updatePayload[field] ?? "")
-      );
-    });
+    // ✅ ELSE → Previous listing logic
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit);
+    const skip = (page - 1) * limit;
 
-    if (updatedFields.length === 0) {
-      return sendResponse(res, 200, "No changes detected", existing);
+    const filters = { ...req.query };
+    delete filters.page;
+    delete filters.limit;
+    delete filters.companyId; // remove new param from filters
+
+    const search = filters.search;
+    delete filters.search;
+
+    let searchFilter = {};
+    if (search && search.trim()) {
+      const regex = new RegExp(search.trim(), "i");
+      searchFilter = {
+        $or: [
+          { Company_Name: regex },
+          { Year_Founded: regex },
+          { Employees_Range: regex },
+          { Industry: regex },
+          { Sub_Industry: regex },
+          { Company_Segment: regex },
+          { Website: regex },
+          { Company_LinkedIn_Profile: regex },
+          { Company_Phone1: regex },
+          { Company_Phone2: regex },
+        ],
+      };
     }
 
-    await ContactHistory.create({
-      contact_id: existing._id,
-      snapshot: existing.toObject(),
-      updatedFields,
-      updatedBy: {
-        id: user._id,
-        name: user.employeeName,
-        email: user.email,
-        employeeCode: user.employeeCode,
-        role: user.role,
-        mobile: user.mobile,
-        location: user.location,
-        designation: user.designation,
-      },
-      changeType: "update",
+    const finalFilter = Object.keys(searchFilter).length
+      ? { ...filters, ...searchFilter }
+      : filters;
+
+    const [total, data] = await Promise.all([
+      Company.countDocuments(finalFilter),
+      Company.find(finalFilter).skip(skip).limit(limit).lean(),
+    ]);
+
+    return sendResponse(res, 200, "Companies fetched successfully", {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      data,
     });
-
-    const updatedContact = await Contact.findByIdAndUpdate(id, updatePayload, {
-      new: true,
-      runValidators: true,
-    }).populate("Company_ID", "Company_Name Website Industry");
-
-    return sendResponse(
-      res,
-      200,
-      "Contact updated successfully",
-      updatedContact
-    );
   } catch (err) {
-    console.error("Update contact error:", err);
-    return sendError(next, err.message || "Update failed", 500);
+    return sendError(next, err.message || "Fetch failed", 500);
   }
 });
 
+// const updateData = asyncHandler(async (req, res, next) => {
+//   try {
+//     const { id } = req.params;
+//     const updatePayload = req.body;
+//     const user = req.user;
+
+//     const existing = await Contact.findById(id);
+//     if (!existing) return sendError(next, "Contact not found", 404);
+
+//     if (updatePayload.Company_ID) {
+//       const company = await Company.findById(updatePayload.Company_ID);
+//       if (!company) return sendError(next, "Invalid Company_ID", 400);
+//     }
+
+//     const updatedFields = Object.keys(updatePayload).filter((field) => {
+//       return (
+//         String(existing[field] ?? "") !== String(updatePayload[field] ?? "")
+//       );
+//     });
+
+//     if (updatedFields.length === 0) {
+//       return sendResponse(res, 200, "No changes detected", existing);
+//     }
+
+//     await ContactHistory.create({
+//       contact_id: existing._id,
+//       snapshot: existing.toObject(),
+//       updatedFields,
+//       updatedBy: {
+//         id: user._id,
+//         name: user.employeeName,
+//         email: user.email,
+//         employeeCode: user.employeeCode,
+//         role: user.role,
+//         mobile: user.mobile,
+//         location: user.location,
+//         designation: user.designation,
+//       },
+//       changeType: "update",
+//     });
+
+//     const updatedContact = await Contact.findByIdAndUpdate(id, updatePayload, {
+//       new: true,
+//       runValidators: true,
+//     }).populate("Company_ID", "Company_Name Website Industry");
+
+//     return sendResponse(
+//       res,
+//       200,
+//       "Contact updated successfully",
+//       updatedContact
+//     );
+//   } catch (err) {
+//     console.error("Update contact error:", err);
+//     return sendError(next, err.message || "Update failed", 500);
+//   }
+// });
+const updateData = asyncHandler(async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const payload = req.body;
+    const user = req.user;
+
+    // 1️⃣ Try to find in Contact Collection
+    let existingContact = await Contact.findById(id);
+
+    if (existingContact) {
+      // Create history: compare changed fields
+      const changedFields = Object.keys(payload).filter(
+        (key) =>
+          String(existingContact[key] ?? "") !== String(payload[key] ?? "")
+      );
+
+      if (changedFields.length > 0) {
+        await ContactHistory.create({
+          contact_id: existingContact._id,
+          snapshot: existingContact.toObject(),
+          updatedFields: changedFields,
+          updatedBy: {
+            id: user._id,
+            name: user.employeeName,
+            email: user.email,
+            employeeName: user.employeeName,
+            role: user.role,
+            mobile: user.mobile,
+            location: user.location,
+            designation: user.designation,
+          },
+          changeType: "update",
+        });
+      }
+
+      const updatedContact = await Contact.findByIdAndUpdate(id, payload, {
+        new: true,
+        runValidators: true,
+      }).populate("Company_ID", "Company_Name Website Industry");
+
+      return sendResponse(
+        res,
+        200,
+        "Contact updated successfully",
+        updatedContact
+      );
+    }
+
+    // 2️⃣ If not found in contact → Try to find in Company Collection
+    let existingCompany = await Company.findById(id);
+
+    if (existingCompany) {
+      // Create history: compare changed fields
+      const changedFields = Object.keys(payload).filter(
+        (key) =>
+          String(existingCompany[key] ?? "") !== String(payload[key] ?? "")
+      );
+
+      if (changedFields.length > 0) {
+        await CompanyHistory.create({
+          company_id: existingCompany._id,
+          snapshot: existingCompany.toObject(),
+          updatedFields: changedFields,
+          updatedBy: {
+            id: user._id,
+            name: user.employeeName,
+            email: user.email,
+            employeeName: user.employeeName,
+            role: user.role,
+            mobile: user.mobile,
+            location: user.location,
+            designation: user.designation,
+          },
+          changeType: "update",
+        });
+      }
+
+      const updatedCompany = await Company.findByIdAndUpdate(id, payload, {
+        new: true,
+        runValidators: true,
+      });
+
+      return sendResponse(
+        res,
+        200,
+        "Company updated successfully",
+        updatedCompany
+      );
+    }
+
+    // 3️⃣ If not in both
+    return sendError(next, "Record not found in Contact or Company", 404);
+  } catch (err) {
+    console.error("Update Error:", err);
+    return sendError(next, err.message || "Update failed", 500);
+  }
+});
 const createANewCompany = asyncHandler(async (req, res, next) => {
   try {
     const data = req.body;
@@ -930,6 +1090,82 @@ const createANewCompany = asyncHandler(async (req, res, next) => {
     return sendResponse(res, 200, "Company created successfully", company);
   } catch (err) {
     return sendError(next, err.message || "Failed to create company", 500);
+  }
+});
+const updateCompany = asyncHandler(async (req, res, next) => {
+  try {
+    const companyId = req.params.id;
+    const data = req.body;
+
+    // Check if ID exists
+    const company = await Company.findById(companyId);
+    if (!company) {
+      return sendError(next, "Company not found", 404);
+    }
+
+    // Validate fields
+    if (data.Company_Name && data.Company_Name.trim() === "") {
+      return sendError(next, "Company name cannot be empty", 400);
+    }
+    if (data.Website && data.Website.trim() === "") {
+      return sendError(next, "Website cannot be empty", 400);
+    }
+
+    // Check duplicate (only if name or website changed)
+    if (
+      (data.Company_Name &&
+        data.Company_Name.trim() !== company.Company_Name) ||
+      (data.Website && data.Website.trim() !== company.Website)
+    ) {
+      const existing = await Company.findOne({
+        Company_Name: (data.Company_Name || company.Company_Name).trim(),
+        Website: (data.Website || company.Website).trim(),
+        _id: { $ne: companyId }, // exclude current doc
+      });
+
+      if (existing) {
+        return sendError(
+          next,
+          "Another company with this name and website already exists",
+          400
+        );
+      }
+    }
+
+    // Prepare updated fields
+    const updatedData = {
+      Company_Name: data.Company_Name?.trim() ?? company.Company_Name,
+      Company_ID_Kestone: data.Company_ID_Kestone ?? company.Company_ID_Kestone,
+      Affinity_ID_Dell: data.Affinity_ID_Dell ?? company.Affinity_ID_Dell,
+      Company_ID_Google: data.Company_ID_Google ?? company.Company_ID_Google,
+      Company_Source: data.Company_Source ?? company.Company_Source,
+      Year_Founded: data.Year_Founded ?? company.Year_Founded,
+      Turnover_Range: data.Turnover_Range ?? company.Turnover_Range,
+      Employees_Range: data.Employees_Range ?? company.Employees_Range,
+      Industry: data.Industry ?? company.Industry,
+      Sub_Industry: data.Sub_Industry ?? company.Sub_Industry,
+      Company_Segment: data.Company_Segment ?? company.Company_Segment,
+      Website: data.Website?.trim() ?? company.Website,
+      Company_LinkedIn_Profile:
+        data.Company_LinkedIn_Profile ?? company.Company_LinkedIn_Profile,
+      Company_Phone1: data.Company_Phone1 ?? company.Company_Phone1,
+      Company_Phone2: data.Company_Phone2 ?? company.Company_Phone2,
+    };
+
+    const updatedCompany = await Company.findByIdAndUpdate(
+      companyId,
+      updatedData,
+      { new: true }
+    );
+
+    return sendResponse(
+      res,
+      200,
+      "Company updated successfully",
+      updatedCompany
+    );
+  } catch (err) {
+    return sendError(next, err.message || "Failed to update company", 500);
   }
 });
 
@@ -1258,4 +1494,6 @@ export {
   getAllCompanyName,
   getDropdownFilters,
   getFiltersStats,
+  updateCompany,
+  getCompanyDataById,
 };
