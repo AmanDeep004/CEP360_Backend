@@ -14,7 +14,8 @@ import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
 const upload = multer({ storage: multer.memoryStorage() });
 
-const { ADMIN, PROGRAM_MANAGER, PRESALES_MANAGER, AGENT } = UserRoleEnum;
+const { ADMIN, PROGRAM_MANAGER, PRESALES_MANAGER, AGENT, RESOURCE_MANAGER } =
+  UserRoleEnum;
 const router = Router();
 
 // Create new campaign
@@ -40,7 +41,7 @@ router.get("/getCampaignById/:id", protect, getCampaign);
 router.get(
   "/getCampaignByUserId/:userId",
   protect,
-  authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER, AGENT),
+  authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER, AGENT, RESOURCE_MANAGER),
   getCampaignsByUserId
 );
 // Update campaign
