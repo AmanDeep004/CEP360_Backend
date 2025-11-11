@@ -106,11 +106,20 @@ const campaignSchema = new mongoose.Schema(
           "RevisionRequested",
           "Finalized",
           "CallingDataAssigned",
+          "AddtionalCallingDataMidCampaign",
         ],
         message: "{VALUE} is not a valid stage",
       },
     },
     isCallingDataAssigned: { type: Boolean, default: false },
+    filterBatches: [
+      {
+        filterBatchId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "CampaignFilter",
+        },
+      },
+    ],
 
     // brief: {
     //   type: [briefSchema],

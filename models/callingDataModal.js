@@ -3,7 +3,7 @@ import { getPrimaryConnection } from "../config/db.js";
 
 const CallingDataSchema = new mongoose.Schema(
   {
-    Contact_ID: { type: String, trim: true },
+    Contact_ID: { type: String, trim: true, unique: true },
     Contact_Source: { type: String, trim: true },
     Contact_Create_Date: { type: String, trim: true },
     Salutation: { type: String, trim: true },
