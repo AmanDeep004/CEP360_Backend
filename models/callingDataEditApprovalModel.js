@@ -25,7 +25,7 @@ const callingDataEditApprovalSchema = new mongoose.Schema(
     requestedAt: { type: Date, default: Date.now },
     approvedorRejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     approvedOrRejectedAt: { type: Date },
-    remarks: { type: String },
+    remarks: { type: Array, default: "" },
   },
   { timestamps: true }
 );

@@ -11,6 +11,7 @@ import {
   getDropdownFilters,
   getFiltersStats,
   getCompanyDataById,
+  dumpAllHistoryData,
 } from "../../controllers/masterDbController/masterController.js";
 import { UserRoleEnum } from "../../utils/enum.js";
 const router = Router();
@@ -31,6 +32,7 @@ router.get("/getCompanyDataById", protect, getCompanyDataById);
 router.get("/getAllCompanyData", protect, getAllCompanyData);
 router.get("/getAllCompanyName", protect, getAllCompanyName);
 router.get("/getDropdownFilters", protect, getDropdownFilters);
-router.get("/getFiltersStats", getFiltersStats);
+router.get("/getFiltersStats", protect, getFiltersStats);
+router.get("/getAllDumpHistoryData", dumpAllHistoryData);
 
 export default router;

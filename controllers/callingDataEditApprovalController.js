@@ -1,4 +1,6 @@
 import CallingDataEditApproval from "../models/callingDataEditApprovalModel.js";
+import Company from "../models/MasterDBModel/companyModel.js";
+import Contact from "../models/MasterDBModel/contactModel.js";
 import errorHandler from "../utils/index.js";
 import { updateData } from "./masterDbController/masterController.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
@@ -71,18 +73,23 @@ const approveOrRejectEditRequest = asyncHandler(async (req, res, next) => {
 
   try {
     const { status, remarks, callingDataId } = req.body;
+    if (callingDataId && typeof callingDataId === "object") {
+      callingDataId =
+        callingDataId.callingDataId || callingDataId._id || callingDataId.id;
+    }
 
-    const editRequest = await CallingDataEditApproval.findById(callingDataId);
+    const editRequest = await CallingDataEditApproval.findOne({
+      callingDataId,
+    });
+
     if (!editRequest) return sendError(next, "Edit request not found", 404);
 
-    // ✅ Always update status first
     editRequest.status = status;
     editRequest.remarks = remarks || "";
     editRequest.approvedorRejectedBy = req.user?._id;
     editRequest.approvedOrRejectedAt = new Date();
     await editRequest.save();
 
-    // If Rejected → End here (No Company / Contact Update)
     if (status === "Rejected" || status === "Pending") {
       return sendResponse(res, 200, `Edit request ${status} successfully`, {
         id: editRequest._id,
@@ -90,7 +97,6 @@ const approveOrRejectEditRequest = asyncHandler(async (req, res, next) => {
       });
     }
 
-    // ✅ If Approved → Continue with Company & Contact update
     const companyFields = [
       "Company_ID_Kestone",
       "Affinity_ID_Dell",
@@ -122,7 +128,6 @@ const approveOrRejectEditRequest = asyncHandler(async (req, res, next) => {
     const companyUpdate = {};
     const contactUpdate = {};
 
-    // Separate which fields belong to which model
     editRequest.changedFields.forEach((change) => {
       if (companyFields.includes(change.field)) {
         companyUpdate[change.field] = change.newValue;
@@ -132,7 +137,6 @@ const approveOrRejectEditRequest = asyncHandler(async (req, res, next) => {
       }
     });
 
-    // Update Company & Create History
     if (Object.keys(companyUpdate).length > 0) {
       const company = await Company.findById(editRequest.callingDataId);
       await CompanyHistory.create({
@@ -152,7 +156,6 @@ const approveOrRejectEditRequest = asyncHandler(async (req, res, next) => {
       await Company.findByIdAndUpdate(company._id, companyUpdate);
     }
 
-    // Update Contact & Create History
     if (Object.keys(contactUpdate).length > 0) {
       const contact = await Contact.findOne({
         company_id: editRequest.callingDataId,

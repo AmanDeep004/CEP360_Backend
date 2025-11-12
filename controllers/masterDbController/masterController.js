@@ -5,8 +5,13 @@ import Company from "../../models/MasterDBModel/companyModel.js";
 import Contact from "../../models/MasterDBModel/contactModel.js";
 import CompanyHistory from "../../models/MasterDBModel/companyHistory.js";
 import ContactHistory from "../../models/MasterDBModel/contactHistory.js";
+import CallHistory from "../../models/callHistoryModel.js";
+import CallingData from "../../models/callingDataModal.js";
+import Campaign from "../../models/campaignModel.js";
+
 import dndModel from "../../models/MasterDBModel/dndModel.js";
 import engagementModel from "../../models/MasterDBModel/enagagementHistoryModel.js";
+import dumpHistoryData from "../../models/MasterDBModel/dumpHistoryDataModel.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
 function parseDate(value) {
@@ -1485,6 +1490,66 @@ const getFiltersStats = asyncHandler(async (req, res, next) => {
   }
 });
 
+const dumpAllHistoryData = asyncHandler(async (req, res, next) => {
+  try {
+    const histories = await CallHistory.find({}).lean();
+
+    const result = [];
+
+    for (const history of histories) {
+      const lastChat =
+        history.chatHistory && history.chatHistory.length > 0
+          ? history.chatHistory[history.chatHistory.length - 1]
+          : null;
+
+      const callingData = await CallingData.findById(
+        history.callingData_id
+      ).lean();
+      if (!callingData) continue;
+
+      const campaign = await Campaign.findById(history.campaign_id).lean();
+      if (!campaign) continue;
+
+      const dumpData = {
+        callHistory_id: history._id,
+        callingData_id: callingData._id,
+        campaign_id: campaign._id,
+
+        Contact_ID: callingData.Contact_ID,
+        Full_Name: callingData.Full_Name,
+        Job_Title: callingData.Job_Title,
+        Mobile_No: callingData.Mobile_No,
+        Personal_Email1: callingData.Personal_Email1,
+        Company_ID: callingData.Company_ID?.toString() || "",
+        Company_Name: callingData.Company_Name,
+
+        isRegistered: history.isRegistered,
+
+        pmName: callingData.pmName || "",
+        clientName: campaign.clientName || "",
+        clientEmail: campaign.clientEmail || "",
+        clientContact: campaign.clientContact || "",
+        dataSourceType: callingData.dataSourceType || "",
+
+        lastRemarks: lastChat?.remarks || "",
+        lastCallingDate: lastChat?.callingDate || null,
+        lastAgent_id: lastChat?.agent_id || null,
+        lastAgentName: lastChat?.agentName || "",
+      };
+
+      await dumpHistoryData.create(dumpData);
+      result.push(dumpData);
+    }
+
+    return sendResponse(res, 200, "Dump history saved successfully", {
+      total: result.length,
+      data: result,
+    });
+  } catch (err) {
+    return sendError(next, err.message || "Failed to dump history", 500);
+  }
+});
+
 export {
   batchCreateFromExcel,
   getAllData,
@@ -1496,4 +1561,5 @@ export {
   getFiltersStats,
   updateCompany,
   getCompanyDataById,
+  dumpAllHistoryData,
 };
