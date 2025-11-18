@@ -36,6 +36,8 @@ const startServer = async () => {
       await import("./routes/callingDataEditApprovalRoute.js")
     ).default;
 
+    const webHookRoutes = (await import("./routes/webhookRoutes.js")).default;
+
     console.log("Routes loaded successfully");
 
     const app = express();
@@ -72,6 +74,7 @@ const startServer = async () => {
     app.use("/api/masterdb", masterDBRoutes);
     app.use("/api/filtration", callingDataFiltrationRoutes);
     app.use("/api/callingDataEditApproval", callingDataEditApprovalRoutes);
+    app.use("/api/webhook", webHookRoutes);
 
     // Schedule: At 23:00 on day-of-month 25
     cron.schedule(
