@@ -24,7 +24,6 @@ const findContactForNumber = async (mobile) => {
 };
 
 // MESSAGE STATUS UPDATE WEBHOOK
-// ==================================================================
 const messageStatusUpdateOld = asyncHandler(async (req, res, next) => {
   try {
     console.log("Received Message Status Webhook:", req.body);
@@ -56,9 +55,7 @@ const messageStatusUpdateOld = asyncHandler(async (req, res, next) => {
       webhookType: "MessageStatus",
       mobileNumber: mobile,
       contactId: contact?._id || null,
-
       payload,
-
       eventType: status,
       waMessageId,
       status,
@@ -101,6 +98,8 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
     }
     const contact = await findContactForNumber(normalizeNumber(to));
 
+    const newHistory = { payload };
+
     const updateData = {
       webhookType: "MessageStatus",
       mobileNumber: to,
@@ -117,9 +116,9 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
     };
 
     const updatedDoc = await DoubleTickData.findOneAndUpdate(
-      { waMessageId: messageId }, // match condition
-      { $set: updateData }, // update fields
-      { new: true, upsert: true } // create if not exists
+      { waMessageId: messageId },
+      { $set: updateData, $push: { messageHistory: newHistory } },
+      { new: true, upsert: true }
     );
 
     return sendResponse(res, 200, "Status updated / created successfully");
@@ -128,9 +127,7 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
   }
 });
 
-// ==================================================================
 // MESSAGE RECEIVED WEBHOOK (when customer replies)
-// ==================================================================
 const messageReceiveUpdate = asyncHandler(async (req, res, next) => {
   try {
     const payload = req.body;
