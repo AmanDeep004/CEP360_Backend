@@ -1,5 +1,6 @@
 import DoubleTickData from "../../models/Webhook/webHookModel.js";
 import Contact from "../../models/MasterDBModel/contactModel.js";
+import Template from "../../models/Webhook/templateModel.js";
 import errorHandler from "../../utils/index.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
@@ -183,4 +184,57 @@ const messageReceiveUpdate = asyncHandler(async (req, res, next) => {
   }
 });
 
-export { messageStatusUpdate, messageReceiveUpdate };
+const getAllDoubleTickLogs = asyncHandler(async (req, res, next) => {
+  try {
+    const logs = await DoubleTickData.find()
+      .sort({ createdAt: -1 })
+      .populate({
+        path: "contactId",
+      })
+      .lean();
+
+    if (logs.length === 0) {
+      return sendResponse(res, 200, "No DoubleTick data found", []);
+    }
+
+    //  Collect templateIds
+    const templateIds = logs.map((l) => l.templateId).filter((id) => id);
+
+    //  Fetch templates + campaign
+    const templateDocs = await Template.find({
+      templateId: { $in: templateIds },
+    })
+      .populate({
+        path: "campaignId",
+      })
+      .lean();
+
+    // Build a quick lookup map
+    const templateMap = {};
+    templateDocs.forEach((t) => {
+      templateMap[t.templateId] = t;
+    });
+
+    //  Attach template + campaign details to each webhook log
+    const enrichedData = logs.map((log) => {
+      const temp = templateMap[log.templateId] || null;
+
+      return {
+        ...log,
+        template: temp,
+        campaign: temp?.campaignId || null,
+      };
+    });
+
+    return sendResponse(
+      res,
+      200,
+      "DoubleTick data fetched successfully",
+      enrichedData
+    );
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+export { messageStatusUpdate, messageReceiveUpdate, getAllDoubleTickLogs };

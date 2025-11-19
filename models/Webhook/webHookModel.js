@@ -1,5 +1,8 @@
 import mongoose from "mongoose";
-import { getPrimaryConnection } from "../../config/db.js";
+import {
+  getPrimaryConnection,
+  getSecondaryConnection,
+} from "../../config/db.js";
 
 const DoubleTickWebhookSchema = new mongoose.Schema(
   {
@@ -30,7 +33,7 @@ const DoubleTickWebhookSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-export default getPrimaryConnection().model(
+export default getSecondaryConnection().model(
   "DoubleTickData",
   DoubleTickWebhookSchema
 );
