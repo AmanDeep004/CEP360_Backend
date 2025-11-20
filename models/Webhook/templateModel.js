@@ -4,8 +4,8 @@ import { getPrimaryConnection } from "../../config/db.js";
 
 const templateSchema = new mongoose.Schema(
   {
-    templateName: { type: String, trim: true, required: true },
-    templateId: { type: String, trim: true, required: true, unique: true },
+    templateName: { type: String, trim: true, required: true, unique: true },
+    templateId: { type: String, trim: true },
     campaignId: { type: mongoose.Schema.Types.ObjectId, ref: "Campaign" },
   },
   { timestamps: true }

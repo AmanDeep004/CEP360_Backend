@@ -197,27 +197,28 @@ const getAllDoubleTickLogs = asyncHandler(async (req, res, next) => {
       return sendResponse(res, 200, "No DoubleTick data found", []);
     }
 
-    //  Collect templateIds
-    const templateIds = logs.map((l) => l.templateId).filter((id) => id);
+    // Collect templateNames
+    const templateNames = logs
+      .map((l) => l.templateName)
+      .filter((name) => name);
 
-    //  Fetch templates + campaign
+    // Fetch templates using templateName
     const templateDocs = await Template.find({
-      templateId: { $in: templateIds },
+      templateName: { $in: templateNames },
     })
       .populate({
         path: "campaignId",
       })
       .lean();
 
-    // Build a quick lookup map
     const templateMap = {};
     templateDocs.forEach((t) => {
-      templateMap[t.templateId] = t;
+      templateMap[t.templateName] = t;
     });
 
-    //  Attach template + campaign details to each webhook log
+    // Attach template + campaign details to each webhook log
     const enrichedData = logs.map((log) => {
-      const temp = templateMap[log.templateId] || null;
+      const temp = templateMap[log.templateName] || null;
 
       return {
         ...log,
