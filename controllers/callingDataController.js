@@ -234,7 +234,8 @@ const deletecallingData = asyncHandler(async (req, res, next) => {
  * @route GET /api/callingData/campaign/:CampaignId
  * @access Private
  */
-const getAllCallingDataold = asyncHandler(async (req, res, next) => {
+
+const getAllCallingDataOld = asyncHandler(async (req, res, next) => {
   try {
     const { CampaignId } = req.params;
     const page = parseInt(req.query.page) || 1;
@@ -242,6 +243,19 @@ const getAllCallingDataold = asyncHandler(async (req, res, next) => {
     const skip = (page - 1) * limit;
 
     const filter = { CampaignId };
+
+    if (req.query.search && req.query.search.trim() !== "") {
+      const searchRegex = new RegExp(`\\b${req.query.search.trim()}`, "i");
+      filter.full_Name = searchRegex;
+    }
+
+    // Optional filter: isRegistered=true/false
+    if (req.query.isRegistered !== undefined) {
+      const val = req.query.isRegistered.toLowerCase();
+      if (val === "true" || val === "false") {
+        filter.isRegistered = val === "true";
+      }
+    }
 
     const [total, data] = await Promise.all([
       CallingData.countDocuments(filter),
@@ -259,7 +273,6 @@ const getAllCallingDataold = asyncHandler(async (req, res, next) => {
     return sendError(next, err.message, 500);
   }
 });
-
 const getAllCallingData = asyncHandler(async (req, res, next) => {
   try {
     const { CampaignId } = req.params;
@@ -269,13 +282,27 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
 
     const filter = { CampaignId };
 
-    // Search by full_Name only
+    // search on multiple fields
     if (req.query.search && req.query.search.trim() !== "") {
-      const searchRegex = new RegExp(`\\b${req.query.search.trim()}`, "i");
-      filter.full_Name = searchRegex;
+      const search = req.query.search.trim();
+      const regex = new RegExp(search, "i");
+
+      filter.$or = [
+        { Full_Name: regex },
+        { First_Name: regex },
+        { Last_Name: regex },
+        { Mobile_No: regex },
+        { Office_Email_1: regex },
+        { Office_Email_2: regex },
+        { Personal_Email1: regex },
+        { Personal_Email2: regex },
+        { Contact_Direct_Phone1: regex },
+        { Contact_Direct_Phone2: regex },
+        { Company_Name: regex },
+      ];
     }
 
-    // Optional filter: isRegistered=true/false
+    // filter registered
     if (req.query.isRegistered !== undefined) {
       const val = req.query.isRegistered.toLowerCase();
       if (val === "true" || val === "false") {
@@ -283,6 +310,7 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
       }
     }
 
+    // fetch data and count
     const [total, data] = await Promise.all([
       CallingData.countDocuments(filter),
       CallingData.find(filter).skip(skip).limit(limit).lean(),
