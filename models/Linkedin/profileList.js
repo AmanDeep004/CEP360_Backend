@@ -60,6 +60,7 @@ const linkedinProfileSchema = new mongoose.Schema(
     enrichedData: enrichedDataSchema,
     batchName: { type: String },
     misc: { type: mongoose.Schema.Types.Mixed },
+    payload: { type: Object },
   },
   { timestamps: true }
 );
