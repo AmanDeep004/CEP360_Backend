@@ -6,6 +6,7 @@ import {
   uploadProfiles,
   wizaWebhook,
 } from "../../controllers/Linkedin/linkedinDataScrapingController.js";
+import { getAllEnrichedProfiles } from "../../controllers/Linkedin/linkedinDataScrapingController.js";
 
 const router = Router();
 const { ADMIN, DATABASE_MANAGER } = UserRoleEnum;
@@ -14,12 +15,11 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 //route to upload the data
 router.post(
-  "/upload-linkedin-csv",
+  "/uploadLinkedinCsv",
   protect,
   upload.single("file"),
   uploadProfiles
 );
-
-router.post("/wiza", protect, wizaWebhook);
+router.get("/getAllEnrichedProfiles", protect, getAllEnrichedProfiles);
 
 export default router;
