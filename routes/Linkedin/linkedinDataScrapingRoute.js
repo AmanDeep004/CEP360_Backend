@@ -12,14 +12,6 @@ const { ADMIN, DATABASE_MANAGER } = UserRoleEnum;
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-// router.post(
-//   "/upload-linkedin-csv",
-//   upload.single("file"),
-//   protect,
-//   authorize(DATABASE_MANAGER),
-//   uploadProfiles
-// );
-
 //route to upload the data
 router.post(
   "/upload-linkedin-csv",
@@ -28,10 +20,6 @@ router.post(
   uploadProfiles
 );
 
-router.post(
-  "/https://cep360.kestoneapps.in/webhook/wiza",
-  protect,
-  wizaWebhook
-);
+router.post("/wiza", protect, wizaWebhook);
 
 export default router;

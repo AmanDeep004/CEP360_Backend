@@ -4,6 +4,7 @@ import {
   messageReceiveUpdate,
   getAllDoubleTickLogs,
 } from "../controllers/webhook/webhookController.js";
+import { wizaWebhook } from "../controllers/Linkedin/linkedinDataScrapingController.js";
 import { UserRoleEnum } from "../utils/enum.js";
 import { protect, authorize } from "../middleware/authMiddleware.js";
 
@@ -19,5 +20,8 @@ router.get(
 );
 router.post("/MessagestatusUpdate", messageStatusUpdate);
 router.post("/MessageReceiveUpdate", messageReceiveUpdate);
+
+// wiza webhooks
+router.post("/wiza", wizaWebhook);
 
 export default router;

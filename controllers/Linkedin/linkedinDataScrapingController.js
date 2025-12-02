@@ -6,10 +6,8 @@ import csv from "csvtojson";
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
-const WIZA_API_KEY =
-  process.env.WIZA_API_KEY ||
-  "c427b2bc46480c2d8fe94118ddc054eeb0ca5e5235b0a28de410a0d4816a57cf";
-const WIZA_API_URL = "https://wiza.co/api/lists";
+const WIZA_API_KEY = process.env.WIZA_API_KEY;
+const WIZA_API_URL = process.env.WIZA_API_URL;
 
 /**
  * Smart function to extract LinkedIn URL from any field in a row
@@ -333,50 +331,6 @@ const fetchEnrichedData = asyncHandler(async (req, res, next) => {
   }
 });
 
-// Webhook endpoint to receive enriched data from Wiza
-const wizaWebhook = asyncHandler(async (req, res, next) => {
-  try {
-    const webhookData = req.body;
-
-    console.log("Wiza Webhook Received:", webhookData);
-
-    // Validate webhook payload
-    if (!webhookData || !webhookData.data) {
-      return sendError(next, "Invalid webhook payload", 400);
-    }
-
-    const { event_type, data } = webhookData;
-
-    // Handle different webhook events
-    switch (event_type) {
-      case "list.completed":
-      case "list.finished":
-        await handleListCompleted(data);
-        break;
-
-      case "contact.enriched":
-        await handleContactEnriched(data);
-        break;
-
-      default:
-        console.log(`Unhandled webhook event: ${event_type}`);
-    }
-
-    // Always respond 200 OK to acknowledge webhook receipt
-    return res.status(200).json({
-      success: true,
-      message: "Webhook processed successfully",
-    });
-  } catch (error) {
-    console.error("Webhook Error:", error);
-    // Still return 200 to prevent Wiza from retrying
-    return res.status(200).json({
-      success: false,
-      error: error.message,
-    });
-  }
-});
-
 // Helper: Handle list completion webhook
 async function handleListCompleted(data) {
   const listId = data.list_id || data.id;
@@ -500,5 +454,164 @@ async function handleContactEnriched(data) {
     throw error;
   }
 }
+
+// Webhook endpoint to receive enriched data from Wiza
+const wizaWebhookOld = asyncHandler(async (req, res, next) => {
+  try {
+    const webhookData = req.body;
+
+    console.log("Wiza Webhook Received:", webhookData);
+
+    // Validate webhook payload
+    if (!webhookData || !webhookData.data) {
+      return sendError(next, "Invalid webhook payload", 400);
+    }
+
+    const { event_type, data } = webhookData;
+
+    // Handle different webhook events
+    switch (event_type) {
+      case "list.completed":
+      case "list.finished":
+        await handleListCompleted(data);
+        break;
+
+      case "contact.enriched":
+        await handleContactEnriched(data);
+        break;
+
+      default:
+        console.log(`Unhandled webhook event: ${event_type}`);
+    }
+
+    // Always respond 200 OK to acknowledge webhook receipt
+    return res.status(200).json({
+      success: true,
+      message: "Webhook processed successfully",
+    });
+  } catch (error) {
+    console.error("Webhook Error:", error);
+    // Still return 200 to prevent Wiza from retrying
+    return res.status(200).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+const wizaWebhook = asyncHandler(async (req, res, next) => {
+  try {
+    const webhookData = req.body;
+    console.log("Wiza Webhook Received:", webhookData);
+
+    const listData = webhookData.data_json;
+    const status = listData.status;
+    const listId = listData.id;
+
+    console.log(`Webhook Status: ${status}, List ID: ${listId}`);
+
+    // Check if enrichment is finished
+    if (status === "finished") {
+      console.log(` List ${listId} finished! Fetching enriched contacts...`);
+
+      // Fetch contacts from Wiza API
+      const contactsResponse = await axios.get(
+        `${WIZA_API_URL}/${listId}/contacts?segment=people`,
+        {
+          headers: {
+            Authorization: `Bearer ${WIZA_API_KEY}`,
+          },
+        }
+      );
+
+      // Response structure: { status: {...}, data: [...] }
+      const contacts = contactsResponse.data?.data || [];
+
+      if (!Array.isArray(contacts) || contacts.length === 0) {
+        console.error("No contacts found in response");
+        return res.status(200).json({
+          success: true,
+          message: "No contacts found",
+          listId: listId,
+        });
+      }
+
+      console.log(`Found ${contacts.length} contacts for list ${listId}`);
+
+      let updated = 0;
+      let notFound = 0;
+
+      // Update each profile
+      for (const contact of contacts) {
+        const linkedinUrl =
+          contact.linkedin_profile_url ||
+          contact.profile_url ||
+          contact.linkedin;
+
+        if (!linkedinUrl) {
+          notFound++;
+          continue;
+        }
+
+        const linkedinId = normalizeLinkedinUrl(linkedinUrl);
+
+        if (!linkedinId) {
+          notFound++;
+          continue;
+        }
+
+        // Update profile with enriched data
+        const result = await LinkedinProfile.findOneAndUpdate(
+          { linkedinId },
+          {
+            $set: {
+              isEnriched: true,
+              enrichedData: contact,
+              payload: contact,
+              "misc.enrichedAt": new Date(),
+              "misc.webhookReceivedAt": new Date(),
+              "misc.enrichmentStatus": "completed",
+            },
+          },
+          { new: true }
+        );
+
+        if (result) {
+          updated++;
+          console.log(`Updated: ${linkedinId.substring(0, 60)}...`);
+        } else {
+          notFound++;
+          console.log(`Profile not found in DB: ${linkedinId}`);
+        }
+      }
+
+      console.log(
+        `Webhook complete: ${updated} updated, ${notFound} not found`
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: "Webhook processed successfully",
+        listId: listId,
+        updated: updated,
+        notFound: notFound,
+      });
+    } else {
+      console.log(` List ${listId} status: ${status} - not finished yet`);
+      return res.status(200).json({
+        success: true,
+        message: "List not finished yet",
+        listId: listId,
+        status: status,
+      });
+    }
+  } catch (error) {
+    console.error("Webhook Error:", error);
+    return res.status(200).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
 
 export { uploadProfiles, fetchEnrichedData, wizaWebhook };
