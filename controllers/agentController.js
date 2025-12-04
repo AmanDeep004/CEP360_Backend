@@ -313,7 +313,6 @@ const getCallingDataByAgentDataOld = asyncHandler(async (req, res, next) => {
       });
     }
 
-    // ✅ Add lastRemarks and lastCallingDate
     callingData = callingData.map((data) => {
       const chatHist = data.callHistory?.chatHistory;
 
@@ -356,6 +355,126 @@ const getCallingDataByAgentDataOld = asyncHandler(async (req, res, next) => {
     return sendError(next, err.message, 500);
   }
 });
+
+// here
+// const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
+//   try {
+//     const { agentId } = req.params;
+//     const {
+//       source,
+//       registered,
+//       callRemarks,
+//       lastDateOfTelecalling,
+//       page = 1,
+//       limit = 20,
+//     } = req.query;
+
+//     const pageNum = parseInt(page, 10);
+//     const limNum = parseInt(limit, 10);
+//     const skip = (pageNum - 1) * limNum;
+
+//     const filter = {
+//       agentId: agentId,
+//     };
+
+//     if (source) {
+//       filter.source = { $regex: new RegExp(source, "i") };
+//     }
+
+//     if (registered !== undefined) {
+//       filter.isRegistered = registered === "true";
+//     }
+
+//     let callingData = await callingDataModal
+//       .find(filter)
+//       .populate({
+//         path: "agentId",
+//         select: "employeeName email",
+//       })
+//       .populate({
+//         path: "callHistory",
+//         populate: {
+//           path: "chatHistory",
+//           model: "CallHistory",
+//         },
+//       })
+//       .lean();
+
+//     if (callRemarks) {
+//       callingData = callingData.filter((data) => {
+//         const chatHist = data.callHistory?.chatHistory;
+//         return (
+//           Array.isArray(chatHist) &&
+//           chatHist.some((entry) => entry.remarks === callRemarks)
+//         );
+//       });
+//     }
+
+//     if (lastDateOfTelecalling) {
+//       const trimmedDate = lastDateOfTelecalling.trim();
+//       const startOfDay = new Date(trimmedDate);
+//       startOfDay.setUTCHours(0, 0, 0, 0);
+
+//       const endOfDay = new Date(trimmedDate);
+//       endOfDay.setUTCHours(23, 59, 59, 999);
+
+//       callingData = callingData.filter((data) => {
+//         const chatHist = data.callHistory?.chatHistory;
+//         if (Array.isArray(chatHist) && chatHist.length > 0) {
+//           const lastEntry = chatHist.reduce(
+//             (latest, item) => {
+//               const callDate = new Date(item.callingDate || "1970-01-01");
+//               return callDate > latest.callingDate ? item : latest;
+//             },
+//             { callingDate: new Date("1970-01-01") }
+//           );
+
+//           if (!lastEntry.callingDate) return false;
+
+//           const callDate = new Date(lastEntry.callingDate);
+//           return callDate >= startOfDay && callDate <= endOfDay;
+//         }
+//         return false;
+//       });
+//     }
+
+//     // Attach last remarks and last calling date for each record
+//     callingData = callingData.map((item) => {
+//       const chatHist = item.callHistory?.chatHistory;
+//       if (Array.isArray(chatHist) && chatHist.length > 0) {
+//         const lastEntry = chatHist.reduce(
+//           (latest, entry) => {
+//             const date = new Date(entry.callingDate || "1970-01-01");
+//             return date > latest.callingDate ? entry : latest;
+//           },
+//           { callingDate: new Date("1970-01-01") }
+//         );
+
+//         item.lastCallingDate = lastEntry.callingDate || null;
+//         item.lastRemarks = lastEntry.remarks || null;
+//       } else {
+//         item.lastCallingDate = null;
+//         item.lastRemarks = null;
+//       }
+//       return item;
+//     });
+
+//     const total = callingData.length;
+//     const paginatedData = callingData.slice(skip, skip + limNum);
+
+//     return sendResponse(res, 200, "Calling data fetched successfully", {
+//       total,
+//       page: pageNum,
+//       limit: limNum,
+//       totalPages: Math.ceil(total / limNum),
+//       data: paginatedData,
+//     });
+//   } catch (err) {
+//     console.error(err);
+//     return sendError(next, err.message, 500);
+//   }
+// });
+
 const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
   try {
     const { agentId } = req.params;
@@ -364,6 +483,7 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
       registered,
       callRemarks,
       lastDateOfTelecalling,
+      search = "",
       page = 1,
       limit = 20,
     } = req.query;
@@ -372,20 +492,39 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
     const limNum = parseInt(limit, 10);
     const skip = (pageNum - 1) * limNum;
 
-    const filter = {
-      agentId: agentId,
-    };
+    const filter = { agentId };
 
-    if (source) {
-      filter.source = { $regex: new RegExp(source, "i") };
-    }
+    // Basic filters
+    if (source) filter.source = { $regex: new RegExp(source, "i") };
+    if (registered !== "") filter.isRegistered = registered === "true";
 
-    if (registered !== undefined) {
-      filter.isRegistered = registered === "true";
+    let searchFilter = {};
+
+    if (search.trim()) {
+      const regex = new RegExp(search.trim(), "i");
+
+      searchFilter = {
+        $or: [
+          { Full_Name: regex },
+          { First_Name: regex },
+          { Last_Name: regex },
+          { Mobile_No: regex },
+          { Office_Email_1: regex },
+          { Office_Email_2: regex },
+          { Personal_Email1: regex },
+          { Personal_Email2: regex },
+          { Contact_Direct_Phone1: regex },
+          { Contact_Direct_Phone2: regex },
+          { Company_Name: regex },
+        ],
+      };
     }
 
     let callingData = await callingDataModal
-      .find(filter)
+      .find({
+        ...filter,
+        ...(search ? searchFilter : {}),
+      })
       .populate({
         path: "agentId",
         select: "employeeName email",
@@ -399,6 +538,9 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
       })
       .lean();
 
+    // ================================
+    // 3) FILTER BY CALL REMARK
+    // ================================
     if (callRemarks) {
       callingData = callingData.filter((data) => {
         const chatHist = data.callHistory?.chatHistory;
@@ -409,6 +551,9 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
       });
     }
 
+    // ================================
+    // 4) FILTER BY LAST DATE CALLING
+    // ================================
     if (lastDateOfTelecalling) {
       const trimmedDate = lastDateOfTelecalling.trim();
       const startOfDay = new Date(trimmedDate);
@@ -419,6 +564,7 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
 
       callingData = callingData.filter((data) => {
         const chatHist = data.callHistory?.chatHistory;
+
         if (Array.isArray(chatHist) && chatHist.length > 0) {
           const lastEntry = chatHist.reduce(
             (latest, item) => {
@@ -433,13 +579,17 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
           const callDate = new Date(lastEntry.callingDate);
           return callDate >= startOfDay && callDate <= endOfDay;
         }
+
         return false;
       });
     }
 
-    // Attach last remarks and last calling date for each record
+    // ================================
+    //  5) ATTACH LAST REMARK & LAST CALL DATE
+    // ================================
     callingData = callingData.map((item) => {
       const chatHist = item.callHistory?.chatHistory;
+
       if (Array.isArray(chatHist) && chatHist.length > 0) {
         const lastEntry = chatHist.reduce(
           (latest, entry) => {
@@ -455,6 +605,7 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
         item.lastCallingDate = null;
         item.lastRemarks = null;
       }
+
       return item;
     });
 

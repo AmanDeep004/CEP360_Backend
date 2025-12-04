@@ -5,7 +5,7 @@ import CallingData from "../models/callingDataModal.js";
 import CallingDataEditApproval from "../models/callingDataEditApprovalModel.js";
 import { UserRoleEnum } from "../utils/enum.js";
 import XLSX from "xlsx";
-
+import mongoose from "mongoose";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 const {
   ADMIN,
@@ -234,7 +234,8 @@ const deletecallingData = asyncHandler(async (req, res, next) => {
  * @route GET /api/callingData/campaign/:CampaignId
  * @access Private
  */
-const getAllCallingDataold = asyncHandler(async (req, res, next) => {
+
+const getAllCallingDataOld = asyncHandler(async (req, res, next) => {
   try {
     const { CampaignId } = req.params;
     const page = parseInt(req.query.page) || 1;
@@ -242,6 +243,19 @@ const getAllCallingDataold = asyncHandler(async (req, res, next) => {
     const skip = (page - 1) * limit;
 
     const filter = { CampaignId };
+
+    if (req.query.search && req.query.search.trim() !== "") {
+      const searchRegex = new RegExp(`\\b${req.query.search.trim()}`, "i");
+      filter.full_Name = searchRegex;
+    }
+
+    // Optional filter: isRegistered=true/false
+    if (req.query.isRegistered !== undefined) {
+      const val = req.query.isRegistered.toLowerCase();
+      if (val === "true" || val === "false") {
+        filter.isRegistered = val === "true";
+      }
+    }
 
     const [total, data] = await Promise.all([
       CallingData.countDocuments(filter),
@@ -259,7 +273,6 @@ const getAllCallingDataold = asyncHandler(async (req, res, next) => {
     return sendError(next, err.message, 500);
   }
 });
-
 const getAllCallingData = asyncHandler(async (req, res, next) => {
   try {
     const { CampaignId } = req.params;
@@ -269,13 +282,27 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
 
     const filter = { CampaignId };
 
-    // Search by full_Name only
+    // search on multiple fields
     if (req.query.search && req.query.search.trim() !== "") {
-      const searchRegex = new RegExp(`\\b${req.query.search.trim()}`, "i");
-      filter.full_Name = searchRegex;
+      const search = req.query.search.trim();
+      const regex = new RegExp(search, "i");
+
+      filter.$or = [
+        { Full_Name: regex },
+        { First_Name: regex },
+        { Last_Name: regex },
+        { Mobile_No: regex },
+        { Office_Email_1: regex },
+        { Office_Email_2: regex },
+        { Personal_Email1: regex },
+        { Personal_Email2: regex },
+        { Contact_Direct_Phone1: regex },
+        { Contact_Direct_Phone2: regex },
+        { Company_Name: regex },
+      ];
     }
 
-    // Optional filter: isRegistered=true/false
+    // filter registered
     if (req.query.isRegistered !== undefined) {
       const val = req.query.isRegistered.toLowerCase();
       if (val === "true" || val === "false") {
@@ -283,6 +310,7 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
       }
     }
 
+    // fetch data and count
     const [total, data] = await Promise.all([
       CallingData.countDocuments(filter),
       CallingData.find(filter).skip(skip).limit(limit).lean(),
@@ -448,7 +476,7 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
   }
 });
 
-const assignCallingDataToAgents = asyncHandler(async (req, res, next) => {
+const assignCallingDataToAgentsOld = asyncHandler(async (req, res, next) => {
   try {
     const { agentId, callingDataIds, pmId, pmName } = req.body;
 
@@ -481,7 +509,99 @@ const assignCallingDataToAgents = asyncHandler(async (req, res, next) => {
     return sendError(next, err.message, 500);
   }
 });
+const assignCallingDataToAgents = asyncHandler(async (req, res, next) => {
+  try {
+    const { agentId, callingDataIds, pmId, pmName } = req.body;
+    const { range } = req.query;
 
+    if (!agentId || !pmId || !pmName) {
+      return sendError(
+        next,
+        "AgentId, ProjectManager Id, and ProjectManager Name are required",
+        400
+      );
+    }
+
+    let finalCallingDataIds = [];
+
+    if (range) {
+      const match = range.match(/^(\d+)-(\d+)$/);
+      if (!match) {
+        return sendError(
+          next,
+          "Invalid range format. Use 'start-end' (e.g., 1-10)",
+          400
+        );
+      }
+
+      const start = parseInt(match[1], 10);
+      const end = parseInt(match[2], 10);
+
+      if (start < 1 || end < start) {
+        return sendError(
+          next,
+          "Invalid range. Start must be >= 1 and end must be >= start",
+          400
+        );
+      }
+
+      const unassignedData = await CallingData.find(
+        { agentId: { $exists: false } },
+        { _id: 1 }
+      )
+        .sort({ createdAt: 1 })
+        .lean();
+      // Apply range slicing (convert to 0-based indexing)
+      const rangeRecords = unassignedData.slice(start - 1, end);
+      finalCallingDataIds = rangeRecords.map((item) => item._id.toString());
+
+      if (!unassignedData) {
+        return sendError(
+          next,
+          `No unassigned data found in range ${start}-${end}`,
+          404
+        );
+      }
+    }
+    // Handle direct ID assignment (old method)
+    else if (callingDataIds && Array.isArray(callingDataIds)) {
+      if (callingDataIds.length === 0) {
+        return sendError(next, "CallingDataIds array cannot be empty", 400);
+      }
+      finalCallingDataIds = callingDataIds;
+    }
+    // Neither range nor callingDataIds provided
+    else {
+      return sendError(
+        next,
+        "Either 'range' query parameter or 'callingDataIds' in body is required",
+        400
+      );
+    }
+
+    const result = await CallingData.updateMany(
+      { _id: { $in: finalCallingDataIds } },
+      { $set: { agentId, pmId, pmName } }
+    );
+
+    return sendResponse(
+      res,
+      200,
+      `Successfully assigned ${result.modifiedCount} calling data record(s) to agent`,
+      {
+        modifiedCount: result.modifiedCount,
+        matchedCount: result.matchedCount,
+        agentId,
+        pmId,
+        pmName,
+        method: range ? "range" : "direct",
+      }
+    );
+  } catch (err) {
+    console.error("Error in assignCallingDataToAgents:", err);
+    return sendError(next, err.message, 500);
+  }
+});
 const unassignCallingDataFromAgents = asyncHandler(async (req, res, next) => {
   try {
     const { callingDataIds } = req.body;
