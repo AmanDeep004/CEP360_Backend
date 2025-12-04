@@ -26,19 +26,22 @@ const DumpHistorySchema = new mongoose.Schema(
     Personal_Email1: { type: String, trim: true },
     Company_ID: { type: String, trim: true },
     Company_Name: { type: String, trim: true },
-
+    Office_Email_1: { type: String, trim: true },
+    //DND_Flag
     isRegistered: { type: Boolean, default: false },
-
+    pmId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     pmName: { type: String, trim: true },
     clientName: { type: String, trim: true },
     clientEmail: { type: String, trim: true },
     clientContact: { type: String, trim: true },
     dataSourceType: { type: String, trim: true },
-
+    registeredOn: { type: Date },
     lastRemarks: { type: String, trim: true },
     lastCallingDate: { type: Date },
     lastAgent_id: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     lastAgentName: { type: String, trim: true },
+    //campign type, pm details,start end date
+    //agent details
   },
   { timestamps: true }
 );
