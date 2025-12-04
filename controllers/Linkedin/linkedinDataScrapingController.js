@@ -2,8 +2,8 @@ import errorHandler from "../../utils/index.js";
 import LinkedinProfile from "../../models/Linkedin/profileList.js";
 import axios from "axios";
 import XLSX from "xlsx";
+// import { asyncHandler, sendError } from "../utils/index.js";
 import csv from "csvtojson";
-
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
 const WIZA_API_KEY = process.env.WIZA_API_KEY;
@@ -344,7 +344,7 @@ const wizaWebhook = asyncHandler(async (req, res, next) => {
   }
 });
 
-const getAllEnrichedProfiles = asyncHandler(async (req, res, next) => {
+const getAllEnrichedProfilesOld = asyncHandler(async (req, res, next) => {
   try {
     // Pagination parameters
     const page = parseInt(req.query.page) || 1;
@@ -533,6 +533,143 @@ const getAllEnrichedProfiles = asyncHandler(async (req, res, next) => {
         emailStatus: req.query.emailStatus || null,
         company: req.query.company || null,
         country: req.query.country || null,
+      },
+    });
+  } catch (error) {
+    console.error("Get Enriched Profiles Error:", error);
+    return sendError(next, error.message, 500);
+  }
+});
+
+const getAllEnrichedProfiles = asyncHandler(async (req, res, next) => {
+  try {
+    // Pagination
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    // Base filter
+    // const filters = { isEnriched: true };
+    const filters = {};
+
+    // ========== GLOBAL SEARCH ==========
+    if (req.query.search && req.query.search.trim() !== "") {
+      const searchTerm = req.query.search.trim();
+      const searchRegex = new RegExp(searchTerm, "i");
+
+      filters.$or = [
+        { "enrichedData.full_name": searchRegex },
+        { "enrichedData.first_name": searchRegex },
+        { "enrichedData.last_name": searchRegex },
+        { "enrichedData.email": searchRegex },
+        { "enrichedData.personal_email1": searchRegex },
+        { "enrichedData.company": searchRegex },
+        { "enrichedData.title": searchRegex },
+        { "enrichedData.location": searchRegex },
+        { "enrichedData.country": searchRegex },
+        { "enrichedData.region": searchRegex },
+        { "enrichedData.locality": searchRegex },
+        { "enrichedData.company_industry": searchRegex },
+        { "enrichedData.domain": searchRegex },
+        { linkedinId: searchRegex },
+      ];
+    }
+
+    // ========== FILTERS ==========
+
+    const regexFilter = (field, value) => {
+      if (value) filters[field] = new RegExp(value, "i");
+    };
+
+    if (req.query.batchName) filters.batchName = req.query.batchName;
+    if (req.query.emailStatus)
+      filters["enrichedData.email_status"] = req.query.emailStatus;
+    if (req.query.emailType)
+      filters["enrichedData.email_type"] = req.query.emailType;
+
+    regexFilter("enrichedData.company", req.query.company);
+    regexFilter("enrichedData.title", req.query.title);
+    regexFilter("enrichedData.country", req.query.country);
+    regexFilter("enrichedData.region", req.query.region);
+    regexFilter("enrichedData.locality", req.query.locality);
+    regexFilter("enrichedData.company_industry", req.query.industry);
+    regexFilter("enrichedData.domain", req.query.domain);
+
+    if (req.query.companySizeRange)
+      filters["enrichedData.company_size_range"] = req.query.companySizeRange;
+
+    if (req.query.companyType)
+      filters["enrichedData.company_type"] = req.query.companyType;
+
+    // ========== DATE FILTERS ==========
+
+    if (req.query.enrichedFrom || req.query.enrichedTo) {
+      filters["misc.enrichedAt"] = {};
+      if (req.query.enrichedFrom)
+        filters["misc.enrichedAt"].$gte = new Date(req.query.enrichedFrom);
+      if (req.query.enrichedTo)
+        filters["misc.enrichedAt"].$lte = new Date(req.query.enrichedTo);
+    }
+
+    if (req.query.createdFrom || req.query.createdTo) {
+      filters.createdAt = {};
+      if (req.query.createdFrom)
+        filters.createdAt.$gte = new Date(req.query.createdFrom);
+      if (req.query.createdTo)
+        filters.createdAt.$lte = new Date(req.query.createdTo);
+    }
+
+    // ========== BOOLEAN FILTERS ==========
+
+    if (req.query.hasPhone === "true") {
+      filters["enrichedData.phone_number1"] = { $exists: true, $ne: null };
+    }
+    if (req.query.hasPhone === "false") {
+      filters["enrichedData.phone_number1"] = { $in: [null, ""] };
+    }
+
+    if (req.query.hasPersonalEmail === "true") {
+      filters["enrichedData.personal_email1"] = { $exists: true, $ne: null };
+    }
+
+    // ========== SORTING ==========
+    const sortFieldMap = {
+      name: "enrichedData.full_name",
+      email: "enrichedData.email",
+      company: "enrichedData.company",
+      title: "enrichedData.title",
+      location: "enrichedData.location",
+      enrichedAt: "misc.enrichedAt",
+      createdAt: "createdAt",
+    };
+
+    let sortBy = { createdAt: -1 };
+
+    if (req.query.sortBy) {
+      const field = sortFieldMap[req.query.sortBy] || "createdAt";
+      const order = req.query.sortOrder === "asc" ? 1 : -1;
+      sortBy = { [field]: order };
+    }
+
+    // ========== EXECUTE QUERY ==========
+    const totalCount = await LinkedinProfile.countDocuments(filters);
+    const totalPages = Math.ceil(totalCount / limit);
+
+    const profiles = await LinkedinProfile.find(filters)
+      .sort(sortBy)
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    return sendResponse(res, 200, "Enriched profiles fetched successfully", {
+      profiles,
+      pagination: {
+        currentPage: page,
+        totalPages,
+        totalCount,
+        limit,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1,
       },
     });
   } catch (error) {
