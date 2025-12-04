@@ -614,6 +614,281 @@ const getAllAgentsStatsReport = asyncHandler(async (req, res, next) => {
     return sendError(next, error.message, 500);
   }
 });
+const getRegisteredUsersWithCampaignOld = asyncHandler(
+  async (req, res, next) => {
+    try {
+      const { startDate, endDate, campaignId, download } = req.query;
+
+      const dateFilter = {};
+      if (startDate) dateFilter.$gte = new Date(startDate);
+      if (endDate) dateFilter.$lte = new Date(endDate);
+
+      const matchQuery = { isRegistered: true };
+      if (campaignId) matchQuery.CampaignId = campaignId;
+      if (startDate || endDate) matchQuery.createdAt = dateFilter;
+      console.log(matchQuery, "matchQuery");
+
+      // ✅ Fetch Registered Users
+      const registeredUsers = await CallingData.find(matchQuery)
+        .populate("agentId", "employeeName email _id")
+        // .populate("CampaignId", "name")
+        .populate({
+          path: "CampaignId",
+          model: "Campaign", // 👈 explicitly specify model name
+          select: "name _id",
+        })
+        .populate({
+          path: "callHistory",
+          select: "chatHistory",
+        })
+        .lean();
+      console.log(registeredUsers, "registeredUsers");
+
+      const responseData = registeredUsers.map(
+        (item) => (
+          console.log("Campaign Data:", item.CampaignId),
+          {
+            campaignName: item?.CampaignId?.name || "N/A",
+            agentName: item?.agentId?.employeeName || "N/A",
+            agentId: item?.agentId?._id || "N/A",
+            agentEmail: item?.agentId?.email || "N/A",
+
+            // ✅ Details from CallingData Model
+            userName:
+              item?.Full_Name ||
+              `${item?.First_Name || ""} ${item?.Last_Name || ""}`.trim() ||
+              "N/A",
+            phone: item?.Mobile_No || item?.Contact_Direct_Phone1 || "N/A",
+            email: item?.Office_Email_1 || item?.Personal_Email1 || "N/A",
+
+            registeredDate: item?.createdAt
+              ? new Date(item.createdAt).toLocaleString("en-IN")
+              : "N/A",
+
+            remarks:
+              item?.callHistory?.chatHistory?.length > 0
+                ? item.callHistory.chatHistory.slice(-1)[0]?.remarks || "N/A"
+                : "N/A",
+          }
+        )
+      );
+
+      // ✅ Excel Download Option
+      if (download === "true") {
+        const worksheet = XLSX.utils.json_to_sheet(responseData);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Registered Users");
+
+        const fileName = `Registered_Users_Report_${Date.now()}.xlsx`;
+        const filePath = path.join(os.tmpdir(), fileName);
+
+        XLSX.writeFile(workbook, filePath);
+
+        return res.download(filePath, fileName, (err) => {
+          if (err) console.log("Download Error:", err);
+        });
+      }
+
+      return sendResponse(
+        res,
+        200,
+        "Registered users data fetched successfully",
+        responseData
+      );
+    } catch (error) {
+      return sendError(next, error.message, 500);
+    }
+  }
+);
+const getRegisteredUsersWithCampaignold3 = asyncHandler(
+  async (req, res, next) => {
+    try {
+      const { startDate, endDate, campaignId, download } = req.query;
+
+      // ✅ Setup date filter if provided
+      const dateFilter = {};
+      if (startDate) dateFilter.$gte = new Date(startDate);
+      if (endDate) dateFilter.$lte = new Date(endDate);
+
+      // ✅ Base query for registered users
+      const matchQuery = { isRegistered: true };
+
+      // ✅ If specific campaignId provided, filter data
+      if (campaignId && campaignId !== "all") {
+        matchQuery.CampaignId = campaignId;
+      }
+
+      // ✅ If date range provided
+      if (startDate || endDate) {
+        matchQuery.createdAt = dateFilter;
+      }
+
+      console.log("Match Query:", matchQuery);
+
+      // ✅ Fetch registered users + populate Campaign & Agent info
+      const registeredUsers = await CallingData.find(matchQuery)
+        .populate({
+          path: "CampaignId",
+          model: "Campaign",
+          select: "name _id",
+        })
+        .populate({
+          path: "agentId",
+          model: "User",
+          select: "employeeName email _id",
+        })
+        .populate({
+          path: "callHistory",
+          select: "chatHistory",
+        })
+        .lean();
+
+      console.log("Registered Users Found:", registeredUsers.length);
+
+      // ✅ Transform data to the desired output format
+      const responseData = registeredUsers.map((item) => ({
+        campaignId: item?.CampaignId?._id || "N/A",
+        campaignName: item?.CampaignId?.name || "N/A",
+        agentId: item?.agentId?._id || "N/A",
+        agentName: item?.agentId?.employeeName || "N/A",
+        agentEmail: item?.agentId?.email || "N/A",
+        userName:
+          item?.Full_Name ||
+          `${item?.First_Name || ""} ${item?.Last_Name || ""}`.trim() ||
+          "N/A",
+        phone: item?.Mobile_No || item?.Contact_Direct_Phone1 || "N/A",
+        email: item?.Office_Email_1 || item?.Personal_Email1 || "N/A",
+        registeredDate: item?.createdAt
+          ? new Date(item.createdAt).toLocaleString("en-IN")
+          : "N/A",
+        // remarks:
+        //   item?.callHistory?.chatHistory?.length > 0
+        //     ? item.callHistory.chatHistory.slice(-1)[0]?.remarks || "N/A"
+        //     : "N/A",
+      }));
+
+      // ✅ Excel download option
+      if (download === "false") {
+        const worksheet = XLSX.utils.json_to_sheet(responseData);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Registered Users");
+
+        const fileName = `Registered_Users_Report_${Date.now()}.xlsx`;
+        const filePath = path.join(os.tmpdir(), fileName);
+
+        XLSX.writeFile(workbook, filePath);
+
+        return res.download(filePath, fileName, (err) => {
+          if (err) console.error("Download Error:", err);
+        });
+      }
+
+      // ✅ Normal API response
+      return sendResponse(
+        res,
+        200,
+        "Registered users fetched successfully",
+        responseData
+      );
+    } catch (error) {
+      return sendError(next, error.message || "Internal Server Error", 500);
+    }
+  }
+);
+
+const getRegisteredUsersWithCampaignOld2 = asyncHandler(
+  async (req, res, next) => {
+    try {
+      const { startDate, endDate, campaignId, download } = req.query;
+
+      // ✅ Date filter setup
+      const dateFilter = {};
+      if (startDate) dateFilter.$gte = new Date(startDate);
+      if (endDate) dateFilter.$lte = new Date(endDate);
+
+      // ✅ Base filter — only registered users
+      const matchQuery = { isRegistered: true };
+
+      // ✅ If campaignId is provided, filter by it — else get all campaigns
+      if (campaignId && campaignId !== "all") {
+        matchQuery.CampaignId = campaignId;
+      }
+
+      // ✅ Apply date filter if present
+      if (startDate || endDate) {
+        matchQuery.createdAt = dateFilter;
+      }
+
+      console.log("Match Query =>", matchQuery);
+
+      // ✅ Fetch all registered users (filtered or all)
+      const registeredUsers = await CallingData.find(matchQuery)
+        .populate({
+          path: "CampaignId",
+          model: "Campaign", // 👈 ensure matches Campaign model name
+          select: "name _id",
+        })
+        .populate("agentId", "employeeName email _id")
+        .populate({
+          path: "callHistory",
+          select: "chatHistory",
+        })
+        .lean();
+
+      console.log("Fetched Users =>", registeredUsers.length);
+
+      // ✅ Transform response
+      const responseData = registeredUsers.map((item) => ({
+        campaignId: item?.CampaignId?._id || "N/A",
+        campaignName: item?.CampaignId?.name || "N/A",
+        agentId: item?.agentId?._id || "N/A",
+        agentName: item?.agentId?.employeeName || "N/A",
+        agentEmail: item?.agentId?.email || "N/A",
+
+        userName:
+          item?.Full_Name ||
+          `${item?.First_Name || ""} ${item?.Last_Name || ""}`.trim() ||
+          "N/A",
+        phone: item?.Mobile_No || item?.Contact_Direct_Phone1 || "N/A",
+        email: item?.Office_Email_1 || item?.Personal_Email1 || "N/A",
+
+        registeredDate: item?.createdAt
+          ? new Date(item.createdAt).toLocaleString("en-IN")
+          : "N/A",
+
+        remarks:
+          item?.callHistory?.chatHistory?.length > 0
+            ? item.callHistory.chatHistory.slice(-1)[0]?.remarks || "N/A"
+            : "N/A",
+      }));
+
+      // ✅ Excel download support
+      if (download === "true") {
+        const worksheet = XLSX.utils.json_to_sheet(responseData);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Registered Users");
+
+        const fileName = `Registered_Users_Report_${Date.now()}.xlsx`;
+        const filePath = path.join(os.tmpdir(), fileName);
+
+        XLSX.writeFile(workbook, filePath);
+        return res.download(filePath, fileName, (err) => {
+          if (err) console.error("Download Error:", err);
+        });
+      }
+
+      // ✅ Normal API JSON response
+      return sendResponse(
+        res,
+        200,
+        "Registered users data fetched successfully",
+        responseData
+      );
+    } catch (error) {
+      return sendError(next, error.message, 500);
+    }
+  }
+);
 const getRegisteredUsersWithCampaign = asyncHandler(async (req, res, next) => {
   try {
     const { startDate, endDate, campaignId, download } = req.query;
@@ -623,66 +898,69 @@ const getRegisteredUsersWithCampaign = asyncHandler(async (req, res, next) => {
     if (endDate) dateFilter.$lte = new Date(endDate);
 
     const matchQuery = { isRegistered: true };
-    if (campaignId) matchQuery.CampaignId = campaignId;
+    if (campaignId && campaignId !== "all") matchQuery.CampaignId = campaignId;
     if (startDate || endDate) matchQuery.createdAt = dateFilter;
 
-    // ✅ Fetch Registered Users
+    console.log("Match Query:", matchQuery);
+
     const registeredUsers = await CallingData.find(matchQuery)
-      .populate("agentId", "employeeName email")
-      .populate("CampaignId", "name")
+      .populate({
+        path: "CampaignId",
+        model: "Campaign",
+        select: "name _id",
+      })
+      .populate({
+        path: "agentId",
+        model: "User",
+        select: "employeeName email _id",
+      })
       .populate({
         path: "callHistory",
         select: "chatHistory",
       })
       .lean();
 
+    console.log("Registered Users Found:", registeredUsers.length);
+
     const responseData = registeredUsers.map((item) => ({
+      campaignId: item?.CampaignId?._id || "N/A",
       campaignName: item?.CampaignId?.name || "N/A",
+      agentId: item?.agentId?._id || "N/A",
       agentName: item?.agentId?.employeeName || "N/A",
       agentEmail: item?.agentId?.email || "N/A",
-
-      // ✅ Details from CallingData Model
       userName:
         item?.Full_Name ||
         `${item?.First_Name || ""} ${item?.Last_Name || ""}`.trim() ||
         "N/A",
       phone: item?.Mobile_No || item?.Contact_Direct_Phone1 || "N/A",
       email: item?.Office_Email_1 || item?.Personal_Email1 || "N/A",
-
       registeredDate: item?.createdAt
         ? new Date(item.createdAt).toLocaleString("en-IN")
         : "N/A",
-
-      remarks:
-        item?.callHistory?.chatHistory?.length > 0
-          ? item.callHistory.chatHistory.slice(-1)[0]?.remarks || "N/A"
-          : "N/A",
     }));
 
-    // ✅ Excel Download Option
-    if (download === "true") {
+    if (download === "false") {
       const worksheet = XLSX.utils.json_to_sheet(responseData);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "Registered Users");
 
       const fileName = `Registered_Users_Report_${Date.now()}.xlsx`;
       const filePath = path.join(os.tmpdir(), fileName);
-
       XLSX.writeFile(workbook, filePath);
 
       return res.download(filePath, fileName, (err) => {
-        if (err) console.log("Download Error:", err);
+        if (err) console.error("Download Error:", err);
       });
     }
 
     return sendResponse(
       res,
       200,
-      "Registered users data fetched successfully",
+      "Registered users fetched successfully",
       responseData
     );
   } catch (error) {
-    return sendError(next, error.message, 500);
+    return sendError(next, error.message || "Internal Server Error", 500);
   }
 });
 const getCombinedReportOld = asyncHandler(async (req, res, next) => {
@@ -954,169 +1232,259 @@ const getCombinedReportOld2 = asyncHandler(async (req, res, next) => {
   }
 });
 
+// const getCombinedReportOld3 = asyncHandler(async (req, res, next) => {
+//   try {
+//     const { startDate, endDate, campaignId, download } = req.query;
+
+//     const dateFilter = {};
+//     if (startDate) dateFilter.$gte = new Date(startDate);
+//     if (endDate) dateFilter.$lte = new Date(endDate);
+
+//     let campaign = null;
+//     if (campaignId) {
+//       campaign = await Campaign.findById(campaignId).select("name").lean();
+//     }
+
+//     // ✅ Get Agents
+//     let agents;
+//     if (campaignId) {
+//       const assignedAgents = await AgentAssigned.find({
+//         campaign_id: campaignId,
+//         isAssigned: true,
+//       })
+//         .select("agent_id")
+//         .lean();
+
+//       const assignedAgentIds = assignedAgents.map((a) => a.agent_id);
+
+//       agents = await User.find({
+//         _id: { $in: assignedAgentIds },
+//         role: AGENT,
+//       }).select("_id employeeName email");
+//     } else {
+//       agents = await User.find({ role: AGENT }).select(
+//         "_id employeeName email"
+//       );
+//     }
+
+//     // ✅ Agent Stats
+//     const agentStats = [];
+//     for (const agent of agents) {
+//       let campaignName = "All Campaigns";
+
+//       if (!campaignId) {
+//         const agentCampaign = await AgentAssigned.findOne({
+//           agent_id: agent._id,
+//           isAssigned: true,
+//         })
+//           .populate("campaign_id", "name")
+//           .lean();
+
+//         if (agentCampaign?.campaign_id?.name) {
+//           campaignName = agentCampaign.campaign_id.name;
+//         }
+//       }
+
+//       const query = { agentId: agent._id };
+//       if (campaignId) {
+//         query.CampaignId = campaignId;
+//         campaignName = campaign?.name || "N/A";
+//       }
+//       if (startDate || endDate) query.createdAt = dateFilter;
+
+//       const callingData = await CallingData.find(query)
+//         .select("callHistory isRegistered")
+//         .populate({
+//           path: "callHistory",
+//           select: "chatHistory",
+//         })
+//         .lean();
+
+//       let totalCallsMade = 0;
+//       let totalRegistrations = 0;
+//       const remarkCount = {};
+
+//       for (const entry of callingData) {
+//         if (entry.callHistory?.chatHistory) {
+//           totalCallsMade += entry.callHistory.chatHistory.length;
+
+//           entry.callHistory.chatHistory.forEach((chat) => {
+//             if (chat.remarks) {
+//               remarkCount[chat.remarks] = (remarkCount[chat.remarks] || 0) + 1;
+//             }
+//             if (chat.isRegistered) totalRegistrations++;
+//           });
+//         }
+//       }
+
+//       agentStats.push({
+//         campaignName,
+//         agentName: agent.employeeName,
+//         email: agent.email,
+//         totalCallingDataAssigned: callingData.length,
+//         totalCallsMade,
+//         totalRegistrations,
+//         remarkCount: JSON.stringify(remarkCount),
+//       });
+//     }
+
+//     // ✅ Registered Users
+//     const matchQuery = { isRegistered: true };
+//     if (campaignId) matchQuery.CampaignId = campaignId;
+//     if (startDate || endDate) matchQuery.createdAt = dateFilter;
+
+//     const registeredData = await CallingData.find(matchQuery)
+//       .populate("agentId", "employeeName email")
+//       .populate("CampaignId", "name")
+//       .populate({
+//         path: "callHistory",
+//         select: "chatHistory",
+//       })
+//       .lean();
+
+//     const registeredUsers = registeredData.map((item) => ({
+//       campaignName: item?.CampaignId?.name || "N/A",
+//       agentName: item?.agentId?.employeeName || "N/A",
+//       agentEmail: item?.agentId?.email || "N/A",
+//       userName:
+//         item?.Full_Name ||
+//         `${item?.First_Name || ""} ${item?.Last_Name || ""}`.trim() ||
+//         "N/A",
+//       phone: item?.Mobile_No || item?.Contact_Direct_Phone1 || "N/A",
+//       email: item?.Office_Email_1 || item?.Personal_Email1 || "N/A",
+//       registeredDate: item?.createdAt
+//         ? new Date(item.createdAt).toLocaleString("en-IN")
+//         : "N/A",
+//       remarks:
+//         item?.callHistory?.chatHistory?.length > 0
+//           ? item.callHistory.chatHistory.slice(-1)[0]?.remarks || "N/A"
+//           : "N/A",
+//     }));
+
+//     // ✅ Download as Excel
+//     if (download === "true") {
+//       const workbook = XLSX.utils.book_new();
+
+//       // Sheet 1 - Agent Stats
+//       const agentStatsSheet = XLSX.utils.json_to_sheet(agentStats);
+//       XLSX.utils.book_append_sheet(workbook, agentStatsSheet, "Agent Stats");
+
+//       // Sheet 2 - Registered Users
+//       const registeredSheet = XLSX.utils.json_to_sheet(registeredUsers);
+//       XLSX.utils.book_append_sheet(
+//         workbook,
+//         registeredSheet,
+//         "Registered Users"
+//       );
+
+//       const fileName = `Combined_Report_${Date.now()}.xlsx`;
+//       const filePath = path.join(os.tmpdir(), fileName);
+
+//       XLSX.writeFile(workbook, filePath);
+
+//       return res.download(filePath, fileName, (err) => {
+//         if (err) console.log("Download Error:", err);
+//         fs.unlinkSync(filePath);
+//       });
+//     }
+
+//     // ✅ Normal JSON Response
+//     return sendResponse(res, 200, "Combined report fetched", {
+//       agentStats,
+//       registeredUsers,
+//     });
+//   } catch (error) {
+//     return sendError(next, error.message, 500);
+//   }
+// });
 const getCombinedReport = asyncHandler(async (req, res, next) => {
   try {
-    const { startDate, endDate, campaignId, download } = req.query;
+    const { download } = req.query; // ✅ Only "download" query param now
 
-    const dateFilter = {};
-    if (startDate) dateFilter.$gte = new Date(startDate);
-    if (endDate) dateFilter.$lte = new Date(endDate);
-
-    let campaign = null;
-    if (campaignId) {
-      campaign = await Campaign.findById(campaignId).select("name").lean();
-    }
-
-    // ✅ Get Agents
-    let agents;
-    if (campaignId) {
-      const assignedAgents = await AgentAssigned.find({
-        campaign_id: campaignId,
-        isAssigned: true,
-      })
-        .select("agent_id")
-        .lean();
-
-      const assignedAgentIds = assignedAgents.map((a) => a.agent_id);
-
-      agents = await User.find({
-        _id: { $in: assignedAgentIds },
-        role: AGENT,
-      }).select("_id employeeName email");
-    } else {
-      agents = await User.find({ role: AGENT }).select(
-        "_id employeeName email"
-      );
-    }
-
-    // ✅ Agent Stats
-    const agentStats = [];
-    for (const agent of agents) {
-      let campaignName = "All Campaigns";
-
-      if (!campaignId) {
-        const agentCampaign = await AgentAssigned.findOne({
-          agent_id: agent._id,
-          isAssigned: true,
-        })
-          .populate("campaign_id", "name")
-          .lean();
-
-        if (agentCampaign?.campaign_id?.name) {
-          campaignName = agentCampaign.campaign_id.name;
-        }
-      }
-
-      const query = { agentId: agent._id };
-      if (campaignId) {
-        query.CampaignId = campaignId;
-        campaignName = campaign?.name || "N/A";
-      }
-      if (startDate || endDate) query.createdAt = dateFilter;
-
-      const callingData = await CallingData.find(query)
-        .select("callHistory isRegistered")
-        .populate({
-          path: "callHistory",
-          select: "chatHistory",
-        })
-        .lean();
-
-      let totalCallsMade = 0;
-      let totalRegistrations = 0;
-      const remarkCount = {};
-
-      for (const entry of callingData) {
-        if (entry.callHistory?.chatHistory) {
-          totalCallsMade += entry.callHistory.chatHistory.length;
-
-          entry.callHistory.chatHistory.forEach((chat) => {
-            if (chat.remarks) {
-              remarkCount[chat.remarks] = (remarkCount[chat.remarks] || 0) + 1;
-            }
-            if (chat.isRegistered) totalRegistrations++;
-          });
-        }
-      }
-
-      agentStats.push({
-        campaignName,
-        agentName: agent.employeeName,
-        email: agent.email,
-        totalCallingDataAssigned: callingData.length,
-        totalCallsMade,
-        totalRegistrations,
-        remarkCount: JSON.stringify(remarkCount),
-      });
-    }
-
-    // ✅ Registered Users
-    const matchQuery = { isRegistered: true };
-    if (campaignId) matchQuery.CampaignId = campaignId;
-    if (startDate || endDate) matchQuery.createdAt = dateFilter;
-
-    const registeredData = await CallingData.find(matchQuery)
-      .populate("agentId", "employeeName email")
-      .populate("CampaignId", "name")
-      .populate({
-        path: "callHistory",
-        select: "chatHistory",
-      })
+    // ✅ Fetch all active campaigns
+    const campaigns = await Campaign.find()
+      .select("name type category startDate endDate")
       .lean();
 
-    const registeredUsers = registeredData.map((item) => ({
-      campaignName: item?.CampaignId?.name || "N/A",
-      agentName: item?.agentId?.employeeName || "N/A",
-      agentEmail: item?.agentId?.email || "N/A",
-      userName:
-        item?.Full_Name ||
-        `${item?.First_Name || ""} ${item?.Last_Name || ""}`.trim() ||
-        "N/A",
-      phone: item?.Mobile_No || item?.Contact_Direct_Phone1 || "N/A",
-      email: item?.Office_Email_1 || item?.Personal_Email1 || "N/A",
-      registeredDate: item?.createdAt
-        ? new Date(item.createdAt).toLocaleString("en-IN")
-        : "N/A",
-      remarks:
-        item?.callHistory?.chatHistory?.length > 0
-          ? item.callHistory.chatHistory.slice(-1)[0]?.remarks || "N/A"
+    if (!campaigns.length)
+      return sendError(next, "No active campaigns found", 404);
+
+    const reportData = [];
+
+    for (const campaign of campaigns) {
+      // ✅ Total calling data count
+      const totalCallingData = await CallingData.countDocuments({
+        CampaignId: campaign._id,
+      });
+
+      // ✅ Total called data count
+      const totalCalledData = await CallingData.countDocuments({
+        CampaignId: campaign._id,
+        callHistory: { $exists: true, $ne: null },
+      });
+
+      // ✅ Total registered users
+      const totalRegisteredUsers = await CallingData.countDocuments({
+        CampaignId: campaign._id,
+        isRegistered: true,
+      });
+
+      // ✅ Total not registered users
+      const totalNotRegisteredUsers = totalCallingData - totalRegisteredUsers;
+
+      // ✅ Total agents assigned
+      const totalAgents = await AgentAssigned.countDocuments({
+        campaign_id: campaign._id,
+        isAssigned: true,
+      });
+
+      reportData.push({
+        Campaign_Name: campaign.name,
+        Category: campaign.category || "N/A",
+        Type: campaign.type || "N/A",
+        Start_Date: campaign.startDate
+          ? new Date(campaign.startDate).toLocaleDateString("en-GB")
           : "N/A",
-    }));
+        End_Date: campaign.endDate
+          ? new Date(campaign.endDate).toLocaleDateString("en-GB")
+          : "N/A",
+        Total_Agents: totalAgents,
+        Total_Calling_Data: totalCallingData,
+        Total_Called_Data: totalCalledData,
+        Total_Registered_Users: totalRegisteredUsers,
+        Total_Not_Registered_Users: totalNotRegisteredUsers,
+      });
+    }
 
-    // ✅ Download as Excel
+    // ✅ Excel Download Feature
     if (download === "true") {
+      const worksheet = XLSX.utils.json_to_sheet(reportData);
       const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Combined Report");
 
-      // Sheet 1 - Agent Stats
-      const agentStatsSheet = XLSX.utils.json_to_sheet(agentStats);
-      XLSX.utils.book_append_sheet(workbook, agentStatsSheet, "Agent Stats");
+      const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
 
-      // Sheet 2 - Registered Users
-      const registeredSheet = XLSX.utils.json_to_sheet(registeredUsers);
-      XLSX.utils.book_append_sheet(
-        workbook,
-        registeredSheet,
-        "Registered Users"
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename=Combined_Report_${
+          new Date().toISOString().split("T")[0]
+        }.xlsx`
       );
 
-      const fileName = `Combined_Report_${Date.now()}.xlsx`;
-      const filePath = path.join(os.tmpdir(), fileName);
-
-      XLSX.writeFile(workbook, filePath);
-
-      return res.download(filePath, fileName, (err) => {
-        if (err) console.log("Download Error:", err);
-        fs.unlinkSync(filePath);
-      });
+      return res.send(buffer);
     }
 
     // ✅ Normal JSON Response
-    return sendResponse(res, 200, "Combined report fetched", {
-      agentStats,
-      registeredUsers,
+    return sendResponse(res, 200, "Combined report fetched successfully", {
+      totalCampaigns: reportData.length,
+      campaigns: reportData,
     });
   } catch (error) {
-    return sendError(next, error.message, 500);
+    return sendError(next, error.message || "Internal Server Error", 500);
   }
 });
 export {
