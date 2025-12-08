@@ -4,7 +4,7 @@ import errorHandler from "../../utils/index.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
 const createTemplate = asyncHandler(async (req, res, next) => {
-  const { templateName, templateId, campaignId } = req.body;
+  const { templateName, templateId, campaignId, type } = req.body;
 
   if (!templateName) {
     return sendError(next, "TemplateName is required", 400);
@@ -17,6 +17,7 @@ const createTemplate = asyncHandler(async (req, res, next) => {
     templateName,
     templateId,
     campaignId,
+    type,
   });
 
   return sendResponse(res, 200, "Template created successfully", newTemplate);
@@ -32,11 +33,12 @@ const getAllTemplates = asyncHandler(async (req, res, next) => {
 });
 
 const updateTemplate = asyncHandler(async (req, res, next) => {
-  const { templateName, campaignId } = req.body;
+  const { templateName, campaignId, type } = req.body;
 
   const updated = await Template.findOneAndUpdate(
     { templateName },
     { campaignId },
+    { type },
     { new: true }
   );
 
