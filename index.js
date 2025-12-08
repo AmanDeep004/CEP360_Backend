@@ -82,7 +82,7 @@ const startServer = async () => {
     app.use("/api/template", templateRoutes);
     app.use("/api/linkedin", linkedinDataScrapingRoute);
 
-    // Schedule: At 23:00 on day-of-month 25
+    // Schedule: At 23:00 on day-of-month 25 for expected salary generation
     cron.schedule(
       "30 23 25 * *", // 11:00 PM on 25th of every month
       // "56 11 6 * *", // 11:30 AM on 6th of every month
@@ -112,6 +112,34 @@ const startServer = async () => {
         timezone: "Asia/Kolkata", // run on Indian time
       }
     );
+    //Schedule at 11:50 pm everyday
+    cron.schedule(
+      "30 23 * * *", //trigress on 11:30 pM
+      async () => {
+        const now = new Date().toLocaleString("en-IN", {
+          timeZone: "Asia/Kolkata",
+        });
+        console.log("cron trigrred at:", now);
+
+        try {
+          const { retryEnrichmentForPending } = await import(
+            "./controllers/Linkedin/linkedinDataScrapingController.js"
+          );
+          console.log("[CRON] Invoice generation started...");
+          await retryEnrichmentForPending();
+          console.log("[CRON] Invoice generation completed successfully.");
+        } catch (err) {
+          console.error(
+            "[CRON] Invoice generation failed:",
+            err?.message || err
+          );
+        }
+      },
+      {
+        timezone: "Asia/Kolkata", // run on Indian time
+      }
+    );
+
     app.use("*", (req, res) => {
       res.status(404).json({
         success: false,
