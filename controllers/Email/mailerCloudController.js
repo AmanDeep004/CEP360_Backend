@@ -811,12 +811,16 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
               subject: template.name,
               text: personalizedText,
               html: personalizedHTML,
-              replyTo: [item.Office_Email_1],
+              replyTo: ["miki@kestoneglobal.com"],
               recipients: {
                 to: [
+                  // {
+                  //   name: item.Full_Name,
+                  //   email: item.Office_Email_1,
+                  // },
                   {
-                    name: item.Full_Name,
-                    email: item.Office_Email_1,
+                    name: "miki Pradhan",
+                    email: "impradhan711@gmail.com",
                   },
                 ],
               },
@@ -851,30 +855,32 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
         //     },
         //   },
         // });
-        await CallingData.findOneAndUpdate(
-          { _id: item._id },
-          {
-            $setOnInsert: {
-              emailTemplates: [],
-            },
-            $push: {
-              emailTemplates: {
-                templateName,
-                status: "sent",
-                messageId,
-                timestamp: new Date(),
-                history: [
-                  {
-                    status: "sent",
-                    timestamp: new Date(),
-                    messageId,
-                  },
-                ],
-              },
-            },
-          },
-          { upsert: true }
-        );
+        ///working
+        // await CallingData.findOneAndUpdate(
+        //   { _id: item._id },
+        //   {
+        //     $setOnInsert: {
+        //       emailTemplates: [],
+        //     },
+        //     $push: {
+        //       emailTemplates: {
+        //         templateName,
+        //         status: "sent",
+        //         messageId,
+        //         timestamp: new Date(),
+        //         history: [
+        //           {
+        //             status: "sent",
+        //             timestamp: new Date(),
+        //             messageId,
+        //           },
+        //         ],
+        //       },
+        //     },
+        //   },
+        //   { upsert: true }
+        // );
+
         // await CallingData.findOneAndUpdate(
         //   { _id: item._id },
         //   {
@@ -902,7 +908,7 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
         results.push({
           callingDataId: item._id,
           email: item.Office_Email_1,
-          status: "sent",
+          status: "Success",
           messageId,
         });
       } catch (err) {
@@ -913,30 +919,30 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
         );
 
         // ✅ 6. UPDATE CALLING DATA (FAILED)
-        await CallingData.findByIdAndUpdate(
-          item._id,
-          {
-            $set: {
-              "emailTemplates.templateName": templateName,
-              "emailTemplates.status": "failed",
-              "emailTemplates.messageId": "",
-              "emailTemplates.timestamp": new Date(),
-            },
-            $push: {
-              "emailTemplates.history": {
-                status: "failed",
-                timestamp: new Date(),
-                messageId: "",
-              },
-            },
-          },
-          { new: true }
-        );
+        // await CallingData.findByIdAndUpdate(
+        //   item._id,
+        //   {
+        //     $set: {
+        //       "emailTemplates.templateName": templateName,
+        //       "emailTemplates.status": "failed",
+        //       "emailTemplates.messageId": "",
+        //       "emailTemplates.timestamp": new Date(),
+        //     },
+        //     $push: {
+        //       "emailTemplates.history": {
+        //         status: "failed",
+        //         timestamp: new Date(),
+        //         messageId: "",
+        //       },
+        //     },
+        //   },
+        //   { new: true }
+        // );
 
         results.push({
           callingDataId: item._id,
           email: item.Office_Email_1,
-          status: "failed",
+          status: "Failed",
         });
       }
     }
