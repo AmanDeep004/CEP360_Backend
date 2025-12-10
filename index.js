@@ -41,9 +41,9 @@ const startServer = async () => {
     const linkedinDataScrapingRoute = (
       await import("./routes/Linkedin/linkedinDataScrapingRoute.js")
     ).default;
-    // const mailerCloudRoute = (
-    //   await import("./routes/Email/mailerCloudRoute.js")
-    // ).default;
+    const mailerCloudRoute = (
+      await import("./routes/Email/mailerCloudRoute.js")
+    ).default;
 
     console.log("Routes loaded successfully");
 
@@ -84,7 +84,7 @@ const startServer = async () => {
     app.use("/api/webhook", webHookRoutes);
     app.use("/api/template", templateRoutes);
     app.use("/api/linkedin", linkedinDataScrapingRoute);
-    // app.use("/api/mailercloud", mailerCloudRoute);
+    app.use("/api/mailercloud", mailerCloudRoute);
 
     // Schedule: At 23:00 on day-of-month 25
     cron.schedule(

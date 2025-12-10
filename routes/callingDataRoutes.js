@@ -9,6 +9,7 @@ import {
   assignCallingDataToAgents,
   unassignCallingDataFromAgents,
   reassignCallingDatatoAgents,
+  UpdateCallingData,
 } from "../controllers/callingDataController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -40,6 +41,7 @@ router.post(
 router.delete("/:id", protect, deletecallingData);
 router.get("/getAllCallingData/:CampaignId", protect, getAllCallingData);
 router.get("/campaignDataByAssignment/:CampaignId", getDatabaseByAssignment);
+router.put("/updateCallingData", UpdateCallingData);
 
 // here  need to add filter based  calling data as well
 // get all non assigned calling data

@@ -102,21 +102,21 @@ const CallingDataSchema = new mongoose.Schema(
       required: false,
     },
     isDataSourceApproved: { type: Boolean, default: false },
-    emailTemplates: [
-      {
-        templateId: { type: String, required: true },
-        templateName: { type: String, trim: true },
-        timestamp: { type: Date, default: Date.now },
-        status: { type: String, trim: true },
-        messageId: { type: String, trim: true },
-        history: [
-          {
-            status: { type: String, trim: true },
-            timestamp: { type: Date, default: Date.now },
-          },
-        ],
-      },
-    ],
+    emailTemplates: {
+      templateId: { type: String, required: true },
+      templateName: { type: String, trim: true },
+      timestamp: { type: Date, default: Date.now },
+      status: { type: String, trim: true },
+      messageId: { type: String, trim: true },
+      history: [
+        {
+          status: { type: String, trim: true },
+          timestamp: { type: Date, default: Date.now },
+          templateId: { type: String, required: true },
+          templateName: { type: String, trim: true },
+        },
+      ],
+    },
 
     whatsappTemplates: [
       {

@@ -1,10 +1,14 @@
 import { Router } from "express";
 import {
+  getMailercloudTemplateByName,
   getMailercloudTemplates,
-  sendMailercloudEmail,
+  mailercloudWebhook,
+  //sendMailercloudEmail,
   sendBatchEmails,
-  addEmailsToQueue,
-  getQueueStatus,
+  sendEmailUsingTemplate,
+  sendTemplateEmailToCallingData,
+  //   addEmailsToQueue,
+  //   getQueueStatus,
 } from "../../controllers/Email/mailerCloudController.js";
 
 const router = Router();
@@ -13,15 +17,20 @@ const router = Router();
 router.get("/templates", getMailercloudTemplates);
 
 // Send single email
-router.post("/send", sendMailercloudEmail);
+// router.post("/send", sendMailercloudEmail);
 
 // 1️⃣ BATCH PROCESSING - Send multiple emails with rate limiting
 router.post("/send-batch", sendBatchEmails);
+// router.post("/send-template-email", sendEmailUsingTemplate);
+router.post("/sendEmailWithTemplate", sendTemplateEmailToCallingData);
 
-// 2️⃣ QUEUE SYSTEM - Add emails to background queue
-router.post("/queue/add", addEmailsToQueue);
+router.post("/webhook", mailercloudWebhook);
+router.get("/template", getMailercloudTemplateByName);
 
-// Get queue status
-router.get("/queue/status", getQueueStatus);
+// // 2️⃣ QUEUE SYSTEM - Add emails to background queue
+// router.post("/queue/add", addEmailsToQueue);
+
+// // Get queue status
+// router.get("/queue/status", getQueueStatus);
 
 export default router;
