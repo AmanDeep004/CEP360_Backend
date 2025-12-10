@@ -344,203 +344,6 @@ const wizaWebhook = asyncHandler(async (req, res, next) => {
   }
 });
 
-const getAllEnrichedProfilesOld = asyncHandler(async (req, res, next) => {
-  try {
-    // Pagination parameters
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const skip = (page - 1) * limit;
-
-    // Base filter - only enriched profiles
-    const filters = { isEnriched: true };
-
-    // ===== SEARCH FUNCTIONALITY =====
-    // Search across multiple important fields
-    if (req.query.search) {
-      const searchTerm = req.query.search.trim();
-      const searchRegex = new RegExp(searchTerm, "i"); // Case-insensitive
-
-      filters.$or = [
-        { "enrichedData.full_name": searchRegex },
-        { "enrichedData.first_name": searchRegex },
-        { "enrichedData.last_name": searchRegex },
-        { "enrichedData.email": searchRegex },
-        { "enrichedData.company": searchRegex },
-        { "enrichedData.title": searchRegex },
-        { "enrichedData.location": searchRegex },
-        { "enrichedData.phone_number1": searchRegex },
-        { "enrichedData.domain": searchRegex },
-        { linkedinId: searchRegex },
-      ];
-    }
-
-    // ===== SPECIFIC FIELD FILTERS =====
-
-    // Filter by batch name
-    if (req.query.batchName) {
-      filters.batchName = req.query.batchName;
-    }
-
-    // Filter by email status (valid, risky)
-    if (req.query.emailStatus) {
-      filters["enrichedData.email_status"] = req.query.emailStatus;
-    }
-
-    // Filter by email type (work, personal)
-    if (req.query.emailType) {
-      filters["enrichedData.email_type"] = req.query.emailType;
-    }
-
-    // Filter by company (exact or partial match)
-    if (req.query.company) {
-      filters["enrichedData.company"] = new RegExp(req.query.company, "i");
-    }
-
-    // Filter by title
-    if (req.query.title) {
-      filters["enrichedData.title"] = new RegExp(req.query.title, "i");
-    }
-
-    // Filter by country
-    if (req.query.country) {
-      filters["enrichedData.country"] = new RegExp(req.query.country, "i");
-    }
-
-    // Filter by region/state
-    if (req.query.region) {
-      filters["enrichedData.region"] = new RegExp(req.query.region, "i");
-    }
-
-    // Filter by city/locality
-    if (req.query.locality) {
-      filters["enrichedData.locality"] = new RegExp(req.query.locality, "i");
-    }
-
-    // Filter by company industry
-    if (req.query.industry) {
-      filters["enrichedData.company_industry"] = new RegExp(
-        req.query.industry,
-        "i"
-      );
-    }
-
-    // Filter by company size range
-    if (req.query.companySizeRange) {
-      filters["enrichedData.company_size_range"] = req.query.companySizeRange;
-    }
-
-    // Filter by company type (private, public)
-    if (req.query.companyType) {
-      filters["enrichedData.company_type"] = req.query.companyType;
-    }
-
-    // Filter by domain
-    if (req.query.domain) {
-      filters["enrichedData.domain"] = new RegExp(req.query.domain, "i");
-    }
-
-    // ===== DATE RANGE FILTERS =====
-
-    // Filter by enrichment date range
-    if (req.query.enrichedFrom || req.query.enrichedTo) {
-      filters["misc.enrichedAt"] = {};
-      if (req.query.enrichedFrom) {
-        filters["misc.enrichedAt"].$gte = new Date(req.query.enrichedFrom);
-      }
-      if (req.query.enrichedTo) {
-        filters["misc.enrichedAt"].$lte = new Date(req.query.enrichedTo);
-      }
-    }
-
-    // Filter by creation date range
-    if (req.query.createdFrom || req.query.createdTo) {
-      filters.createdAt = {};
-      if (req.query.createdFrom) {
-        filters.createdAt.$gte = new Date(req.query.createdFrom);
-      }
-      if (req.query.createdTo) {
-        filters.createdAt.$lte = new Date(req.query.createdTo);
-      }
-    }
-
-    // ===== BOOLEAN FILTERS =====
-
-    // Has phone number
-    if (req.query.hasPhone === "true") {
-      filters["enrichedData.phone_number1"] = { $ne: null, $exists: true };
-    } else if (req.query.hasPhone === "false") {
-      filters.$or = [
-        { "enrichedData.phone_number1": null },
-        { "enrichedData.phone_number1": { $exists: false } },
-      ];
-    }
-
-    // Has personal email
-    if (req.query.hasPersonalEmail === "true") {
-      filters["enrichedData.personal_email1"] = { $ne: null, $exists: true };
-    }
-
-    // ===== SORTING =====
-    let sortBy = { createdAt: -1 }; // Default: newest first
-
-    if (req.query.sortBy) {
-      sortBy = {};
-      const sortField = req.query.sortBy;
-      const sortOrder = req.query.sortOrder === "asc" ? 1 : -1;
-
-      // Map sort fields
-      const sortFieldMap = {
-        name: "enrichedData.full_name",
-        email: "enrichedData.email",
-        company: "enrichedData.company",
-        title: "enrichedData.title",
-        location: "enrichedData.location",
-        enrichedAt: "misc.enrichedAt",
-        createdAt: "createdAt",
-      };
-
-      const mappedField = sortFieldMap[sortField] || "createdAt";
-      sortBy[mappedField] = sortOrder;
-    }
-
-    // ===== EXECUTE QUERY =====
-
-    // Get total count for pagination
-    const totalCount = await LinkedinProfile.countDocuments(filters);
-    const totalPages = Math.ceil(totalCount / limit);
-
-    // Fetch enriched profiles
-    const profiles = await LinkedinProfile.find(filters)
-      .sort(sortBy)
-      .skip(skip)
-      .limit(limit)
-      .select("enrichedData") // Exclude version key
-      .lean(); // Better performance
-
-    return sendResponse(res, 200, "Enriched profiles fetched successfully", {
-      profiles,
-      pagination: {
-        currentPage: page,
-        totalPages,
-        totalCount,
-        limit,
-        hasNextPage: page < totalPages,
-        hasPrevPage: page > 1,
-      },
-      filters: {
-        search: req.query.search || null,
-        batchName: req.query.batchName || null,
-        emailStatus: req.query.emailStatus || null,
-        company: req.query.company || null,
-        country: req.query.country || null,
-      },
-    });
-  } catch (error) {
-    console.error("Get Enriched Profiles Error:", error);
-    return sendError(next, error.message, 500);
-  }
-});
-
 const getAllEnrichedProfiles = asyncHandler(async (req, res, next) => {
   try {
     // Pagination
@@ -678,4 +481,101 @@ const getAllEnrichedProfiles = asyncHandler(async (req, res, next) => {
   }
 });
 
-export { uploadProfiles, wizaWebhook, getAllEnrichedProfiles };
+const retryEnrichmentForPending = async () => {
+  try {
+    console.log("[RETRY] Checking pending enrichment profiles...");
+    const pendingProfiles = await LinkedinProfile.find({
+      isEnriched: false,
+      "misc.wizaListId": { $exists: true },
+    });
+
+    if (pendingProfiles.length === 0) {
+      console.log("[RETRY] No pending profiles found.");
+      return { total: 0, updated: 0, notFound: 0 };
+    }
+
+    const listGroups = {};
+    for (const profile of pendingProfiles) {
+      const listId = profile.misc.wizaListId;
+      if (!listGroups[listId]) listGroups[listId] = [];
+      listGroups[listId].push(profile);
+    }
+    let updated = 0;
+    let notFound = 0;
+
+    // 2. Process each Wiza List ID
+    for (const listId of Object.keys(listGroups)) {
+      console.log(`[RETRY] Fetching contacts for Wiza List ${listId}...`);
+
+      try {
+        const response = await axios.get(
+          `${WIZA_API_URL}/${listId}/contacts?segment=people`,
+          { headers: { Authorization: `Bearer ${WIZA_API_KEY}` } }
+        );
+        const contacts = response.data?.data || [];
+        console.log(`[RETRY] Contacts fetched: ${contacts.length}`);
+
+        // 3. Update each profile in DB
+        for (const contact of contacts) {
+          const linkedinUrl =
+            contact.linkedin_profile_url ||
+            contact.profile_url ||
+            contact.linkedin;
+
+          if (!linkedinUrl) {
+            notFound++;
+            continue;
+          }
+
+          const linkedinId = normalizeLinkedinUrl(linkedinUrl);
+          if (!linkedinId) {
+            notFound++;
+            continue;
+          }
+
+          const result = await LinkedinProfile.findOneAndUpdate(
+            { linkedinId },
+            {
+              $set: {
+                isEnriched: true,
+                enrichedData: contact,
+                payload: contact,
+                "misc.enrichedAt": new Date(),
+                "misc.reEnrichedAt": new Date(),
+                "misc.enrichmentStatus": "completed",
+              },
+            },
+            { new: true }
+          );
+
+          if (result) updated++;
+          else notFound++;
+        }
+      } catch (err) {
+        console.error(
+          `[RETRY] Error re-fetching for List ${listId}:`,
+          err.message
+        );
+      }
+    }
+
+    console.log("[RETRY] Completed:", { updated, notFound });
+
+    return {
+      total: pendingProfiles.length,
+      updated,
+      notFound,
+      groups: Object.keys(listGroups).length,
+    };
+  } catch (error) {
+    console.error("[RETRY] Fatal Error:", error);
+    return { error: error.message };
+  }
+};
+
+export {
+  uploadProfiles,
+  wizaWebhook,
+  retryEnrichmentForPending,
+  getAllEnrichedProfiles,
+};
