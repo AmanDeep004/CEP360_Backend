@@ -4,6 +4,7 @@ import {
   messageReceiveUpdate,
   getAllDoubleTickLogs,
 } from "../controllers/webhook/webhookController.js";
+import { telcmiWebhook } from "../controllers/callRecordingController.js";
 import { wizaWebhook } from "../controllers/Linkedin/linkedinDataScrapingController.js";
 import { UserRoleEnum } from "../utils/enum.js";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -23,5 +24,8 @@ router.post("/MessageReceiveUpdate", messageReceiveUpdate);
 
 // wiza webhooks
 router.post("/wiza", wizaWebhook);
+
+//telecmi webhooks
+router.post("/callReport", telcmiWebhook);
 
 export default router;

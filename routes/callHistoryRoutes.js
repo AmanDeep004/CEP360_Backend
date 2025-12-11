@@ -4,6 +4,7 @@ import {
   updateCallHistory,
   getAllCallHistoryByCallingDataId,
 } from "../controllers/callHistoryController.js";
+import { createCallRecording } from "../controllers/callRecordingController.js";
 import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
 
@@ -45,4 +46,6 @@ router.get(
   // authorize(ADMIN, PROGRAM_MANAGER, AGENT),
   getAllCallHistoryByCallingDataId
 );
+
+router.post("/createCallRecording", createCallRecording);
 export default router;
