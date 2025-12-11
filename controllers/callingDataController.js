@@ -684,6 +684,32 @@ const reassignCallingDatatoAgents = asyncHandler(async (req, res, next) => {
     return sendError(next, err.message, 500);
   }
 });
+const UpdateCallingData = asyncHandler(async (req, res, next) => {
+  try {
+    const { _id, ...updateFields } = req.body;
+
+    if (!_id) {
+      return sendError(next, "_id is required for update", 400);
+    }
+
+    const updatedData = await CallingData.findByIdAndUpdate(_id, {
+      $set: updateFields,
+    }).lean();
+
+    if (!updatedData) {
+      return sendError(next, "Entry not found", 404);
+    }
+
+    return sendResponse(
+      res,
+      200,
+      "Calling data updated successfully",
+      updatedData
+    );
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
 
 export {
   uploadcallingData,
@@ -695,4 +721,5 @@ export {
   assignCallingDataToAgents,
   unassignCallingDataFromAgents,
   reassignCallingDatatoAgents,
+  UpdateCallingData,
 };

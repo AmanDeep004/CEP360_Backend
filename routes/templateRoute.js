@@ -14,7 +14,7 @@ const router = express.Router();
 router.get(
   "/getAllTemplateData",
   protect,
-  authorize(ADMIN, PRESALES_MANAGER),
+  authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT),
   getAllTemplates
 );
 router.post(
