@@ -54,7 +54,7 @@ const normalizeLinkedinUrl = (profileUrl) => {
   return normalized;
 };
 
-const uploadProfiles = asyncHandler(async (req, res, next) => {
+const uploadProfilesOld = asyncHandler(async (req, res, next) => {
   try {
     if (!req.file) {
       return sendError(next, "No CSV/Excel file uploaded", 400);
@@ -210,6 +210,220 @@ const uploadProfiles = asyncHandler(async (req, res, next) => {
           error: wizaError.response?.data || wizaError.message,
         };
       }
+    }
+
+    return sendResponse(res, 200, "File uploaded and processed successfully", {
+      batchName,
+      totalRows: parsedRows.length,
+      inserted,
+      duplicate,
+      alreadyEnriched,
+      invalidUrls,
+      sentToWiza: profilesToEnrich.length,
+      wizaListId,
+      wizaResponse: wizaResponse || "No enrichment needed",
+    });
+  } catch (error) {
+    console.error("Upload Error:", error);
+    return sendError(next, error.message, 500);
+  }
+});
+const uploadProfiles = asyncHandler(async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return sendError(next, "No CSV/Excel file uploaded", 400);
+    }
+
+    let parsedRows = [];
+    const fileMime = req.file.mimetype;
+
+    // Parse Excel or CSV
+    if (
+      fileMime.includes("spreadsheetml") ||
+      fileMime.includes("excel") ||
+      req.file.originalname.endsWith(".xlsx")
+    ) {
+      const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      parsedRows = XLSX.utils.sheet_to_json(sheet);
+    } else {
+      const fileBuffer = req.file.buffer.toString("utf8");
+      parsedRows = await csv().fromString(fileBuffer);
+    }
+
+    if (!parsedRows.length) {
+      return sendError(next, "File has no valid rows", 400);
+    }
+
+    // Check if file has more than 500 rows
+    if (parsedRows.length > 500) {
+      return sendError(
+        next,
+        "Upload can only process 500 records in one go",
+        400
+      );
+    }
+    // Calculate batch name
+    const existingCount = await LinkedinProfile.countDocuments();
+    const nextBatchNumber = Math.floor(existingCount / parsedRows.length) + 1;
+    const batchName = `Batch-${nextBatchNumber}`;
+
+    let inserted = 0;
+    let duplicate = 0;
+    let alreadyEnriched = 0;
+    let invalidUrls = 0;
+
+    const docsToInsert = [];
+    const profilesToEnrich = [];
+
+    // Process each row
+    for (const row of parsedRows) {
+      // Smart extraction: find LinkedIn URL in ANY field
+      const rawProfileUrl = extractLinkedinUrl(row);
+
+      if (!rawProfileUrl) {
+        invalidUrls++;
+        console.log("No LinkedIn URL found in row:", row);
+        continue;
+      }
+
+      // Normalize the URL (remove query params, ensure https://)
+      const profileUrl = normalizeLinkedinUrl(rawProfileUrl);
+
+      if (!profileUrl || !profileUrl.includes("linkedin.com/in/")) {
+        invalidUrls++;
+        console.log("Invalid LinkedIn URL:", rawProfileUrl);
+        continue;
+      }
+
+      // Use full URL as unique identifier (linkedinId)
+      const linkedinId = profileUrl;
+
+      // Check if profile already exists
+      const existingProfile = await LinkedinProfile.findOne({ linkedinId });
+
+      if (existingProfile) {
+        duplicate++;
+
+        if (existingProfile.isEnriched) {
+          alreadyEnriched++;
+          continue; // Already enriched – skip
+        } else {
+          // Exists but not enriched → send to enrichment queue
+          profilesToEnrich.push({
+            profile_url: profileUrl,
+            linkedinId,
+            _id: existingProfile._id,
+          });
+        }
+      } else {
+        // New profile → store and enrich
+        docsToInsert.push({
+          linkedinId,
+          isEnriched: false,
+          enrichedData: {},
+          batchName,
+        });
+
+        profilesToEnrich.push({
+          profile_url: profileUrl,
+          linkedinId,
+        });
+      }
+    }
+
+    // Insert new profiles to DB
+    if (docsToInsert.length > 0) {
+      await LinkedinProfile.insertMany(docsToInsert);
+      inserted = docsToInsert.length;
+    }
+
+    let wizaResponse = null;
+    let wizaListId = null;
+    let wizaErrorMessage = null;
+
+    // Enrich profiles using Wiza
+    if (profilesToEnrich.length > 0) {
+      try {
+        const wizaPayload = {
+          list: {
+            name: `${batchName} - ${new Date().toISOString().split("T")[0]}`,
+            enrichment_level: "full",
+            email_options: {
+              accept_work: true,
+              accept_personal: true,
+              accept_generic: false,
+            },
+            items: profilesToEnrich.map((p) => ({
+              profile_url: p.profile_url,
+            })),
+          },
+        };
+
+        const response = await axios.post(WIZA_API_URL, wizaPayload, {
+          headers: {
+            Authorization: `Bearer ${WIZA_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+        });
+
+        wizaResponse = response.data;
+        wizaListId = response.data?.data?.id || response.data?.id;
+
+        // Save Wiza List ID in DB
+        if (wizaListId) {
+          const linkedinIds = profilesToEnrich.map((p) => p.linkedinId);
+          await LinkedinProfile.updateMany(
+            { linkedinId: { $in: linkedinIds } },
+            {
+              $set: {
+                "misc.wizaListId": wizaListId,
+                "misc.wizaListName": wizaPayload.list.name,
+                "misc.sentToWizaAt": new Date(),
+              },
+            }
+          );
+        }
+      } catch (wizaError) {
+        console.error(
+          "Wiza API Error:",
+          wizaError.response?.data || wizaError.message
+        );
+
+        // Extract error message from Wiza response
+        const wizaErrorData = wizaError.response?.data;
+
+        if (wizaErrorData?.error?.status?.message) {
+          wizaErrorMessage = wizaErrorData.error.status.message;
+        } else if (wizaErrorData?.message) {
+          wizaErrorMessage = wizaErrorData.message;
+        } else if (wizaError.message) {
+          wizaErrorMessage = wizaError.message;
+        } else {
+          wizaErrorMessage = "Unknown Wiza API error occurred";
+        }
+
+        wizaResponse = {
+          error: wizaErrorData || wizaError.message,
+        };
+      }
+    }
+
+    // Check if there was a Wiza error
+    if (wizaErrorMessage) {
+      // Rollback: Delete the newly inserted profiles if Wiza fails
+      if (inserted > 0) {
+        await LinkedinProfile.deleteMany({ batchName });
+        console.log(
+          `Rolled back batch: ${batchName} (${inserted} profiles deleted)`
+        );
+      }
+
+      return sendError(
+        next,
+        `Wiza enrichment failed: ${wizaErrorMessage}`,
+        400
+      );
     }
 
     return sendResponse(res, 200, "File uploaded and processed successfully", {
