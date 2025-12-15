@@ -6,26 +6,23 @@ const callRecordingSchema = new mongoose.Schema(
     callingData_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "CallingData",
-      required: true,
     },
     campaign_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Campaign",
-      required: true,
     },
     sessionId: { type: String },
-    contactNo: { type: String, required: true },
+    contactNo: { type: String },
     callingDate: { type: Date, default: Date.now },
     agent_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true,
     },
-    agentName: { type: String, required: true },
+    agentName: { type: String },
     //webhook response
-    callId: { type: String, required: true },
+    callId: { type: String },
     recording: { type: String },
-    webHookResponse: { type: Object },
+    webHookResponse: { type: Array },
     misc: { type: Object },
   },
   { timestamps: true }

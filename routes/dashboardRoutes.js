@@ -6,6 +6,7 @@ import {
   getAllAgentsStatsReport,
   getCombinedReport,
   getRegisteredUsersWithCampaign,
+  getCallHistoryReport,
 } from "../controllers/dashboardController.js";
 import { protect } from "../middleware/authMiddleware.js";
 
@@ -14,5 +15,6 @@ router.get("/allAgentsReportData", protect, getAllAgentsDashboardData);
 router.get("/allAgentsStatsReport", getAllAgentsStatsReport);
 router.get("/registeredUsersReport", getRegisteredUsersWithCampaign);
 router.get("/combinedReport", getCombinedReport);
+router.get("/callHistoryReport/:pmId", protect, getCallHistoryReport);
 
 export default router;

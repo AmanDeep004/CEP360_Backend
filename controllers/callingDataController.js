@@ -364,7 +364,9 @@ const getDatabaseByAssignmentold = asyncHandler(async (req, res, next) => {
     return sendError(next, err.message, 500);
   }
 });
-const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
+
+// here
+const getDatabaseByAssignmentOld = asyncHandler(async (req, res, next) => {
   try {
     const { CampaignId } = req.params;
     const {
@@ -462,6 +464,94 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
     const total = data.length;
 
     // 6) Apply pagination on the final filtered data
+    const paginatedData = data.slice(skip, skip + limNum);
+
+    return sendResponse(res, 200, "Filtered database fetched successfully", {
+      total,
+      page: pageNum,
+      limit: limNum,
+      totalPages: Math.ceil(total / limNum),
+      data: paginatedData,
+    });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
+  try {
+    const { CampaignId } = req.params;
+    const {
+      assignment,
+      agentId,
+      remark,
+      source,
+      range,
+      page = 1,
+      limit = 20,
+    } = req.query;
+
+    const pageNum = parseInt(page, 10);
+    const limNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limNum;
+
+    const filter = { CampaignId };
+
+    if (assignment === "assigned") filter.agentId = { $ne: null };
+    if (assignment === "notassigned") filter.agentId = null;
+
+    if (agentId) filter.agentId = agentId;
+
+    if (source) {
+      filter.source = { $regex: new RegExp(source, "i") };
+    }
+
+    let data = await CallingData.find(filter)
+      .populate({
+        path: "agentId",
+        select: "employeeName email",
+      })
+      .populate({
+        path: "callHistory",
+        populate: { path: "chatHistory", model: "CallHistory" },
+      })
+      .lean();
+
+    if (remark) {
+      if (remark === "Yet to Call") {
+        data = data.filter((entry) => {
+          const history = entry.callHistory?.chatHistory;
+          return !history || history.length === 0;
+        });
+      } else {
+        data = data.filter((entry) => {
+          const history = entry.callHistory?.chatHistory;
+          if (!Array.isArray(history) || history.length === 0) return false;
+          const lastRemark = history[history.length - 1];
+          return lastRemark?.remarks === remark;
+        });
+      }
+    }
+
+    if (range) {
+      const parts = range.split("-").map((v) => parseInt(v.trim(), 10));
+      if (parts.length !== 2 || parts.some((n) => isNaN(n))) {
+        return sendError(next, "Invalid range format. Use 100-200", 400);
+      }
+
+      const [min, max] = parts;
+      if (min > max) {
+        return sendError(
+          next,
+          "Range minimum should be less than maximum",
+          400
+        );
+      }
+
+      data = data.slice(min - 1, max);
+    }
+
+    const total = data.length;
     const paginatedData = data.slice(skip, skip + limNum);
 
     return sendResponse(res, 200, "Filtered database fetched successfully", {
@@ -687,7 +777,6 @@ const reassignCallingDatatoAgents = asyncHandler(async (req, res, next) => {
 const UpdateCallingData = asyncHandler(async (req, res, next) => {
   try {
     const { _id, ...updateFields } = req.body;
-
     if (!_id) {
       return sendError(next, "_id is required for update", 400);
     }

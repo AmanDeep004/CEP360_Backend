@@ -3,13 +3,13 @@ import errorHandler from "../utils/index.js";
 import User from "../models/userModel.js";
 import CallingData from "../models/callingDataModal.js";
 import CallHistory from "../models/callHistoryModel.js";
+import CallRecording from "../models/callRecordingModel.js";
 import AgentAssigned from "../models/agentAssigned.js";
 import { UserRoleEnum } from "../utils/enum.js";
 import mongoose from "mongoose";
 import XLSX from "xlsx";
 import path from "path";
 import os from "os";
-import fs from "fs";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 const { ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT } =
   UserRoleEnum;
@@ -1487,10 +1487,278 @@ const getCombinedReport = asyncHandler(async (req, res, next) => {
     return sendError(next, error.message || "Internal Server Error", 500);
   }
 });
+
+const getCallHistoryReportOld = asyncHandler(async (req, res, next) => {
+  try {
+    const { pmId } = req.params;
+
+    if (!pmId) {
+      return sendError(next, "PM ID is required", 400);
+    }
+    // Step 1: Find all campaigns where this PM is a program manager
+    const campaigns = await Campaign.find({
+      programManager: { $in: [pmId] },
+    }).select("_id name type startDate endDate status");
+
+    console.log(campaigns, "campaigns..");
+    if (!campaigns || campaigns.length === 0) {
+      return sendResponse(
+        res,
+        200,
+        "No campaigns found for this Program Manager",
+        {
+          pmId,
+          totalCampaigns: 0,
+          campaigns: [],
+          callHistories: [],
+        }
+      );
+    }
+
+    // Extract campaign IDs
+    const campaignIds = campaigns.map((campaign) => campaign._id);
+    console.log("campaignIds", campaignIds);
+    // Step 2: Find all call histories for these campaigns
+    const callHistories = await CallHistory.find({
+      campaign_id: { $in: campaignIds },
+    })
+      .populate("callingData_id", "name email phone company designation")
+      .populate("campaign_id", "name type startDate endDate")
+      .populate("chatHistory.agent_id", "name email")
+      .sort({ updatedAt: -1 }); // Latest first
+
+    console.log("callHistories", callHistories);
+
+    if (!callHistories || callHistories.length === 0) {
+      return sendResponse(
+        res,
+        200,
+        "No call histories found for these campaigns",
+        {
+          pmId,
+          totalCampaigns: campaigns.length,
+          campaigns,
+          totalCallHistories: 0,
+          callHistories: [],
+        }
+      );
+    }
+
+    // Step 3: Get all callingData_ids from call histories
+    const callingDataIds = callHistories.map((ch) => ch.callingData_id._id);
+
+    console.log("callingDataIds56", callingDataIds);
+
+    // Step 4: Find all call recordings for these callingData_ids
+    const callRecordings = await CallRecording.find({
+      callingData_id: { $in: callingDataIds },
+    })
+      .populate("callingData_id", "name email phone company")
+      .populate("campaign_id", "name type")
+      .populate("agent_id", "name email")
+      .sort({ callingDate: -1 }); // Latest first
+
+    // Step 5: Map recordings to their respective call histories
+    const callHistoriesWithRecordings = callHistories.map((history) => {
+      const recordings = callRecordings.filter(
+        (rec) =>
+          rec.callingData_id._id.toString() ===
+          history.callingData_id._id.toString()
+      );
+
+      return {
+        ...history.toObject(),
+        recordings: recordings.map((rec) => ({
+          _id: rec._id,
+          callId: rec.callId,
+          recording: rec.recording,
+          contactNo: rec.contactNo,
+          callingDate: rec.callingDate,
+          agentName: rec.agentName,
+          sessionId: rec.sessionId,
+          misc: rec.misc,
+          webHookResponse: rec.webHookResponse,
+          createdAt: rec.createdAt,
+        })),
+      };
+    });
+
+    // Step 6: Prepare summary statistics
+    const summary = {
+      totalCampaigns: campaigns.length,
+      totalCallHistories: callHistories.length,
+      totalRecordings: callRecordings.length,
+      registeredCount: callHistories.filter((ch) => ch.isRegistered).length,
+      notRegisteredCount: callHistories.filter((ch) => !ch.isRegistered).length,
+      recordingsWithFiles: callRecordings.filter((rec) => rec.recording).length,
+    };
+
+    return sendResponse(res, 200, "Call histories fetched successfully", {
+      pmId,
+      summary,
+      campaigns,
+      callHistories: callHistoriesWithRecordings,
+    });
+  } catch (error) {
+    console.error("Error fetching PM call histories:", error);
+    return sendError(
+      next,
+      error.message || "Failed to fetch call histories",
+      500
+    );
+  }
+});
+
+const getCallHistoryReport = asyncHandler(async (req, res, next) => {
+  try {
+    const { pmId } = req.params;
+
+    if (!pmId) {
+      return sendError(next, "PM ID is required", 400);
+    }
+
+    // Step 1: Find all campaigns managed by this PM
+    const campaigns = await Campaign.find({
+      programManager: { $in: [pmId] },
+    }).select("_id name type startDate endDate status");
+
+    if (!campaigns || campaigns.length === 0) {
+      return sendResponse(res, 200, "No campaigns found", {
+        pmId,
+        totalCampaigns: 0,
+        data: [],
+      });
+    }
+
+    const campaignIds = campaigns.map((c) => c._id);
+
+    // Step 2: Fetch all call histories for these campaigns
+    const callHistories = await CallHistory.find({
+      campaign_id: { $in: campaignIds },
+    })
+      .populate("callingData_id")
+      .populate("campaign_id", "name type startDate endDate")
+      .populate("chatHistory.agent_id", "name email")
+      .sort({ updatedAt: -1 });
+
+    if (!callHistories || callHistories.length === 0) {
+      return sendResponse(res, 200, "No call histories found", {
+        pmId,
+        totalCampaigns: campaigns.length,
+        data: [],
+      });
+    }
+
+    // Step 3: Get all callingData IDs for recordings mapping
+    const callingDataIds = callHistories.map((ch) => ch.callingData_id?._id);
+
+    // Step 4: Find corresponding call recordings
+    const callRecordings = await CallRecording.find({
+      callingData_id: { $in: callingDataIds },
+    })
+      .populate("callingData_id")
+      .populate("campaign_id", "name type")
+      .populate("agent_id", "name email")
+      .sort({ callingDate: -1 });
+
+    // Step 5: Merge recordings into call histories
+    const historiesWithRecordings = callHistories.map((history) => {
+      const recordings = callRecordings.filter(
+        (rec) =>
+          rec.callingData_id?._id?.toString() ===
+          history.callingData_id?._id?.toString()
+      );
+
+      return {
+        ...history.toObject(),
+        recordings: recordings.map((rec) => ({
+          _id: rec._id,
+          callId: rec.callId,
+          recording: rec.recording,
+          contactNo: rec.contactNo,
+          callingDate: rec.callingDate,
+          agentName: rec.agentName,
+          sessionId: rec.sessionId,
+          misc: rec.misc,
+          webHookResponse: rec.webHookResponse,
+          createdAt: rec.createdAt,
+        })),
+      };
+    });
+
+    // Step 6: Format final output grouped by campaign
+    const finalOutput = campaigns.map((campaign) => {
+      // Filter only histories belonging to this campaign
+      const campaignHistories = historiesWithRecordings.filter(
+        (h) => h.campaign_id._id.toString() === campaign._id.toString()
+      );
+
+      const formattedHistories = campaignHistories.map((history) => {
+        // Collect previous remarks with timestamps + agent info
+        const previousRemarks = (history.chatHistory || []).map((entry) => ({
+          remark: entry.remarks || "",
+          reason: entry.reason || "",
+          agentName: entry.agentName || "",
+          contactNo: entry.contactNo || "",
+          timestamp: entry.callingDate,
+        }));
+
+        return {
+          callingData: history.callingData_id, // full data
+          recordings: history.recordings,
+          previousRemarks,
+          agentDetails:
+            history.chatHistory?.length > 0
+              ? history.chatHistory[0].agent_id
+              : null,
+          timestamps: {
+            createdAt: history.createdAt,
+            updatedAt: history.updatedAt,
+          },
+        };
+      });
+
+      return {
+        campaignId: campaign._id,
+        campaignName: campaign.name,
+        campaignType: campaign.type,
+        campaignStartDate: campaign.startDate,
+        campaignEndDate: campaign.endDate,
+        status: campaign.status,
+        callHistory: formattedHistories,
+      };
+    });
+
+    // Step 7: Summary (Optional)
+    const summary = {
+      totalCampaigns: campaigns.length,
+      totalCallHistories: callHistories.length,
+      totalRecordings: callRecordings.length,
+      registeredCount: callHistories.filter((ch) => ch.isRegistered).length,
+      notRegisteredCount: callHistories.filter((ch) => !ch.isRegistered).length,
+      recordingsWithFiles: callRecordings.filter((rec) => rec.recording).length,
+    };
+
+    return sendResponse(res, 200, "Call histories fetched successfully", {
+      pmId,
+      summary,
+      data: finalOutput,
+    });
+  } catch (error) {
+    console.error("Error fetching PM call histories:", error);
+    return sendError(
+      next,
+      error.message || "Failed to fetch call histories",
+      500
+    );
+  }
+});
+
 export {
   dashboardData,
   getAllAgentsDashboardData,
   getAllAgentsStatsReport,
   getRegisteredUsersWithCampaign,
   getCombinedReport,
+  getCallHistoryReport,
 };
