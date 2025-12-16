@@ -169,7 +169,7 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
 
     if (!callingDataContact) {
       console.log(`CallingData contact not found for number: ${mobile}`);
-
+      //check for the this part we mignt not require this
       const saveObj = {
         webhookType: "MessageStatus",
         mobileNumber: mobile,

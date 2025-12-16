@@ -45,6 +45,10 @@ const startServer = async () => {
       await import("./routes/Email/mailerCloudRoute.js")
     ).default;
 
+    const whatsappRoute = (
+      await import("./routes/whatsapp/doubleTickRoutes.js")
+    ).default;
+
     console.log("Routes loaded successfully");
 
     const app = express();
@@ -85,6 +89,7 @@ const startServer = async () => {
     app.use("/api/template", templateRoutes);
     app.use("/api/linkedin", linkedinDataScrapingRoute);
     app.use("/api/mailercloud", mailerCloudRoute);
+    app.use("/api/whatsapp", whatsappRoute);
 
     // Schedule: At 23:00 on day-of-month 25 for expected salary generation
     cron.schedule(
