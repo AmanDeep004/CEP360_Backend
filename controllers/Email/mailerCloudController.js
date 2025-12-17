@@ -741,7 +741,7 @@ const getMailercloudTemplateByName = asyncHandler(async (req, res, next) => {
 // );
 const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
   try {
-    const { callingDataIds, templateName, campaignId } = req.body;
+    const { callingDataIds, templateName, campaignId, fromEmail } = req.body;
 
     if (!callingDataIds?.length || !templateName || !campaignId) {
       return sendError(
@@ -818,12 +818,14 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
             "https://email-api.mailercloud.com/v1/email",
             {
               email: {
-                from: "miki@kestoneglobal.com",
+                // from: "miki@kestoneglobal.com",
+                from: fromEmail,
                 fromName: "Campaign Team",
                 subject: template.name,
                 text: personalizedText,
                 html: personalizedHTML,
-                replyTo: ["miki@kestoneglobal.com"],
+                //   replyTo: ["miki@kestoneglobal.com"],
+                replyTo: [fromEmail],
                 recipients: {
                   to: [
                     {
@@ -926,7 +928,7 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
     return sendError(next, "Email sending failed", 500);
   }
 });
-// const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
+// const sendTemplateEmailToCallingDataold = asyncHandler(async (req, res, next) => {
 //   try {
 //     const { callingDataIds, templateName, campaignId } = req.body;
 

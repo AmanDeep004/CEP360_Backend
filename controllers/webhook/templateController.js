@@ -1,10 +1,11 @@
 // controllers/templateController.js
 import Template from "../../models/Webhook/templateModel.js";
+import Campaign from "../../models/campaignModel.js";
 import errorHandler from "../../utils/index.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
 const createTemplate = asyncHandler(async (req, res, next) => {
-  const { templateName, templateId, campaignId, type } = req.body;
+  const { templateName, templateId, campaignId, type, senderEmail } = req.body;
 
   if (!templateName) {
     return sendError(next, "TemplateName is required", 400);
@@ -18,7 +19,24 @@ const createTemplate = asyncHandler(async (req, res, next) => {
     templateId,
     campaignId,
     type,
+    senderEmail,
   });
+
+  // Update campaign's senderEmail array if campaignId and senderEmail are provided
+  if (campaignId && senderEmail) {
+    await Campaign.findByIdAndUpdate(
+      campaignId,
+      {
+        $push: {
+          senderEmail: {
+            email: senderEmail,
+            timestamp: new Date(),
+          },
+        },
+      },
+      { new: true }
+    );
+  }
 
   return sendResponse(res, 200, "Template created successfully", newTemplate);
 });
@@ -33,16 +51,31 @@ const getAllTemplates = asyncHandler(async (req, res, next) => {
 });
 
 const updateTemplate = asyncHandler(async (req, res, next) => {
-  const { templateName, campaignId, type } = req.body;
+  const { templateName, campaignId, type, senderEmail } = req.body;
 
   const updated = await Template.findOneAndUpdate(
     { templateName },
-    { campaignId },
-    { type },
+    { campaignId, type, senderEmail },
     { new: true }
   );
 
   if (!updated) return sendError(next, "Template not found", 404);
+
+  // Update campaign's senderEmail array if campaignId and senderEmail are provided
+  if (campaignId && senderEmail) {
+    await Campaign.findByIdAndUpdate(
+      campaignId,
+      {
+        $push: {
+          senderEmail: {
+            email: senderEmail,
+            timestamp: new Date(),
+          },
+        },
+      },
+      { new: true }
+    );
+  }
 
   return sendResponse(res, 200, "Template updated successfully", updated);
 });

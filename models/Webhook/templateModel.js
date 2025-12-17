@@ -8,6 +8,7 @@ const templateSchema = new mongoose.Schema(
     templateId: { type: String, trim: true },
     campaignId: { type: mongoose.Schema.Types.ObjectId, ref: "Campaign" },
     type: { type: String, trim: true },
+    senderEmail: { type: String, trim: true },
   },
   { timestamps: true }
 );
