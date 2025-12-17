@@ -741,12 +741,13 @@ const getMailercloudTemplateByName = asyncHandler(async (req, res, next) => {
 // );
 const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
   try {
-    const { callingDataIds, templateName, campaignId, fromEmail } = req.body;
+    const { callingDataIds, templateName, campaignId, fromEmail, campignType } =
+      req.body;
 
-    if (!callingDataIds?.length || !templateName || !campaignId) {
+    if (!callingDataIds?.length || !templateName || !campaignId || !fromEmail) {
       return sendError(
         next,
-        "callingDataIds, templateName and campaignId are required",
+        "callingDataIds, templateName, SenderEmail  and campaignId are required",
         400
       );
     }
@@ -833,6 +834,14 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
                       email: item.Office_Email_1,
                     },
                   ],
+                },
+              },
+              metadata: {
+                campaignType: campignType,
+                timestamp: new Date().toISOString(),
+                custom: {
+                  inbox_tracking: "true",
+                  campaign_id: campaignId,
                 },
               },
               version: "1.0",
