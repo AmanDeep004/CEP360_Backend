@@ -1139,9 +1139,25 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
 //     return sendError(next, "Email sending failed", 500);
 //   }
 // });
+const getAllEmailWebhookStatus = asyncHandler(async (req, res, next) => {
+  try {
+    const data = await EmailStatus.find({}).sort({ timestamp: -1 }).lean();
+
+    return sendResponse(
+      res,
+      200,
+      "Email webhook status fetched successfully",
+      data
+    );
+  } catch (err) {
+    console.error("Error fetching EmailStatus:", err);
+    return sendError(next, err.message, 500);
+  }
+});
 
 export {
   getMailercloudTemplateByName,
   mailercloudWebhook,
   sendTemplateEmailToCallingData,
+  getAllEmailWebhookStatus,
 };

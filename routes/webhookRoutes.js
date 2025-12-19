@@ -3,6 +3,7 @@ import {
   messageStatusUpdate,
   messageReceiveUpdate,
   getAllDoubleTickLogs,
+  getAllEmailWebhookStatus,
 } from "../controllers/webhook/webhookController.js";
 import { telcmiWebhook } from "../controllers/callRecordingController.js";
 import { wizaWebhook } from "../controllers/Linkedin/linkedinDataScrapingController.js";
