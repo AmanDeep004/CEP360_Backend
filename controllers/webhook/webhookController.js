@@ -569,4 +569,5 @@ export {
   getAllDoubleTickLogs,
   getWebhookStats,
   getWebhookLogsByContact,
+  //getAllEmailWebhookStatus,
 };

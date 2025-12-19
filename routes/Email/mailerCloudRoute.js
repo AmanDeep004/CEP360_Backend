@@ -1,6 +1,6 @@
 import { Router } from "express";
 import {
-  getAllEmailWebhookStatus,
+  //getAllEmailWebhookStatus,
   getMailercloudTemplateByName,
   mailercloudWebhook,
   //sendMailercloudEmail,
@@ -14,11 +14,11 @@ const router = Router();
 router.post("/sendEmailWithTemplate", sendTemplateEmailToCallingData);
 router.post("/webhook", mailercloudWebhook);
 router.get("/template", getMailercloudTemplateByName);
-router.get(
-  "/GetEmailStatus",
-  protect,
-  authorize(ADMIN, PROGRAM_MANAGER, PRESALES_MANAGER, RESOURCE_MANAGER, AGENT),
-  getAllEmailWebhookStatus
-);
+// router.get(
+//   "/GetEmailStatus",
+//   protect,
+//   authorize(ADMIN, PROGRAM_MANAGER, PRESALES_MANAGER, RESOURCE_MANAGER, AGENT),
+//   getAllEmailWebhookStatus
+// );
 
 export default router;
