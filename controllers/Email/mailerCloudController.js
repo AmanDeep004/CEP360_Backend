@@ -758,7 +758,7 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
       `http://localhost:4020/api/mailercloud/template?name=${templateName}`,
       {
         headers: {
-          Authorization: process.env.MAILERCLOUD_TOKEN,
+          Authorization: process.env.MAILERCLOUD_API_KEY,
         },
       }
     );
