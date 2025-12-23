@@ -81,6 +81,14 @@ const uploadProfilesOld = asyncHandler(async (req, res, next) => {
       return sendError(next, "File has no valid rows", 400);
     }
 
+    // Check if file has more than 500 rows
+    if (parsedRows.length > 500) {
+      return sendError(
+        next,
+        "Upload can only process 500 records in one go",
+        400
+      );
+    }
     // Calculate batch name
     const existingCount = await LinkedinProfile.countDocuments();
     const nextBatchNumber = Math.floor(existingCount / parsedRows.length) + 1;
@@ -158,6 +166,7 @@ const uploadProfilesOld = asyncHandler(async (req, res, next) => {
 
     let wizaResponse = null;
     let wizaListId = null;
+    let wizaErrorMessage = null;
 
     // Enrich profiles using Wiza
     if (profilesToEnrich.length > 0) {
@@ -206,10 +215,41 @@ const uploadProfilesOld = asyncHandler(async (req, res, next) => {
           "Wiza API Error:",
           wizaError.response?.data || wizaError.message
         );
+
+        // Extract error message from Wiza response
+        const wizaErrorData = wizaError.response?.data;
+
+        if (wizaErrorData?.error?.status?.message) {
+          wizaErrorMessage = wizaErrorData.error.status.message;
+        } else if (wizaErrorData?.message) {
+          wizaErrorMessage = wizaErrorData.message;
+        } else if (wizaError.message) {
+          wizaErrorMessage = wizaError.message;
+        } else {
+          wizaErrorMessage = "Unknown Wiza API error occurred";
+        }
+
         wizaResponse = {
-          error: wizaError.response?.data || wizaError.message,
+          error: wizaErrorData || wizaError.message,
         };
       }
+    }
+
+    // Check if there was a Wiza error
+    if (wizaErrorMessage) {
+      // Rollback: Delete the newly inserted profiles if Wiza fails
+      if (inserted > 0) {
+        await LinkedinProfile.deleteMany({ batchName });
+        console.log(
+          `Rolled back batch: ${batchName} (${inserted} profiles deleted)`
+        );
+      }
+
+      return sendError(
+        next,
+        `Wiza enrichment failed: ${wizaErrorMessage}`,
+        400
+      );
     }
 
     return sendResponse(res, 200, "File uploaded and processed successfully", {
@@ -264,9 +304,13 @@ const uploadProfiles = asyncHandler(async (req, res, next) => {
       );
     }
     // Calculate batch name
-    const existingCount = await LinkedinProfile.countDocuments();
-    const nextBatchNumber = Math.floor(existingCount / parsedRows.length) + 1;
-    const batchName = `Batch-${nextBatchNumber}`;
+    // const existingCount = await LinkedinProfile.countDocuments();
+    // const nextBatchNumber = Math.floor(existingCount / parsedRows.length) + 1;
+    // const batchName = `Batch-${nextBatchNumber}`;
+
+    // Use uploaded file name as batch name (without extension)
+    const originalFileName = req.file.originalname;
+    const batchName = originalFileName.replace(/\.[^/.]+$/, ""); // remove extension
 
     let inserted = 0;
     let duplicate = 0;
@@ -575,6 +619,7 @@ const getAllEnrichedProfiles = asyncHandler(async (req, res, next) => {
       const searchRegex = new RegExp(searchTerm, "i");
 
       filters.$or = [
+        { batchName: searchRegex },
         { "enrichedData.full_name": searchRegex },
         { "enrichedData.first_name": searchRegex },
         { "enrichedData.last_name": searchRegex },
