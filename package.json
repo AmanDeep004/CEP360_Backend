@@ -22,6 +22,7 @@
     "express": "^4.18.2",
     "express-winston": "^4.2.0",
     "fast-csv": "^5.0.5",
+    "fix-react2shell-next": "^1.1.4",
     "form-data": "^4.0.3",
     "formidable": "^3.5.4",
     "fs": "^0.0.1-security",
