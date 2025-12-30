@@ -12,6 +12,7 @@ import Campaign from "../../models/campaignModel.js";
 import dndModel from "../../models/MasterDBModel/dndModel.js";
 import engagementModel from "../../models/MasterDBModel/enagagementHistoryModel.js";
 import dumpHistoryData from "../../models/MasterDBModel/dumpHistoryDataModel.js";
+import enagagementHistoryModel from "../../models/MasterDBModel/enagagementHistoryModel.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
 function parseDate(value) {
@@ -836,7 +837,7 @@ const getCompanyDataById = asyncHandler(async (req, res, next) => {
   try {
     const companyId = req.query.companyId; // <-- NEW
 
-    // ✅ If companyId is passed → return one company directly
+    // If companyId is passed → return one company directly
     if (companyId) {
       const company = await Company.findById(companyId).lean();
       if (!company) return sendError(next, "Company not found", 404);
@@ -1547,6 +1548,227 @@ const dumpAllHistoryData = asyncHandler(async (req, res, next) => {
     });
   } catch (err) {
     return sendError(next, err.message || "Failed to dump history", 500);
+  }
+});
+
+const dumpCampaignInsights = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.body;
+
+    if (!campaignId) {
+      return sendError(next, "Campaign ID is required", 400);
+    }
+
+    // Fetch campaign details
+    const campaign = await Campaign.findById(campaignId).lean();
+    if (!campaign) {
+      return sendError(next, "Campaign not found", 404);
+    }
+
+    // Fetch all calling data for this campaign
+    const callingDataList = await CallingData.find({
+      CampaignId: campaignId,
+    }).lean();
+
+    if (!callingDataList.length) {
+      return sendError(next, "No data found for this campaign", 404);
+    }
+
+    let successCount = 0;
+    let failCount = 0;
+    const errors = [];
+
+    // Process each calling data record
+    for (const callingData of callingDataList) {
+      try {
+        // Skip if no agent assigned
+        if (!callingData.agentId) {
+          failCount++;
+          continue;
+        }
+
+        // Fetch call history
+        const callHistory = await CallHistory.findById(
+          callingData.callHistory
+        ).lean();
+
+        // Fetch contact from secondary DB
+        const contact = await Contact.findOne({
+          Contact_ID: callingData.Contact_ID,
+        }).lean();
+
+        // Format call history
+        const formattedCallHistory =
+          callHistory?.chatHistory?.map((chat) => ({
+            contactNo: chat.contactNo,
+            remarks: chat.remarks,
+            reason: chat.reason,
+            callingDate: chat.callingDate,
+            isRegistered: chat.isRegistered,
+            duration: chat.duration || null,
+          })) || [];
+
+        // Format WhatsApp messages
+        const formattedWhatsapp =
+          callingData.whatsappTemplates?.map((wa) => ({
+            waMessageId: wa.waMessageId,
+            templateId: wa.templateId,
+            templateName: wa.templateName,
+            status: wa.status,
+            sentAt: wa.timestamp,
+            deliveredAt: wa.history?.find((h) => h.status === "delivered")
+              ?.timestamp,
+            readAt: wa.history?.find((h) => h.status === "read")?.timestamp,
+          })) || [];
+
+        // Format email messages
+        const formattedEmails = callingData.emailTemplates
+          ? [
+              {
+                messageId: callingData.emailTemplates.messageId,
+                templateId: callingData.emailTemplates.templateId,
+                templateName: callingData.emailTemplates.templateName,
+                subject: null, // Add if available
+                status: callingData.emailTemplates.status,
+                sentAt: callingData.emailTemplates.timestamp,
+                openedAt: callingData.emailTemplates.history?.find(
+                  (h) => h.status === "opened"
+                )?.timestamp,
+                clickedAt: callingData.emailTemplates.history?.find(
+                  (h) => h.status === "clicked"
+                )?.timestamp,
+              },
+            ]
+          : [];
+
+        // Get last engagement info
+        const lastCallEntry =
+          callHistory?.chatHistory?.[callHistory.chatHistory.length - 1];
+        const lastWhatsapp =
+          callingData.whatsappTemplates?.[
+            callingData.whatsappTemplates.length - 1
+          ];
+        const lastEmail = callingData.emailTemplates;
+
+        // Determine last engagement type and date
+        const engagementDates = [
+          { type: "call", date: lastCallEntry?.callingDate },
+          { type: "whatsapp", date: lastWhatsapp?.timestamp },
+          { type: "email", date: lastEmail?.timestamp },
+        ].filter((e) => e.date);
+
+        const lastEngagement = engagementDates.sort(
+          (a, b) => new Date(b.date) - new Date(a.date)
+        )[0];
+
+        // Determine final status
+        let finalStatus = "not_interested";
+        if (callingData.isRegistered) {
+          finalStatus = "registered";
+        } else if (
+          lastCallEntry?.reason?.toLowerCase().includes("interested")
+        ) {
+          finalStatus = "interested";
+        } else if (lastCallEntry?.reason?.toLowerCase().includes("callback")) {
+          finalStatus = "callback";
+        } else if (lastCallEntry?.reason?.toLowerCase().includes("invalid")) {
+          finalStatus = "invalid";
+        } else if (
+          lastCallEntry?.reason?.toLowerCase().includes("not reachable")
+        ) {
+          finalStatus = "not_reachable";
+        }
+
+        // Create insights record
+        const insightData = {
+          campaignId: campaign._id,
+          campaignName: campaign.name || campaign.campaignName,
+          campaignEndDate: campaign.endDate || new Date(),
+
+          agentId: callingData.agentId,
+          agentName: callingData.agentName || "Unknown",
+          agentCode: null, // Add if available
+          programManagerId: callingData.pmId,
+          programManagerName: callingData.pmName,
+
+          contactId: contact?._id,
+          callingDataId: callingData._id,
+
+          contactName: callingData.Full_Name,
+          contactEmail:
+            callingData.Office_Email_1 || callingData.Personal_Email1,
+          contactPhone:
+            callingData.Mobile_No || callingData.Contact_Direct_Phone1,
+          companyName: callingData.Company_Name,
+          jobTitle: callingData.Job_Title,
+
+          isRegistered: callingData.isRegistered,
+          registeredOn: callingData.registeredOn,
+          isAttended: false, // Set based on your logic
+
+          callHistory: formattedCallHistory,
+          whatsappMessages: formattedWhatsapp,
+          emailMessages: formattedEmails,
+
+          firstContactDate: null, // Will be auto-calculated
+          lastContactDate: lastEngagement?.date || null,
+          lastEngagementType: lastEngagement?.type || "none",
+
+          finalRemarks:
+            lastCallEntry?.remarks || callingData.Telecalling_Remarks,
+          finalStatus: finalStatus,
+          finalReason: lastCallEntry?.reason,
+
+          dataSource: callingData.source,
+          batch: callingData.batch,
+
+          archivedAt: new Date(),
+          archivedBy: req.user._id,
+        };
+
+        // Check if insights already exists
+        const existingInsight = await AgentCampaignInsights.findOne({
+          campaignId: campaignId,
+          callingDataId: callingData._id,
+        });
+
+        if (existingInsight) {
+          // Update existing
+          await AgentCampaignInsights.findByIdAndUpdate(
+            existingInsight._id,
+            insightData,
+            { new: true }
+          );
+        } else {
+          // Create new
+          await AgentCampaignInsights.create(insightData);
+        }
+
+        successCount++;
+      } catch (error) {
+        failCount++;
+        errors.push({
+          callingDataId: callingData._id,
+          error: error.message,
+        });
+        console.error(
+          `Error processing calling data ${callingData._id}:`,
+          error
+        );
+      }
+    }
+
+    return sendResponse(res, 200, "Campaign insights dumped successfully", {
+      campaignId,
+      campaignName: campaign.name || campaign.campaignName,
+      totalRecords: callingDataList.length,
+      successCount,
+      failCount,
+      errors: errors.slice(0, 10), // Return first 10 errors only
+    });
+  } catch (err) {
+    console.error("Dump insights error:", err);
+    return sendError(next, err.message || "Failed to dump insights", 500);
   }
 });
 
