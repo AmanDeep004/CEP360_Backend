@@ -103,7 +103,7 @@ const CallingDataSchema = new mongoose.Schema(
     },
     isDataSourceApproved: { type: Boolean, default: false },
     emailTemplates: {
-      templateId: { type: String, required: true },
+      templateId: { type: String },
       templateName: { type: String, trim: true },
       timestamp: { type: Date, default: Date.now },
       status: { type: String, trim: true },
@@ -112,7 +112,7 @@ const CallingDataSchema = new mongoose.Schema(
         {
           status: { type: String, trim: true },
           timestamp: { type: Date, default: Date.now },
-          templateId: { type: String, required: true },
+          templateId: { type: String },
           templateName: { type: String, trim: true },
         },
       ],
@@ -120,7 +120,7 @@ const CallingDataSchema = new mongoose.Schema(
 
     whatsappTemplates: [
       {
-        waMessageId: { type: String, required: true }, // unique message identifier
+        waMessageId: { type: String }, // unique message identifier
         templateId: { type: String, trim: true },
         templateName: { type: String, trim: true },
         timestamp: { type: Date, default: Date.now },
