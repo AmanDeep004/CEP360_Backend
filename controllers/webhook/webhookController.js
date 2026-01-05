@@ -40,108 +40,7 @@ const findCallingDataForNumber = async (mobile) => {
 };
 
 // MESSAGE STATUS UPDATE WEBHOOK
-const messageStatusUpdateOld = asyncHandler(async (req, res, next) => {
-  try {
-    console.log("Received Message Status Webhook:", req.body);
-    const payload = req.body;
-    if (!payload) return sendError(next, "Payload missing", 400);
-
-    const waMessageId =
-      payload?.messageId ||
-      payload?.message_id ||
-      payload?.message?.message_id ||
-      "";
-
-    const status =
-      payload?.status || payload?.event_type || payload?.message_status || "";
-
-    const timestamp =
-      payload?.statusTimestamp ||
-      payload?.timestamp ||
-      payload?.status_timestamp ||
-      new Date();
-
-    const mobile = normalizeNumber(payload?.to || payload?.phone);
-
-    const contact = await findContactForNumber(mobile);
-
-    const saveObj = {
-      webhookType: "MessageStatus",
-      mobileNumber: mobile,
-      contactId: contact?._id || null,
-      payload,
-      eventType: status,
-      waMessageId,
-      status,
-      timestamp: new Date(timestamp),
-      templateMessage: payload?.message || null,
-    };
-
-    const saved = await DoubleTickData.create(saveObj);
-
-    return sendResponse(res, 200, "Message status webhook saved", {
-      received: true,
-      id: saved._id,
-      mobile,
-      matchedContact: contact?._id || null,
-    });
-  } catch (err) {
-    return sendError(next, err.message, 500);
-  }
-});
-
-// const messageStatusUpdate = asyncHandler(async (req, res, next) => {
-//   try {
-//     const payload = req.body;
-//     const {
-//       messageId,
-//       to,
-//       status,
-//       statusTimestamp,
-//       customerName,
-//       templateId,
-//       templateName,
-//       sentBy,
-//       assignedTo,
-//       wabaNumber,
-//     } = payload;
-//     if (!payload) return sendError(next, "Payload missing", 400);
-
-//     if (!messageId) {
-//       return sendError(next, "waMessageId not found", 400);
-//     }
-//     const contact = await findContactForNumber(normalizeNumber(to));
-
-//     const newHistory = { payload };
-
-//     const updateData = {
-//       webhookType: "MessageStatus",
-//       mobileNumber: to,
-//       contactId: contact?._id || null,
-//       templateId,
-//       templateName,
-//       payload,
-//       eventType: "MessageStatus",
-//       status,
-//       waMessageId: messageId,
-//       timestamp: statusTimestamp,
-//       templateMessage: payload?.message || null,
-//       updatedAt: new Date(),
-//     };
-
-//     const updatedDoc = await DoubleTickData.findOneAndUpdate(
-//       { waMessageId: messageId },
-//       { $set: updateData, $push: { messageHistory: newHistory } },
-//       { new: true, upsert: true }
-//     );
-
-//     return sendResponse(res, 200, "Status updated / created successfully");
-//   } catch (err) {
-//     return sendError(next, err.message, 500);
-//   }
-// });
-
-const messageStatusUpdate = asyncHandler(async (req, res, next) => {
+const messageStatusUpdateold = asyncHandler(async (req, res, next) => {
   try {
     const payload = req.body;
     console.log(
@@ -297,6 +196,284 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
     };
 
     await DoubleTickData.create(saveObj);
+
+    console.log(
+      `Updated CallingData WhatsApp Template for contact: ${callingDataContact._id}`
+    );
+
+    return sendResponse(res, 200, "Message status updated successfully", {
+      received: true,
+      contactId: callingDataContact._id,
+      mobile,
+      waMessageId,
+      status,
+      templateId,
+      templateName,
+      updated: true,
+    });
+  } catch (err) {
+    console.error("Error in messageStatusUpdate:", err);
+    return sendError(next, err.message, 500);
+  }
+});
+
+const messageStatusUpdate = asyncHandler(async (req, res, next) => {
+  try {
+    const payload = req.body;
+    console.log(
+      "Received Message Status Webhook:",
+      JSON.stringify(payload, null, 2)
+    );
+
+    if (!payload) {
+      return sendError(next, "Payload missing", 400);
+    }
+
+    const mobile = normalizeNumber(
+      payload?.to || payload?.receiver || payload?.phone || payload?.recipient
+    );
+
+    if (!mobile) {
+      console.log("No mobile number found in payload");
+      return sendResponse(res, 200, "No mobile number in payload", {
+        received: true,
+        mobile: null,
+      });
+    }
+
+    const callingDataContact = await findCallingDataForNumber(mobile);
+
+    if (!callingDataContact) {
+      console.log(`CallingData contact not found for number: ${mobile}`);
+
+      const waMessageId = payload?.messageId || payload?.message_id || "";
+
+      const saveObj = {
+        webhookType: "MessageStatus",
+        mobileNumber: mobile,
+        contactId: null,
+        payload,
+        eventType: payload?.status || payload?.event_type || "unknown",
+        waMessageId: waMessageId,
+        status: payload?.status || payload?.delivery_status || "",
+        timestamp: new Date(
+          payload?.timestamp || payload?.statusTimestamp || Date.now()
+        ),
+        templateMessage: payload?.message || null,
+        templateId: payload?.templateId || "",
+        templateName: payload?.templateName || "",
+      };
+
+      // Try to create, if duplicate, update the existing one
+      try {
+        await DoubleTickData.create(saveObj);
+        console.log(
+          `Created new DoubleTickData record for waMessageId: ${waMessageId}`
+        );
+      } catch (err) {
+        if (err.code === 11000) {
+          // Duplicate key error - update existing record
+          console.log(
+            `Updating existing DoubleTickData for waMessageId: ${waMessageId}`
+          );
+          await DoubleTickData.findOneAndUpdate(
+            { waMessageId: waMessageId },
+            {
+              $set: {
+                ...saveObj,
+                updatedAt: new Date(),
+              },
+              $push: {
+                messageHistory: {
+                  status: saveObj.status,
+                  timestamp: saveObj.timestamp,
+                  eventType: saveObj.eventType,
+                },
+              },
+            }
+          );
+        } else {
+          throw err; // Re-throw if it's not a duplicate key error
+        }
+      }
+
+      return sendResponse(res, 200, "Contact not found, webhook logged", {
+        received: true,
+        mobile,
+        matched: false,
+      });
+    }
+
+    const waMessageId =
+      payload?.messageId ||
+      payload?.message_id ||
+      payload?.message?.message_id ||
+      payload?.referenceId ||
+      "";
+
+    if (!waMessageId) {
+      console.log("No message ID found in payload");
+      return sendResponse(res, 200, "No message ID in payload", {
+        received: true,
+        contactId: callingDataContact._id,
+        mobile,
+      });
+    }
+
+    const status =
+      payload?.status ||
+      payload?.delivery_status ||
+      payload?.message?.status ||
+      payload?.event_type ||
+      "";
+
+    const timestamp =
+      payload?.timestamp ||
+      payload?.statusTimestamp ||
+      payload?.message?.timestamp ||
+      Date.now();
+
+    const templateId = payload?.templateId || "";
+    const templateName = payload?.templateName || "";
+
+    console.log(
+      `Found CallingData contact: ${callingDataContact._id}, updating status for message: ${waMessageId}`
+    );
+
+    // First, try to update existing whatsappTemplate entry
+    let updated = await CallingData.findOneAndUpdate(
+      {
+        _id: callingDataContact._id,
+        "whatsappTemplates.waMessageId": waMessageId,
+      },
+      {
+        $push: {
+          "whatsappTemplates.$.history": {
+            status,
+            timestamp: new Date(timestamp),
+          },
+        },
+        $set: {
+          "whatsappTemplates.$.status": status,
+          "whatsappTemplates.$.timestamp": new Date(timestamp),
+          "whatsappTemplates.$.templateId": templateId,
+          "whatsappTemplates.$.templateName": templateName,
+        },
+      },
+      { new: true }
+    );
+
+    // If not found, check if it exists in the array (to prevent duplicates)
+    if (!updated) {
+      // Double-check: Does this waMessageId already exist?
+      const existingContact = await CallingData.findOne({
+        _id: callingDataContact._id,
+        "whatsappTemplates.waMessageId": waMessageId,
+      });
+
+      if (existingContact) {
+        // It exists but update failed - try again
+        console.log(
+          `WhatsApp template exists but update failed, retrying for message: ${waMessageId}`
+        );
+        updated = await CallingData.findOneAndUpdate(
+          {
+            _id: callingDataContact._id,
+            "whatsappTemplates.waMessageId": waMessageId,
+          },
+          {
+            $push: {
+              "whatsappTemplates.$.history": {
+                status,
+                timestamp: new Date(timestamp),
+              },
+            },
+            $set: {
+              "whatsappTemplates.$.status": status,
+              "whatsappTemplates.$.timestamp": new Date(timestamp),
+              "whatsappTemplates.$.templateId": templateId,
+              "whatsappTemplates.$.templateName": templateName,
+            },
+          },
+          { new: true }
+        );
+      } else {
+        // Doesn't exist - safe to create new entry
+        console.log(
+          `Creating new WhatsApp template entry for message: ${waMessageId}`
+        );
+
+        updated = await CallingData.findByIdAndUpdate(
+          callingDataContact._id,
+          {
+            $push: {
+              whatsappTemplates: {
+                waMessageId,
+                templateId: templateId,
+                templateName: templateName,
+                status,
+                timestamp: new Date(timestamp),
+                history: [
+                  {
+                    status,
+                    timestamp: new Date(timestamp),
+                  },
+                ],
+              },
+            },
+          },
+          { new: true }
+        );
+      }
+    }
+
+    const saveObj = {
+      webhookType: "MessageStatus",
+      mobileNumber: mobile,
+      contactId: callingDataContact._id,
+      payload,
+      eventType: status,
+      waMessageId,
+      status,
+      timestamp: new Date(timestamp),
+      templateMessage: payload?.message || null,
+      templateName: templateName,
+      templateId: templateId,
+    };
+
+    // Try to create, if duplicate, update the existing one
+    try {
+      await DoubleTickData.create(saveObj);
+      console.log(
+        `Created new DoubleTickData record for waMessageId: ${waMessageId}`
+      );
+    } catch (err) {
+      if (err.code === 11000) {
+        // Duplicate key error - update existing record
+        console.log(
+          `Updating existing DoubleTickData for waMessageId: ${waMessageId}`
+        );
+        await DoubleTickData.findOneAndUpdate(
+          { waMessageId: waMessageId },
+          {
+            $set: {
+              ...saveObj,
+              updatedAt: new Date(),
+            },
+            $push: {
+              messageHistory: {
+                status: status,
+                timestamp: new Date(timestamp),
+                eventType: status,
+              },
+            },
+          }
+        );
+      } else {
+        // Re-throw if it's a different error
+        throw err;
+      }
+    }
 
     console.log(
       `Updated CallingData WhatsApp Template for contact: ${callingDataContact._id}`

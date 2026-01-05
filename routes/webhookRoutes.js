@@ -20,8 +20,8 @@ router.get(
   authorize(ADMIN, PRESALES_MANAGER),
   getAllDoubleTickLogs
 );
-router.post("/MessagestatusUpdate", messageStatusUpdate);
-router.post("/MessageReceiveUpdate", messageReceiveUpdate);
+router.post("/messagestatusUpdate", messageStatusUpdate);
+router.post("/messageReceiveUpdate", messageReceiveUpdate);
 
 // wiza webhooks
 router.post("/wiza", wizaWebhook);
