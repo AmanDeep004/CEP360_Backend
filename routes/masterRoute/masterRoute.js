@@ -12,6 +12,8 @@ import {
   getFiltersStats,
   getCompanyDataById,
   dumpAllHistoryData,
+  migrateToEngagementHistory,
+  getContactsWithEngagements,
 } from "../../controllers/masterDbController/masterController.js";
 import { UserRoleEnum } from "../../utils/enum.js";
 const router = Router();
@@ -34,5 +36,12 @@ router.get("/getAllCompanyName", protect, getAllCompanyName);
 router.get("/getDropdownFilters", protect, getDropdownFilters);
 router.get("/getFiltersStats", protect, getFiltersStats);
 router.get("/getAllDumpHistoryData", dumpAllHistoryData);
+
+router.get("/getContactsWithEngagements", protect, getContactsWithEngagements);
+router.post(
+  "/migrateToEngagementHistory/:campaignId",
+  protect,
+  migrateToEngagementHistory
+);
 
 export default router;

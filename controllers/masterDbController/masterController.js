@@ -8,11 +8,8 @@ import ContactHistory from "../../models/MasterDBModel/contactHistory.js";
 import CallHistory from "../../models/callHistoryModel.js";
 import CallingData from "../../models/callingDataModal.js";
 import Campaign from "../../models/campaignModel.js";
-
-import dndModel from "../../models/MasterDBModel/dndModel.js";
-import engagementModel from "../../models/MasterDBModel/enagagementHistoryModel.js";
 import dumpHistoryData from "../../models/MasterDBModel/dumpHistoryDataModel.js";
-import enagagementHistoryModel from "../../models/MasterDBModel/enagagementHistoryModel.js";
+import EngagementHistory from "../../models/MasterDBModel/enagagementHistoryModel.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
 function parseDate(value) {
@@ -1772,6 +1769,358 @@ const dumpCampaignInsights = asyncHandler(async (req, res, next) => {
   }
 });
 
+//api to migrate calling data history to masterdb
+const migrateToEngagementHistory = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+
+    if (!campaignId) {
+      return sendError(next, "Campaign ID is required", 400);
+    }
+
+    // Get campaign details
+    const campaign = await Campaign.findById(campaignId).lean();
+    if (!campaign) {
+      return sendError(next, "Campaign not found", 404);
+    }
+
+    // Get all calling data for the campaign and populate call history and agentId
+    const callingDataList = await CallingData.find({
+      CampaignId: campaignId,
+    })
+      .populate("callHistory")
+      .populate("agentId", "employeeName")
+      .lean();
+
+    if (!callingDataList || callingDataList.length === 0) {
+      return sendError(next, "No calling data found for this campaign", 404);
+    }
+
+    const migrationResults = [];
+    const errors = [];
+
+    for (const callingData of callingDataList) {
+      try {
+        // Extract unique agent names from call history
+        const uniqueAgentNames = [];
+        if (callingData.callHistory?.chatHistory) {
+          const agentNamesSet = new Set(
+            callingData.callHistory.chatHistory
+              .map((chat) => chat.agentName)
+              .filter(Boolean)
+          );
+          uniqueAgentNames.push(...agentNamesSet);
+        }
+
+        // Also add the current agent name if exists
+        if (callingData.agentId?.employeeName) {
+          uniqueAgentNames.push(callingData.agentId.employeeName);
+        }
+
+        // Remove duplicates
+        const finalAgentNames = [...new Set(uniqueAgentNames)];
+
+        // Get last engagement date from call history
+        let lastEngagementDate = null;
+        if (
+          callingData.callHistory?.chatHistory &&
+          callingData.callHistory.chatHistory.length > 0
+        ) {
+          const lastChat =
+            callingData.callHistory.chatHistory[
+              callingData.callHistory.chatHistory.length - 1
+            ];
+          lastEngagementDate = lastChat.callingDate;
+        }
+
+        // Prepare engagement history data
+        const engagementData = {
+          contact_id: callingData.Contact_ID, // String contact ID
+          callingDataId: callingData._id.toString(),
+          campaignId: campaign._id.toString(),
+          campaignName: campaign.name,
+
+          // Registration status
+          isRegistered: callingData.callHistory?.isRegistered || false,
+          isAtteneded: false, // Set based on your logic
+
+          // WhatsApp history from CallingData.whatsappTemplates
+          whatsappChatHistory: (callingData.whatsappTemplates || []).map(
+            (template) => ({
+              waMessageId: template.waMessageId,
+              templateId: template.templateId,
+              templateName: template.templateName,
+              timestamp: template.timestamp,
+              status: template.status,
+              history: template.history || [],
+            })
+          ),
+
+          // Email history from CallingData.emailTemplates
+          emailHistory: callingData.emailTemplates
+            ? {
+                templateId: callingData.emailTemplates.templateId,
+                templateName: callingData.emailTemplates.templateName,
+                timestamp: callingData.emailTemplates.timestamp,
+                status: callingData.emailTemplates.status,
+                messageId: callingData.emailTemplates.messageId,
+                history: callingData.emailTemplates.history || [],
+              }
+            : undefined,
+
+          // Agent information - use populated agent name
+          agentName: finalAgentNames,
+          agentId: callingData.agentId?._id?.toString() || "",
+
+          // Engagement date
+          last_engagement_date: lastEngagementDate,
+
+          // Telecalling remarks from CallHistory.chatHistory
+          telecalling_remarks: (callingData.callHistory?.chatHistory || []).map(
+            (chat) => ({
+              contactNo: chat.contactNo,
+              remarks: chat.remarks,
+              reason: chat.reason,
+              callingDate: chat.callingDate,
+              isRegistered: chat.isRegistered,
+              agent_id: chat.agent_id,
+              agentName: chat.agentName,
+            })
+          ),
+        };
+
+        // Check if engagement history already exists for this contact and campaign
+        const existingEngagement = await EngagementHistory.findOne({
+          contact_id: callingData._id,
+          campaignId: campaign._id.toString(),
+        });
+
+        if (existingEngagement) {
+          // Update existing engagement history
+          await EngagementHistory.findByIdAndUpdate(
+            existingEngagement._id,
+            engagementData,
+            { new: true }
+          );
+          migrationResults.push({
+            callingDataId: callingData._id,
+            contactId: callingData.Contact_ID,
+            status: "updated",
+          });
+        } else {
+          // Create new engagement history
+          await EngagementHistory.create(engagementData);
+          migrationResults.push({
+            callingDataId: callingData._id,
+            contactId: callingData.Contact_ID,
+            status: "created",
+          });
+        }
+      } catch (error) {
+        errors.push({
+          callingDataId: callingData._id,
+          contactId: callingData.Contact_ID,
+          error: error.message,
+        });
+      }
+    }
+
+    return sendResponse(res, 200, "Migration completed successfully", {
+      campaignId: campaign._id,
+      campaignName: campaign.name,
+      total: callingDataList.length,
+      successful: migrationResults.length,
+      failed: errors.length,
+      results: migrationResults,
+      errors: errors.length > 0 ? errors : undefined,
+    });
+  } catch (err) {
+    return sendError(
+      next,
+      err.message || "Failed to migrate to engagement history",
+      500
+    );
+  }
+});
+
+//api to get contacts with engagement histories
+const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
+  try {
+    const {
+      page = 1,
+      limit = 10,
+      search = "",
+      campaignId = "",
+      isRegistered,
+      city,
+      state,
+      country,
+      industry,
+      sortBy = "createdAt",
+      sortOrder = "desc",
+    } = req.query;
+
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Build contact query
+    let contactQuery = {};
+
+    // Search across multiple fields
+    if (search) {
+      contactQuery.$or = [
+        { Contact_ID: { $regex: search, $options: "i" } },
+        { Full_Name: { $regex: search, $options: "i" } },
+        { First_Name: { $regex: search, $options: "i" } },
+        { Last_Name: { $regex: search, $options: "i" } },
+        { Office_Email_1: { $regex: search, $options: "i" } },
+        { Personal_Email1: { $regex: search, $options: "i" } },
+        { Mobile_No: { $regex: search, $options: "i" } },
+        { Job_Title: { $regex: search, $options: "i" } },
+      ];
+    }
+
+    // Filter by location
+    if (city) contactQuery.Contact_City = { $regex: city, $options: "i" };
+    if (state) contactQuery.Contact_State = { $regex: state, $options: "i" };
+    if (country)
+      contactQuery.Contact_Country = { $regex: country, $options: "i" };
+
+    // Build sort object
+    const sortObj = {};
+    sortObj[sortBy] = sortOrder === "asc" ? 1 : -1;
+
+    // Get total count
+    const totalContacts = await Contact.countDocuments(contactQuery);
+
+    // Get contacts with company details
+    const contacts = await Contact.find(contactQuery)
+      .populate("Company_ID") // Populate company details
+      .sort(sortObj)
+      .skip(skip)
+      .limit(limitNum)
+      .lean();
+
+    // Filter by industry if provided (after population)
+    let filteredContacts = contacts;
+    if (industry) {
+      filteredContacts = contacts.filter(
+        (contact) =>
+          contact.Company_ID?.Industry &&
+          contact.Company_ID.Industry.toLowerCase().includes(
+            industry.toLowerCase()
+          )
+      );
+    }
+
+    // For each contact, get their engagements
+    const contactsWithEngagements = await Promise.all(
+      filteredContacts.map(async (contact) => {
+        // Build engagement query
+        let engagementQuery = { contact_id: contact.Contact_ID };
+
+        // Filter engagements by campaign if provided
+        if (campaignId) {
+          engagementQuery.campaignId = campaignId;
+        }
+
+        // Filter engagements by registration status if provided
+        if (isRegistered !== undefined) {
+          engagementQuery.isRegistered = isRegistered === "true";
+        }
+
+        // Find all engagements for this contact
+        const engagements = await EngagementHistory.find(engagementQuery)
+          .sort({ last_engagement_date: -1 })
+          .lean();
+
+        // Calculate engagement statistics
+        const totalEngagements = engagements.length;
+        const hasEngagements = totalEngagements > 0;
+
+        const isRegisteredInAnyCampaign = engagements.some(
+          (eng) => eng.isRegistered == true
+        );
+
+        const campaignNames = [
+          ...new Set(
+            engagements.map((eng) => eng.campaignName).filter(Boolean)
+          ),
+        ];
+
+        const allAgentNames = [
+          ...new Set(
+            engagements.flatMap((eng) => eng.agentName || []).filter(Boolean)
+          ),
+        ];
+
+        const latestEngagementDate =
+          engagements.length > 0 ? engagements[0].last_engagement_date : null;
+
+        const totalTelecallingRemarks = engagements.reduce(
+          (sum, eng) => sum + (eng.telecalling_remarks?.length || 0),
+          0
+        );
+
+        const totalWhatsappMessages = engagements.reduce(
+          (sum, eng) => sum + (eng.whatsappChatHistory?.length || 0),
+          0
+        );
+
+        const totalEmailsSent = engagements.filter(
+          (eng) => eng.emailHistory?.messageId
+        ).length;
+
+        return {
+          ...contact,
+          engagements,
+          // Computed fields
+          totalEngagements,
+          hasEngagements,
+          isRegisteredInAnyCampaign,
+          campaignNames,
+          allAgentNames,
+          latestEngagementDate,
+          totalTelecallingRemarks,
+          totalWhatsappMessages,
+          totalEmailsSent,
+        };
+      })
+    );
+
+    const totalPages = Math.ceil(totalContacts / limitNum);
+
+    return sendResponse(res, 200, "Contacts fetched successfully", {
+      contacts: contactsWithEngagements,
+      pagination: {
+        currentPage: pageNum,
+        totalPages,
+        totalRecords: totalContacts,
+        limit: limitNum,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1,
+      },
+      filters: {
+        search,
+        campaignId,
+        isRegistered,
+        city,
+        state,
+        country,
+        industry,
+      },
+    });
+  } catch (err) {
+    console.error("Error in getContactsWithEngagements:", err);
+    return sendError(
+      next,
+      err.message || "Failed to fetch contacts with engagements",
+      500
+    );
+  }
+});
+
 export {
   batchCreateFromExcel,
   getAllData,
@@ -1784,4 +2133,6 @@ export {
   updateCompany,
   getCompanyDataById,
   dumpAllHistoryData,
+  migrateToEngagementHistory,
+  getContactsWithEngagements,
 };
