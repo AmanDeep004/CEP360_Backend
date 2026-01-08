@@ -114,6 +114,7 @@ const CallingDataSchema = new mongoose.Schema(
           timestamp: { type: Date, default: Date.now },
           templateId: { type: String },
           templateName: { type: String, trim: true },
+          data: { type: String, trim: true },
         },
       ],
     },
