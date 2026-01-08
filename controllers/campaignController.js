@@ -162,6 +162,7 @@ const getAllCampaigns = asyncHandler(async (req, res, next) => {
         path: "programManager",
         select: "employeeName email",
       })
+      .sort({ createdAt: -1 })
       .lean();
     return sendResponse(
       res,
