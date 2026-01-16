@@ -1,11 +1,14 @@
 import mongoose from "mongoose";
 import { getPrimaryConnection } from "../config/db.js";
 
-const CallingDataSchema = new mongoose.Schema(
+const ExternalRegistrationSchema = new mongoose.Schema(
   {
-    Contact_ID: { type: String, trim: true },
-    Contact_Source: { type: String, trim: true },
-    Contact_Create_Date: { type: String, trim: true },
+    CampaignId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Campaign",
+      required: true,
+    },
+    Contact_Source: { type: String, enum: ["File", "Api"], required: true },
     Salutation: { type: String, trim: true },
     First_Name: { type: String, trim: true },
     Last_Name: { type: String, trim: true },
@@ -59,90 +62,18 @@ const CallingDataSchema = new mongoose.Schema(
     Company_LinkedIn_Profile: { type: String, trim: true },
     Company_Phone1: { type: String, trim: true },
     Company_Phone2: { type: String, trim: true },
-
-    // Assignment/Meta Fields
-    CampaignId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Campaign",
-      required: true,
-    },
-    UploadedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
-    source: {
-      type: String,
-      trim: true,
-      // required: true,
-    },
-    batch: { type: String, trim: true },
-    pmId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-    pmName: { type: String, trim: true },
-    agentId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-    reassigned_to: {
-      status: { type: Boolean, default: false },
-      previously_assigned_to: [
-        {
-          unassignedAt: { type: Date },
-          agentId: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: "User",
-            required: true,
-          },
-        },
-      ],
-    },
     isRegistered: { type: Boolean, default: false },
     registeredOn: { type: Date, default: null },
-    registrationSource: { type: String, default: "Not Registered" },
-    callHistory: { type: mongoose.Schema.Types.ObjectId, ref: "CallHistory" },
-    dataSourceType: {
-      type: String,
-      enum: ["Kestone", "Client", "Both", "ThirdParty"],
-      required: false,
-    },
-    isDataSourceApproved: { type: Boolean, default: false },
-    emailTemplates: {
-      templateId: { type: String },
-      templateName: { type: String, trim: true },
-      timestamp: { type: Date, default: Date.now },
-      status: { type: String, trim: true },
-      messageId: { type: String, trim: true },
-      history: [
-        {
-          status: { type: String, trim: true },
-          timestamp: { type: Date, default: Date.now },
-          templateId: { type: String },
-          templateName: { type: String, trim: true },
-          data: { type: String, trim: true },
-        },
-      ],
-    },
-
-    whatsappTemplates: [
-      {
-        waMessageId: { type: String }, // unique message identifier
-        templateId: { type: String, trim: true },
-        templateName: { type: String, trim: true },
-        timestamp: { type: Date, default: Date.now },
-        status: { type: String, trim: true },
-
-        history: [
-          {
-            status: { type: String, trim: true },
-            timestamp: { type: Date, default: Date.now },
-          },
-        ],
-      },
-    ],
-    registrationSource: { type: Object },
+    isAvailableInCallingData: { type: Boolean, default: false },
   },
   {
     timestamps: true,
   }
 );
 
-CallingDataSchema.index({ createdAt: 1, CampaignId: 1, agentId: 1 });
+ExternalRegistrationSchema.index({ Mobile_No: 1, CampaignId: 1, agentId: 1 });
 
-export default getPrimaryConnection().model("CallingData", CallingDataSchema);
+export default getPrimaryConnection().model(
+  "ExternalRegistration",
+  ExternalRegistrationSchema
+);
