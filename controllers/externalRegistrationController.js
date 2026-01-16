@@ -329,7 +329,7 @@ const uploadExternalDataController = asyncHandler(async (req, res, next) => {
         if (existingExternalRecord) {
           results.duplicatesSkipped++;
           console.log(
-            `⚠ Duplicate found in ExternalRegistration, skipping row ${i + 1}`
+            `Duplicate found in ExternalRegistration, skipping row ${i + 1}`
           );
           continue; // Skip this record
         }
@@ -439,7 +439,7 @@ const uploadExternalDataController = asyncHandler(async (req, res, next) => {
 
         // Insert into ExternalRegistration
         const data = await ExternalRegistration.create(registrationData);
-        console.log(`✓ Inserted ExternalRegistration ID: ${data._id}`);
+        console.log(`✓ Inserted ExternalRegistration ID: ${data?._id}`);
         results.inserted++;
       } catch (error) {
         console.error(`✗ Error processing row ${i + 1}:`, error.message);

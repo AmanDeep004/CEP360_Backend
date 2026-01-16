@@ -7,7 +7,6 @@ const EmailStatusSchema = new mongoose.Schema({
   event: { type: String }, // e.g., "sent", "opened", etc.
   campaignId: { type: String },
   timestamp: { type: Date, default: Date.now },
-  data,
 });
 
 export default getPrimaryConnection().model("EmailStatus", EmailStatusSchema);
