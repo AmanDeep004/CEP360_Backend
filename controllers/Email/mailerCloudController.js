@@ -6,7 +6,7 @@ import { logger } from "../../logger/index.js";
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
-const mailercloudWebhook = asyncHandler(async (req, res, next) => {
+const mailercloudWebhookOLD = asyncHandler(async (req, res, next) => {
   try {
     console.log("📩 MailerCloud Webhook Data:", req.body);
 
@@ -53,6 +53,55 @@ const mailercloudWebhook = asyncHandler(async (req, res, next) => {
     return sendError(next, "Error processing webhook", 500);
   }
 });
+const mailercloudWebhook = asyncHandler(async (req, res, next) => {
+  try {
+    console.log("📩 MailerCloud Webhook Data:", req.body);
+
+    const { email, event, campaignId, timestamp, messageId } = req.body;
+
+    if (!email || !event) {
+      return sendError(next, "Missing required fields (email/event)", 400);
+    }
+
+    // 1️⃣ Save webhook event to EmailStatus
+    const resp = await EmailStatus.create({
+      email,
+      event,
+      campaignId,
+      timestamp: timestamp,
+    });
+    console.log("EmailStatus saved:", resp);
+    // 2️⃣ Update CallingData emailTemplates history
+    // await CallingData.findByIdAndUpdate(
+    //   campaignId, // must be CallingData _id
+    //   {
+    //     $set: {
+    //       "emailTemplates.status": event,
+    //       "emailTemplates.messageId": messageId || "",
+    //       "emailTemplates.timestamp": new Date(),
+    //     },
+    //     $push: {
+    //       "emailTemplates.history": {
+    //         status: event,
+    //         timestamp: new Date(),
+    //         messageId: messageId || "",
+    //         data: req.body,
+    //       },
+    //     },
+    //   },
+    //   { new: true }
+    // );
+
+    return sendResponse(res, 200, "Webhook received successfully", {
+      email,
+      event,
+    });
+  } catch (err) {
+    console.error("Webhook Error:", err);
+    return sendError(next, "Error processing webhook", 500);
+  }
+});
+
 const getMailercloudTemplateByName = asyncHandler(async (req, res, next) => {
   try {
     const API_KEY = process.env.MAILERCLOUD_API_KEY;
@@ -206,6 +255,35 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
 
             continue; // skip this user
           }
+          console.log("sending email payload", {
+            email: {
+              // from: "miki@kestoneglobal.com",
+              from: fromEmail,
+              fromName: campaignName || "Campaign Team",
+              subject: template.name,
+              text: personalizedText,
+              html: personalizedHTML,
+              //   replyTo: ["miki@kestoneglobal.com"],
+              replyTo: [fromEmail],
+              recipients: {
+                to: [
+                  {
+                    name: item.Full_Name,
+                    email: recipientEmail,
+                  },
+                ],
+              },
+            },
+            metadata: {
+              campaignType: campignType,
+              timestamp: new Date().toISOString(),
+              custom: {
+                inbox_tracking: "true",
+                campaign_id: campaignId,
+              },
+            },
+            version: "1.0",
+          });
 
           const sendRes = await axios.post(
             "https://email-api.mailercloud.com/email",
