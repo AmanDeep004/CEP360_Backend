@@ -2121,6 +2121,253 @@ const getContactsWithEngagementsOld = asyncHandler(async (req, res, next) => {
   }
 });
 
+const getContactsWithEngagementsWorking = asyncHandler(
+  async (req, res, next) => {
+    try {
+      const {
+        page = 1,
+        limit = 10,
+        search = "",
+        campaignId = "",
+        isRegistered,
+        city,
+        state,
+        country,
+        industry,
+        sortBy = "createdAt",
+        sortOrder = "desc",
+      } = req.query;
+
+      const pageNum = parseInt(page);
+      const limitNum = parseInt(limit);
+      const skip = (pageNum - 1) * limitNum;
+
+      // Build contact query
+      let contactQuery = {};
+
+      // Search across multiple fields
+      if (search && search.trim()) {
+        const searchRegex = new RegExp(search.trim(), "i");
+        contactQuery.$or = [
+          { Contact_ID: searchRegex },
+          { Full_Name: searchRegex },
+          { First_Name: searchRegex },
+          { Last_Name: searchRegex },
+          { Office_Email_1: searchRegex },
+          { Personal_Email1: searchRegex },
+          { Mobile_No: searchRegex },
+          { Job_Title: searchRegex },
+        ];
+      }
+
+      // Filter by location
+      if (city) contactQuery.Contact_City = { $regex: city, $options: "i" };
+      if (state) contactQuery.Contact_State = { $regex: state, $options: "i" };
+      if (country)
+        contactQuery.Contact_Country = { $regex: country, $options: "i" };
+
+      // Build sort object
+      const sortObj = {};
+      sortObj[sortBy] = sortOrder === "asc" ? 1 : -1;
+
+      // PARALLEL QUERIES for better performance
+      const [totalContacts, contacts] = await Promise.all([
+        Contact.countDocuments(contactQuery).exec(),
+        Contact.find(contactQuery)
+          .populate({
+            path: "Company_ID",
+            select:
+              "Company_Name Website Industry Sub_Industry Company_Phone1 Company_Phone2 Employees_Range Turnover_Range",
+          })
+          .sort(sortObj)
+          .skip(skip)
+          .limit(limitNum)
+          .lean()
+          .exec(),
+      ]);
+
+      // Check if contacts exist
+      if (!contacts || contacts.length === 0) {
+        return sendResponse(res, 200, "No contacts found", {
+          contacts: [],
+          pagination: {
+            currentPage: pageNum,
+            totalPages: 0,
+            totalRecords: 0,
+            limit: limitNum,
+            hasNextPage: false,
+            hasPrevPage: false,
+          },
+          filters: {
+            search,
+            campaignId,
+            isRegistered,
+            city,
+            state,
+            country,
+            industry,
+          },
+        });
+      }
+
+      // Filter by industry if provided (after population)
+      let filteredContacts = contacts;
+      if (industry && industry.trim()) {
+        filteredContacts = contacts.filter(
+          (contact) =>
+            contact.Company_ID?.Industry &&
+            contact.Company_ID.Industry.toLowerCase().includes(
+              industry.toLowerCase()
+            )
+        );
+      }
+
+      // For each contact, get their engagements
+      const contactsWithEngagements = await Promise.all(
+        filteredContacts.map(async (contact) => {
+          try {
+            // Build engagement query
+            let engagementQuery = { contact_id: contact.Contact_ID };
+
+            // Filter engagements by campaign if provided
+            if (campaignId && campaignId.trim()) {
+              engagementQuery.campaignId = campaignId.trim();
+            }
+
+            // Filter engagements by registration status if provided
+            if (isRegistered !== undefined && isRegistered !== null) {
+              engagementQuery.isRegistered =
+                isRegistered === "true" || isRegistered === true;
+            }
+
+            // Find all engagements for this contact with explicit exec()
+            const engagements = await EngagementHistory.find(engagementQuery)
+              .sort({ updatedAt: -1, createdAt: -1, last_engagement_date: -1 })
+              .lean()
+              .exec();
+
+            // Calculate engagement statistics
+            const totalEngagements = engagements?.length || 0;
+            const hasEngagements = totalEngagements > 0;
+
+            const isRegisteredInAnyCampaign = engagements
+              ? engagements.some((eng) => eng.isRegistered === true)
+              : false;
+
+            const campaignNames = engagements
+              ? [
+                  ...new Set(
+                    engagements.map((eng) => eng.campaignName).filter(Boolean)
+                  ),
+                ]
+              : [];
+
+            const allAgentNames = engagements
+              ? [
+                  ...new Set(
+                    engagements
+                      .flatMap((eng) => eng.agentName || [])
+                      .filter(Boolean)
+                  ),
+                ]
+              : [];
+
+            const latestEngagementDate =
+              engagements && engagements.length > 0
+                ? engagements[0].last_engagement_date ||
+                  engagements[0].updatedAt ||
+                  engagements[0].createdAt
+                : null;
+
+            const totalTelecallingRemarks = engagements
+              ? engagements.reduce(
+                  (sum, eng) => sum + (eng.telecalling_remarks?.length || 0),
+                  0
+                )
+              : 0;
+
+            const totalWhatsappMessages = engagements
+              ? engagements.reduce(
+                  (sum, eng) => sum + (eng.whatsappChatHistory?.length || 0),
+                  0
+                )
+              : 0;
+
+            const totalEmailsSent = engagements
+              ? engagements.filter((eng) => eng.emailHistory?.messageId).length
+              : 0;
+
+            return {
+              ...contact,
+              engagements: engagements || [],
+              // Computed fields
+              totalEngagements,
+              hasEngagements,
+              isRegisteredInAnyCampaign,
+              campaignNames,
+              allAgentNames,
+              latestEngagementDate,
+              totalTelecallingRemarks,
+              totalWhatsappMessages,
+              totalEmailsSent,
+            };
+          } catch (engagementError) {
+            console.error(
+              `Error fetching engagements for contact ${contact.Contact_ID}:`,
+              engagementError
+            );
+            // Return contact without engagements if there's an error
+            return {
+              ...contact,
+              engagements: [],
+              totalEngagements: 0,
+              hasEngagements: false,
+              isRegisteredInAnyCampaign: false,
+              campaignNames: [],
+              allAgentNames: [],
+              latestEngagementDate: null,
+              totalTelecallingRemarks: 0,
+              totalWhatsappMessages: 0,
+              totalEmailsSent: 0,
+            };
+          }
+        })
+      );
+
+      const totalPages = Math.ceil(totalContacts / limitNum);
+
+      return sendResponse(res, 200, "Contacts fetched successfully", {
+        contacts: contactsWithEngagements,
+        pagination: {
+          currentPage: pageNum,
+          totalPages,
+          totalRecords: totalContacts,
+          limit: limitNum,
+          hasNextPage: pageNum < totalPages,
+          hasPrevPage: pageNum > 1,
+        },
+        filters: {
+          search: search || "",
+          campaignId: campaignId || "",
+          isRegistered,
+          city,
+          state,
+          country,
+          industry,
+        },
+      });
+    } catch (err) {
+      console.error("Error in getContactsWithEngagements:", err);
+      console.error("Error stack:", err.stack);
+      return sendError(
+        next,
+        err.message || "Failed to fetch contacts with engagements",
+        500
+      );
+    }
+  }
+);
+
 const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
   try {
     const {
@@ -2141,10 +2388,8 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
 
-    // Build contact query
     let contactQuery = {};
 
-    // Search across multiple fields
     if (search && search.trim()) {
       const searchRegex = new RegExp(search.trim(), "i");
       contactQuery.$or = [
@@ -2165,7 +2410,6 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
     if (country)
       contactQuery.Contact_Country = { $regex: country, $options: "i" };
 
-    // Build sort object
     const sortObj = {};
     sortObj[sortBy] = sortOrder === "asc" ? 1 : -1;
 
@@ -2184,9 +2428,9 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
         .lean()
         .exec(),
     ]);
-
     // Check if contacts exist
     if (!contacts || contacts.length === 0) {
+      console.log("No contacts found, returning empty response");
       return sendResponse(res, 200, "No contacts found", {
         contacts: [],
         pagination: {
@@ -2223,27 +2467,56 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
 
     // For each contact, get their engagements
     const contactsWithEngagements = await Promise.all(
-      filteredContacts.map(async (contact) => {
+      filteredContacts.map(async (contact, index) => {
         try {
           // Build engagement query
           let engagementQuery = { contact_id: contact.Contact_ID };
 
+          console.log(
+            `Base Engagement Query:`,
+            JSON.stringify(engagementQuery)
+          );
+
           // Filter engagements by campaign if provided
           if (campaignId && campaignId.trim()) {
             engagementQuery.campaignId = campaignId.trim();
+            console.log(`Added campaignId filter: ${campaignId.trim()}`);
           }
 
           // Filter engagements by registration status if provided
           if (isRegistered !== undefined && isRegistered !== null) {
             engagementQuery.isRegistered =
               isRegistered === "true" || isRegistered === true;
+            console.log(
+              `Added isRegistered filter: ${engagementQuery.isRegistered}`
+            );
           }
+
+          console.log(
+            `Final Engagement Query:`,
+            JSON.stringify(engagementQuery, null, 2)
+          );
 
           // Find all engagements for this contact with explicit exec()
           const engagements = await EngagementHistory.find(engagementQuery)
             .sort({ updatedAt: -1, createdAt: -1, last_engagement_date: -1 })
             .lean()
             .exec();
+
+          console.log(`Engagements Found: ${engagements?.length || 0}`);
+
+          if (engagements && engagements.length > 0) {
+            console.log(`First Engagement Sample:`, {
+              _id: engagements[0]._id,
+              campaignName: engagements[0].campaignName,
+              isRegistered: engagements[0].isRegistered,
+              isAtteneded: engagements[0].isAtteneded,
+              agentName: engagements[0].agentName,
+              whatsappCount: engagements[0].whatsappChatHistory?.length || 0,
+              emailExists: !!engagements[0].emailHistory?.messageId,
+              telecallingCount: engagements[0].telecalling_remarks?.length || 0,
+            });
+          }
 
           // Calculate engagement statistics
           const totalEngagements = engagements?.length || 0;
@@ -2296,7 +2569,18 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
             ? engagements.filter((eng) => eng.emailHistory?.messageId).length
             : 0;
 
-          return {
+          console.log(`Computed Stats:`, {
+            totalEngagements,
+            hasEngagements,
+            isRegisteredInAnyCampaign,
+            campaignNames,
+            allAgentNames,
+            totalTelecallingRemarks,
+            totalWhatsappMessages,
+            totalEmailsSent,
+          });
+
+          const result = {
             ...contact,
             engagements: engagements || [],
             // Computed fields
@@ -2310,11 +2594,21 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
             totalWhatsappMessages,
             totalEmailsSent,
           };
+
+          console.log(`Contact Result Keys:`, Object.keys(result));
+          console.log(
+            `Engagements in Result:`,
+            result.engagements?.length || 0
+          );
+
+          return result;
         } catch (engagementError) {
           console.error(
             `Error fetching engagements for contact ${contact.Contact_ID}:`,
             engagementError
           );
+          console.error(`Error Stack:`, engagementError.stack);
+
           // Return contact without engagements if there's an error
           return {
             ...contact,
@@ -2332,10 +2626,24 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
         }
       })
     );
+    console.log("contacts-aman", contactsWithEngagements);
+
+    // Log summary of engagements
+    const summaryStats = contactsWithEngagements.reduce(
+      (acc, contact) => {
+        acc.totalEngagements += contact.totalEngagements || 0;
+        acc.totalWithEngagements += contact.hasEngagements ? 1 : 0;
+        acc.totalRegistered += contact.isRegisteredInAnyCampaign ? 1 : 0;
+        return acc;
+      },
+      { totalEngagements: 0, totalWithEngagements: 0, totalRegistered: 0 }
+    );
+
+    console.log(`Summary Stats:`, summaryStats);
 
     const totalPages = Math.ceil(totalContacts / limitNum);
 
-    return sendResponse(res, 200, "Contacts fetched successfully", {
+    const response = {
       contacts: contactsWithEngagements,
       pagination: {
         currentPage: pageNum,
@@ -2354,9 +2662,14 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
         country,
         industry,
       },
-    });
+    };
+
+    console.log(`Response Pagination:`, response.pagination);
+    console.log(`=== END getContactsWithEngagements ===\n`);
+
+    return sendResponse(res, 200, "Contacts fetched successfully", response);
   } catch (err) {
-    console.error("Error in getContactsWithEngagements:", err);
+    console.error("CRITICAL ERROR in getContactsWithEngagements:", err);
     console.error("Error stack:", err.stack);
     return sendError(
       next,
