@@ -6,23 +6,21 @@ let secondaryConnection = null;
 export const connectDB = async () => {
   try {
     console.log("Connecting to databases...");
-    console.log("Primary URI:", process.env.MONGO_URI);
-    console.log("Secondary URI:", process.env.MONGO_URI1);
 
     // Connection options
-    const connectionOptions = {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    };
+    // const connectionOptions = {
+    //   useNewUrlParser: true,
+    //   useUnifiedTopology: true,
+    // };
 
     // Create both connections
     primaryConnection = mongoose.createConnection(
-      process.env.MONGO_URI,
-      connectionOptions
+      process.env.MONGO_URI
+      // connectionOptions
     );
     secondaryConnection = mongoose.createConnection(
-      process.env.MONGO_URI1,
-      connectionOptions
+      process.env.MONGO_URI1
+      // connectionOptions
     );
 
     // Wait for both connections to be established
