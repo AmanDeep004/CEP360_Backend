@@ -10,6 +10,7 @@ const EngagementSchema = new mongoose.Schema(
     contact_id: { type: String, trim: true },
     campaignName: { type: String, trim: true },
     isRegistered: { type: Boolean, default: false },
+    registrationDate: { type: Date },
     isAtteneded: { type: Boolean, default: false },
     whatsappChatHistory: [
       {

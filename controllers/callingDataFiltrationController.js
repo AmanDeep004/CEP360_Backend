@@ -684,6 +684,7 @@ const companiesMatchedDataWithExcel = asyncHandler(async (req, res, next) => {
   }
 });
 
+//filter for client calling data
 const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
   try {
     const {
@@ -940,11 +941,10 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
   }
 });
 
-//assign all the calling data filtration to the particular campaign
+//assign  calling data filtration(kestone masterdatabase)
 const assignCallingDataToCampaign = asyncHandler(async (req, res, next) => {
   try {
     const { campaignId, uploadedBy, batch, dataSourceType } = req.body;
-
     if (!campaignId || !uploadedBy) {
       return sendError(next, "Required fields missing", 400);
     }
@@ -1014,6 +1014,12 @@ const assignCallingDataToCampaign = asyncHandler(async (req, res, next) => {
         },
       },
       { $match: { ...includeQuery, ...excludeQuery } },
+      {
+        $sort: {
+          EngagementPoints: -1, // Higher points first
+          Last_Engagement_Date: -1, // Latest engagement first (tie breaker)
+        },
+      },
     ]);
 
     if (!contacts.length) {
@@ -1086,6 +1092,8 @@ const assignCallingDataToCampaign = asyncHandler(async (req, res, next) => {
         row.company_info?.Company_LinkedIn_Profile || "",
       Company_Phone1: row.company_info?.Company_Phone1 || "",
       Company_Phone2: row.company_info?.Company_Phone2 || "",
+      Last_Engagement_Date: row.Last_Engagement_Date || "",
+      EngagementPoints: row.EngagementPoints,
     }));
 
     // Detect duplicates
@@ -1176,6 +1184,7 @@ const assignCallingDataToCampaign = asyncHandler(async (req, res, next) => {
   }
 });
 
+//assign  calling data filtration(Client masterdatabase)
 const assignCallingDataToCampaignClientSuggested = asyncHandler(
   async (req, res, next) => {
     try {
@@ -1270,6 +1279,12 @@ const assignCallingDataToCampaignClientSuggested = asyncHandler(
             ...excludeQuery,
           },
         },
+        {
+          $sort: {
+            EngagementPoints: -1, // Higher points first
+            Last_Engagement_Date: -1, // Latest engagement first (tie breaker)
+          },
+        },
       ]);
 
       if (!contacts.length) {
@@ -1322,9 +1337,10 @@ const assignCallingDataToCampaignClientSuggested = asyncHandler(
         Last_Engagement_Date: row.Last_Engagement_Date,
         Last_Engagement_Campaign: row.Last_Engagement_Campaign,
         Telecalling_Remarks: row.Telecalling_Remarks,
-
         Company_ID: row.company_info?._id || null,
         Company_Name: row.company_info?.Company_Name || "",
+        Last_Engagement_Date: row.Last_Engagement_Date || "",
+        EngagementPoints: row.EngagementPoints,
       }));
 
       // 6. Duplicate detection
@@ -1418,7 +1434,7 @@ const assignCallingDataToCampaignClientSuggested = asyncHandler(
     }
   }
 );
-
+//assign calling data for both filter (client + kestone)
 const assignCallingDataToCampaignBoth = asyncHandler(async (req, res, next) => {
   try {
     const { campaignId, uploadedBy } = req.body;
@@ -1540,6 +1556,12 @@ const assignCallingDataToCampaignBoth = asyncHandler(async (req, res, next) => {
         $unwind: { path: "$company_info", preserveNullAndEmptyArrays: true },
       },
       { $match: { ...clientInclude } },
+      {
+        $sort: {
+          EngagementPoints: -1, // Higher points first
+          Last_Engagement_Date: -1, // Latest engagement first (tie breaker)
+        },
+      },
       { $addFields: { sourceType: "Client" } },
     ];
 
@@ -1620,6 +1642,8 @@ const assignCallingDataToCampaignBoth = asyncHandler(async (req, res, next) => {
 
         Company_ID: contact.company_info?._id || null,
         Company_Name: contact.company_info?.Company_Name || "",
+        Last_Engagement_Date: contact.Last_Engagement_Date || "",
+        EngagementPoints: contact.EngagementPoints,
       })
     );
 

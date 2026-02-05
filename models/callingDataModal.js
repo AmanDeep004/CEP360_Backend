@@ -39,6 +39,7 @@ const CallingDataSchema = new mongoose.Schema(
     DND_Account_Tag: { type: String, trim: true },
     Last_Engagement: { type: String, trim: true },
     Last_Engagement_Date: { type: String, trim: true },
+    EngagementPoints: { type: Number },
     Last_Engagement_Campaign: { type: String, trim: true },
     Telecalling_Remarks: { type: String, trim: true },
 

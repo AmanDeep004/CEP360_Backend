@@ -1783,7 +1783,6 @@ const migrateToEngagementHistory = asyncHandler(async (req, res, next) => {
             ];
           lastEngagementDate = lastChat.callingDate;
         }
-
         // Prepare engagement history data
         const engagementData = {
           contact_id: callingData.Contact_ID, // String contact ID
@@ -1793,6 +1792,7 @@ const migrateToEngagementHistory = asyncHandler(async (req, res, next) => {
 
           // Registration status
           isRegistered: callingData?.isRegistered || false,
+          registrationDate: callingData?.registeredOn || null,
           // isAtteneded: false, // Set based on your logic
 
           // WhatsApp history from CallingData.whatsappTemplates
