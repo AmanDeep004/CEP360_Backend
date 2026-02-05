@@ -61,6 +61,8 @@ const ContactSchema = new mongoose.Schema(
       ref: "Company",
       index: true,
     },
+
+    EngagementPoints: { type: Number, default: 0, index: true },
   },
   { timestamps: true }
 );

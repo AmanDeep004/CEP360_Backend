@@ -6,6 +6,7 @@ import CallingDataEditApproval from "../models/callingDataEditApprovalModel.js";
 import { UserRoleEnum } from "../utils/enum.js";
 import XLSX from "xlsx";
 import mongoose from "mongoose";
+import { maskPhone, maskEmail } from "../utils/mobileEmailMasking.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 const {
   ADMIN,
@@ -138,7 +139,6 @@ const uploadcallingData = asyncHandler(async (req, res, next) => {
     return sendError(next, err.message, 500);
   }
 });
-
 const getCallingDataById = asyncHandler(async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -167,7 +167,7 @@ const getCallingDataById = asyncHandler(async (req, res, next) => {
 
 /**
  * @desc Edit a campaign database entry
- * @route PUT /api/callingData/:id
+ * @route PUT /api/callingData/:ids
  * @access Private
  */
 
@@ -235,45 +235,7 @@ const deletecallingData = asyncHandler(async (req, res, next) => {
  * @access Private
  */
 
-const getAllCallingDataOld = asyncHandler(async (req, res, next) => {
-  try {
-    const { CampaignId } = req.params;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const skip = (page - 1) * limit;
-
-    const filter = { CampaignId };
-
-    if (req.query.search && req.query.search.trim() !== "") {
-      const searchRegex = new RegExp(`\\b${req.query.search.trim()}`, "i");
-      filter.full_Name = searchRegex;
-    }
-
-    // Optional filter: isRegistered=true/false
-    if (req.query.isRegistered !== undefined) {
-      const val = req.query.isRegistered.toLowerCase();
-      if (val === "true" || val === "false") {
-        filter.isRegistered = val === "true";
-      }
-    }
-
-    const [total, data] = await Promise.all([
-      CallingData.countDocuments(filter),
-      CallingData.find(filter).skip(skip).limit(limit).lean(),
-    ]);
-
-    return sendResponse(res, 200, "Database fetched successfully", {
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-      data,
-    });
-  } catch (err) {
-    return sendError(next, err.message, 500);
-  }
-});
-const getAllCallingData = asyncHandler(async (req, res, next) => {
+const getAllCallingDataWithoutMasking = asyncHandler(async (req, res, next) => {
   try {
     const { CampaignId } = req.params;
     const page = parseInt(req.query.page) || 1;
@@ -327,6 +289,75 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
     return sendError(next, err.message, 500);
   }
 });
+// here
+const getAllCallingData = asyncHandler(async (req, res, next) => {
+  try {
+    const { CampaignId } = req.params;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const filter = { CampaignId };
+
+    // search on multiple fields
+    if (req.query.search && req.query.search.trim() !== "") {
+      const search = req.query.search.trim();
+      const regex = new RegExp(search, "i");
+
+      filter.$or = [
+        { Full_Name: regex },
+        { First_Name: regex },
+        { Last_Name: regex },
+        { Mobile_No: regex },
+        { Office_Email_1: regex },
+        { Office_Email_2: regex },
+        { Personal_Email1: regex },
+        { Personal_Email2: regex },
+        { Contact_Direct_Phone1: regex },
+        { Contact_Direct_Phone2: regex },
+        { Company_Name: regex },
+      ];
+    }
+
+    // filter registered
+    if (req.query.isRegistered !== undefined) {
+      const val = req.query.isRegistered.toLowerCase();
+      if (val === "true" || val === "false") {
+        filter.isRegistered = val === "true";
+      }
+    }
+
+    // fetch data and count
+    const [total, data] = await Promise.all([
+      CallingData.countDocuments(filter),
+      CallingData.find(filter).skip(skip).limit(limit).lean(),
+    ]);
+
+    const maskedData = data.map((row) => ({
+      ...row,
+
+      Contact_Direct_Phone1: maskPhone(row.Contact_Direct_Phone1),
+      Contact_Direct_Phone2: maskPhone(row.Contact_Direct_Phone2),
+      Mobile_No: maskPhone(row.Mobile_No),
+
+      Office_Email_1: maskEmail(row.Office_Email_1),
+      Office_Email_2: maskEmail(row.Office_Email_2),
+      Personal_Email1: maskEmail(row.Personal_Email1),
+      Personal_Email2: maskEmail(row.Personal_Email2),
+    }));
+
+    // console.log("Masked data:", maskedData);
+    return sendResponse(res, 200, "Database fetched successfully", {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      data: maskedData,
+    });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
 
 const getDatabaseByAssignmentold = asyncHandler(async (req, res, next) => {
   try {
@@ -365,8 +396,7 @@ const getDatabaseByAssignmentold = asyncHandler(async (req, res, next) => {
   }
 });
 
-// here
-const getDatabaseByAssignmentOld = asyncHandler(async (req, res, next) => {
+const getDatabaseByAssignmentUnmasked = asyncHandler(async (req, res, next) => {
   try {
     const { CampaignId } = req.params;
     const {
@@ -383,71 +413,50 @@ const getDatabaseByAssignmentOld = asyncHandler(async (req, res, next) => {
     const limNum = parseInt(limit, 10);
     const skip = (pageNum - 1) * limNum;
 
-    // Base filter
     const filter = { CampaignId };
 
-    // 1) Assignment status
-    if (assignment === "assigned") {
-      filter.agentId = { $ne: null };
-    } else if (assignment === "notassigned") {
-      filter.agentId = null;
-    }
+    if (assignment === "assigned") filter.agentId = { $ne: null };
+    if (assignment === "notassigned") filter.agentId = null;
 
-    // 2) Assigned agent
-    if (agentId) {
-      filter.agentId = agentId;
-    }
+    if (agentId) filter.agentId = agentId;
 
-    // 3) Source (case-insensitive partial match)
     if (source) {
       filter.source = { $regex: new RegExp(source, "i") };
     }
 
-    // Get all data first (filtered, before pagination)
-    let fullQuery = CallingData.find(filter)
+    let data = await CallingData.find(filter)
       .populate({
         path: "agentId",
         select: "employeeName email",
       })
       .populate({
         path: "callHistory",
-        populate: {
-          path: "chatHistory",
-          model: "CallHistory",
-        },
+        populate: { path: "chatHistory", model: "CallHistory" },
       })
       .lean();
 
-    let data = await fullQuery;
-
-    // 4) Filter by remark (post-query)
-    // if (remark) {
-    //   data = data.filter((entry) => {
-    //     const history = entry.callHistory?.chatHistory;
-    //     return (
-    //       Array.isArray(history) && history.some((c) => c.remarks === remark)
-    //     );
-    //   });
-    // }
     if (remark) {
-      data = data.filter((entry) => {
-        const history = entry.callHistory?.chatHistory;
-        const lastRemark =
-          Array.isArray(history) && history[history.length - 1];
-        return lastRemark?.remarks === remark;
-      });
+      if (remark === "Yet to Call") {
+        data = data.filter((entry) => {
+          const history = entry.callHistory?.chatHistory;
+          return !history || history.length === 0;
+        });
+      } else {
+        data = data.filter((entry) => {
+          const history = entry.callHistory?.chatHistory;
+          if (!Array.isArray(history) || history.length === 0) return false;
+          const lastRemark = history[history.length - 1];
+          return lastRemark?.remarks === remark;
+        });
+      }
     }
 
-    // 5) Apply range slicing after filtering
     if (range) {
       const parts = range.split("-").map((v) => parseInt(v.trim(), 10));
       if (parts.length !== 2 || parts.some((n) => isNaN(n))) {
-        return sendError(
-          next,
-          "Invalid range format. Use format like 100-200",
-          400
-        );
+        return sendError(next, "Invalid range format. Use 100-200", 400);
       }
+
       const [min, max] = parts;
       if (min > max) {
         return sendError(
@@ -457,13 +466,10 @@ const getDatabaseByAssignmentOld = asyncHandler(async (req, res, next) => {
         );
       }
 
-      // Slice based on index range (1-based range from UI, adjust to 0-based index)
       data = data.slice(min - 1, max);
     }
 
     const total = data.length;
-
-    // 6) Apply pagination on the final filtered data
     const paginatedData = data.slice(skip, skip + limNum);
 
     return sendResponse(res, 200, "Filtered database fetched successfully", {
@@ -553,52 +559,30 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
 
     const total = data.length;
     const paginatedData = data.slice(skip, skip + limNum);
+    const maskedData = paginatedData.map((row) => ({
+      ...row,
+      Contact_Direct_Phone1: maskPhone(row.Contact_Direct_Phone1),
+      Contact_Direct_Phone2: maskPhone(row.Contact_Direct_Phone2),
+      Mobile_No: maskPhone(row.Mobile_No),
+
+      Office_Email_1: maskEmail(row.Office_Email_1),
+      Office_Email_2: maskEmail(row.Office_Email_2),
+      Personal_Email1: maskEmail(row.Personal_Email1),
+      Personal_Email2: maskEmail(row.Personal_Email2),
+    }));
 
     return sendResponse(res, 200, "Filtered database fetched successfully", {
       total,
       page: pageNum,
       limit: limNum,
       totalPages: Math.ceil(total / limNum),
-      data: paginatedData,
+      data: maskedData,
     });
   } catch (err) {
     return sendError(next, err.message, 500);
   }
 });
 
-const assignCallingDataToAgentsOld = asyncHandler(async (req, res, next) => {
-  try {
-    const { agentId, callingDataIds, pmId, pmName } = req.body;
-
-    if (
-      !agentId ||
-      !Array.isArray(callingDataIds) ||
-      callingDataIds.length === 0 ||
-      !pmId ||
-      !pmName
-    ) {
-      return sendError(
-        next,
-        "AgentId,ProjectManager Id ,ProjectManager Name, CallingDataIds are required",
-        400
-      );
-    }
-
-    const result = await CallingData.updateMany(
-      { _id: { $in: callingDataIds } },
-      { $set: { agentId, pmId, pmName } }
-    );
-
-    return sendResponse(
-      res,
-      200,
-      `${result.modifiedCount} calling data records updated successfully`,
-      result
-    );
-  } catch (err) {
-    return sendError(next, err.message, 500);
-  }
-});
 const assignCallingDataToAgents = asyncHandler(async (req, res, next) => {
   try {
     const { agentId, callingDataIds, pmId, pmName } = req.body;

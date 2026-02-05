@@ -5,6 +5,7 @@ import User from "../models/userModel.js";
 import { UserRoleEnum } from "../utils/enum.js";
 import campaignModel from "../models/campaignModel.js";
 import callingDataModal from "../models/callingDataModal.js";
+import { maskEmail, maskPhone } from "../utils/mobileEmailMasking.js";
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
@@ -611,13 +612,24 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
 
     const total = callingData.length;
     const paginatedData = callingData.slice(skip, skip + limNum);
+    const maskedData = paginatedData.map((row) => ({
+      ...row,
+      Contact_Direct_Phone1: maskPhone(row.Contact_Direct_Phone1),
+      Contact_Direct_Phone2: maskPhone(row.Contact_Direct_Phone2),
+      Mobile_No: maskPhone(row.Mobile_No),
+
+      Office_Email_1: maskEmail(row.Office_Email_1),
+      Office_Email_2: maskEmail(row.Office_Email_2),
+      Personal_Email1: maskEmail(row.Personal_Email1),
+      Personal_Email2: maskEmail(row.Personal_Email2),
+    }));
 
     return sendResponse(res, 200, "Calling data fetched successfully", {
       total,
       page: pageNum,
       limit: limNum,
       totalPages: Math.ceil(total / limNum),
-      data: paginatedData,
+      data: maskedData,
     });
   } catch (err) {
     console.error(err);
