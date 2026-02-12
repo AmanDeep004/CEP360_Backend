@@ -5,6 +5,7 @@ import Campaign from "../models/campaignModel.js";
 import errorHandler from "../utils/index.js";
 import CallingData from "../models/callingDataModal.js";
 import ClientCompanyList from "../models/clientCompanyList.js";
+import SharedFilter from "../models/sharedFilter.js";
 import XLSX from "xlsx";
 import csv from "csvtojson";
 import fs from "fs";
@@ -68,7 +69,7 @@ function buildMongoQuery(filters = [], exclusions = []) {
   return query;
 }
 
-const callingDataFilter = asyncHandler(async (req, res, next) => {
+const callingDataFilterOld = asyncHandler(async (req, res, next) => {
   try {
     const { campaignId, filters = [], exclusions = [], datatype } = req.body;
 
@@ -282,6 +283,238 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
       res,
       200,
       "Campaign Industry vs Job_Seniority stats generated successfully",
+      {
+        filteredData,
+        campaignFilterId: campaignFilter._id,
+        revisionNo,
+        listName,
+      }
+    );
+  } catch (err) {
+    console.error("Campaign filter error:", err);
+    return sendError(
+      next,
+      err.message || "Failed to create campaign filter",
+      500
+    );
+  }
+});
+const callingDataFilter = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId, filters = [], exclusions = [], datatype } = req.body;
+
+    if (!campaignId) {
+      return sendError(next, "Campaign ID is required", 400);
+    }
+    if (!datatype) {
+      return sendError(next, "Data Type is required", 400);
+    }
+
+    const fieldMapping = {
+      Industry: "company_info.Industry",
+      Sub_Industry: "company_info.Sub_Industry",
+      Company_Segment: "company_info.Company_Segment",
+      Employees_Range: "company_info.Employees_Range",
+      Turnover_Range: "company_info.Turnover_Range",
+      Contact_Country: "Contact_Country",
+      Contact_State: "Contact_State",
+      Contact_Region: "Contact_Region",
+      Contact_City: "Contact_City",
+      Job_Function: "Job_Function",
+      Job_Seniority: "Job_Seniority",
+      Job_Title: "Job_Title",
+    };
+
+    const buildMongoQuery = (filtersArr, operator = "$in") => {
+      const q = {};
+      filtersArr.forEach(({ field, value }) => {
+        const mappedField = fieldMapping[field] || field;
+        if (Array.isArray(value) && value.length > 0) {
+          q[mappedField] = { [operator]: value };
+        }
+      });
+      return q;
+    };
+
+    const includeQuery = buildMongoQuery(filters, "$in");
+    const excludeQuery = buildMongoQuery(exclusions, "$nin");
+
+    req.setTimeout(300000);
+
+    // ================= PIPELINE =================
+    const statsPipeline = [
+      {
+        $lookup: {
+          from: "companies",
+          localField: "Company_ID",
+          foreignField: "_id",
+          as: "company_info",
+        },
+      },
+      {
+        $unwind: {
+          path: "$company_info",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $match: {
+          ...includeQuery,
+          ...excludeQuery,
+        },
+      },
+      {
+        $addFields: {
+          normalizedIndustry: {
+            $cond: [
+              { $ifNull: ["$company_info.Industry", false] },
+              "$company_info.Industry",
+              "Unknown",
+            ],
+          },
+          normalizedJobTitle: {
+            $cond: [
+              { $ifNull: ["$Job_Title", false] },
+              "$Job_Title",
+              "Unknown",
+            ],
+          },
+        },
+      },
+      {
+        $group: {
+          _id: {
+            industry: "$normalizedIndustry",
+            jobTitle: "$normalizedJobTitle",
+          },
+          count: { $sum: 1 },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          crossTabData: {
+            $push: {
+              industry: "$_id.industry",
+              jobTitle: "$_id.jobTitle",
+              count: "$count",
+            },
+          },
+          totalContacts: { $sum: "$count" },
+        },
+      },
+    ];
+
+    // ================= EXECUTE =================
+    const [statsResult, uniqueCompaniesCount] = await Promise.all([
+      Contact.aggregate(statsPipeline),
+
+      Contact.aggregate([
+        {
+          $lookup: {
+            from: "companies",
+            localField: "Company_ID",
+            foreignField: "_id",
+            as: "company_info",
+          },
+        },
+        {
+          $unwind: {
+            path: "$company_info",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        { $match: { ...includeQuery, ...excludeQuery } },
+        { $group: { _id: "$Company_ID" } },
+        { $count: "uniqueCompanies" },
+      ]),
+    ]);
+
+    const stats = statsResult[0] || { crossTabData: [], totalContacts: 0 };
+    const uniqueCompanies = uniqueCompaniesCount[0]?.uniqueCompanies || 0;
+
+    const crossTabData = stats.crossTabData || [];
+
+    // ================= BUILD TABLE =================
+    const industries = [...new Set(crossTabData.map((i) => i.industry))].sort();
+
+    const jobTitles = [...new Set(crossTabData.map((i) => i.jobTitle))].sort();
+
+    const crossTabTable = {};
+    const industryTotals = {};
+    const jobTitleTotals = {};
+
+    industries.forEach((ind) => {
+      crossTabTable[ind] = {};
+      industryTotals[ind] = 0;
+
+      jobTitles.forEach((jt) => {
+        crossTabTable[ind][jt] = 0;
+      });
+    });
+
+    jobTitles.forEach((jt) => {
+      jobTitleTotals[jt] = 0;
+    });
+
+    crossTabData.forEach(({ industry, jobTitle, count }) => {
+      crossTabTable[industry][jobTitle] = count;
+      industryTotals[industry] += count;
+      jobTitleTotals[jobTitle] += count;
+    });
+
+    // ================= FINAL FORMAT =================
+    const formattedStats = {
+      totalContacts: stats.totalContacts,
+      uniqueCompanies,
+      crossTabulation: {
+        industries,
+        seniorities: jobTitles, // Keeping same key for frontend compatibility
+        data: crossTabTable,
+        industryTotals,
+        seniorityTotals: jobTitleTotals,
+      },
+      industryBreakdown: industryTotals,
+      seniorityBreakdown: jobTitleTotals,
+    };
+
+    const filteredData = {
+      contactCount: stats.totalContacts,
+      summary: formattedStats,
+      contacts: [],
+    };
+
+    // ================= SAVE =================
+    const lastFilter = await CampaignFilter.findOne({ campaignId }).sort({
+      revisionNo: -1,
+    });
+
+    let revisionNo = 1;
+    let listName = "List1";
+
+    if (lastFilter) {
+      revisionNo = lastFilter.revisionNo + 1;
+      listName = `List${revisionNo}`;
+    }
+
+    const campaignFilter = await CampaignFilter.create({
+      campaignId,
+      filters,
+      exclusions,
+      revisionNo,
+      listName,
+      filteredData,
+      dataType: datatype,
+      contactCount: stats.totalContacts,
+      status: "Pending",
+    });
+
+    await Campaign.findByIdAndUpdate(campaignId, { stage: "Filtered" });
+
+    return sendResponse(
+      res,
+      200,
+      "Industry vs Job Title stats generated successfully",
       {
         filteredData,
         campaignFilterId: campaignFilter._id,
@@ -1735,6 +1968,201 @@ const assignCallingDataToCampaignBoth = asyncHandler(async (req, res, next) => {
   }
 });
 
+//sharable magic link
+const generateMagicLink = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignFilterId, revisionNo, createdBy, allowedDevices } =
+      req.body;
+
+    if (!campaignFilterId) {
+      return sendError(next, "Campaign Filter ID is required", 400);
+    }
+
+    const existingLink = await SharedFilter.findOne({
+      campaignFilterId,
+      isActive: true,
+    });
+
+    if (existingLink) {
+      const magicLink = `${
+        process.env.FRONTEND_URL || req.get("origin")
+      }/shared-stats/${existingLink.filterId}`;
+
+      return sendResponse(res, 200, "Magic link already exists", {
+        magicLink,
+        filterId: existingLink.filterId,
+        expiresAt: existingLink.expiresAt,
+        isExisting: true,
+      });
+    }
+
+    const filterId =
+      new mongoose.Types.ObjectId().toString() + Date.now().toString(36);
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+    // ===== CREATE RECORD =====
+    await SharedFilter.create({
+      filterId,
+      campaignFilterId,
+      revisionNo,
+      createdBy,
+      expiresAt,
+      allowedDevices: allowedDevices || 3,
+      accessDevices: [],
+      isActive: true,
+    });
+
+    const magicLink = `${
+      process.env.FRONTEND_URL || req.get("origin")
+    }/shared-stats/${filterId}`;
+
+    return sendResponse(res, 200, "Magic link generated successfully", {
+      magicLink,
+      filterId,
+      expiresAt,
+    });
+  } catch (error) {
+    console.error(error);
+    return sendError(next, error.message, 500);
+  }
+});
+
+// Get Shared Filter Stats
+const getSharedFilterStats = asyncHandler(async (req, res, next) => {
+  try {
+    const { filterId } = req.params;
+
+    const sharedFilter = await SharedFilter.findOne({
+      filterId,
+      isActive: true,
+    }).populate({
+      path: "campaignFilterId",
+      select: "filteredData",
+    });
+
+    const limitedData = await SharedFilter.findOne({
+      filterId,
+      isActive: true,
+    })
+      .select("campaignFilterId expiresAt  revisionNo -_id ")
+      .populate({
+        path: "campaignFilterId",
+        select: "filteredData expiresAt ",
+      });
+
+    if (!sharedFilter) {
+      return sendError(next, "Link not found", 404);
+    }
+
+    if (new Date() > sharedFilter.expiresAt) {
+      return sendError(next, "Link expired", 410);
+    }
+
+    // ===== DEVICE + IP TRACKING =====
+    const ip =
+      req.headers["x-forwarded-for"] || req.socket?.remoteAddress || req.ip;
+
+    const userAgent = req.headers["user-agent"] || "unknown";
+
+    const deviceId = `${ip}_${userAgent}`;
+
+    const existingDevice = sharedFilter.accessDevices.find(
+      (d) => d.deviceId === deviceId
+    );
+
+    if (!existingDevice) {
+      if (sharedFilter.accessDevices.length >= sharedFilter.allowedDevices) {
+        return sendError(next, "You do not have access to open this link", 403);
+      }
+
+      sharedFilter.accessDevices.push({
+        deviceId,
+        ip,
+        userAgent,
+        firstAccessAt: new Date(),
+        lastAccessAt: new Date(),
+      });
+    } else {
+      existingDevice.lastAccessAt = new Date();
+    }
+
+    sharedFilter.views += 1;
+    sharedFilter.lastViewedAt = new Date();
+
+    await sharedFilter.save();
+
+    return sendResponse(res, 200, "Success", {
+      data: limitedData,
+      // filterId: sharedFilter.filterId,
+      // revisionNo: sharedFilter.revisionNo,
+      // views: sharedFilter.views,
+    });
+  } catch (error) {
+    console.error(error);
+    return sendError(next, error.message, 500);
+  }
+});
+
+// Deactivate Shared Link (Soft Delete)
+const deactivateSharedLink = asyncHandler(async (req, res, next) => {
+  try {
+    const { filterId } = req.params;
+    const userId = req.user?._id;
+
+    const sharedFilter = await SharedFilter.findOne({
+      filterId,
+      createdBy: userId,
+      isActive: true,
+    });
+
+    if (!sharedFilter) {
+      return sendError(next, "Shared link not found or unauthorized", 404);
+    }
+
+    await SharedFilter.findByIdAndUpdate(sharedFilter._id, {
+      isActive: false,
+    });
+
+    return sendResponse(res, 200, "Shared link deactivated successfully");
+  } catch (error) {
+    console.error("Deactivate shared link error:", error);
+    return sendError(next, error.message, 500);
+  }
+});
+
+// Extend Link Expiry
+const extendLinkExpiry = asyncHandler(async (req, res, next) => {
+  try {
+    const { filterId } = req.params;
+    const { days = 7 } = req.body;
+    const userId = req.user?._id;
+
+    const sharedFilter = await SharedFilter.findOne({
+      filterId,
+      createdBy: userId,
+      isActive: true,
+    });
+
+    if (!sharedFilter) {
+      return sendError(next, "Shared link not found or unauthorized", 404);
+    }
+
+    // Extend expiry
+    const newExpiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+
+    await SharedFilter.findByIdAndUpdate(sharedFilter._id, {
+      expiresAt: newExpiresAt,
+    });
+
+    return sendResponse(res, 200, "Link expiry extended successfully", {
+      newExpiresAt,
+    });
+  } catch (error) {
+    console.error("Extend link expiry error:", error);
+    return sendError(next, error.message, 500);
+  }
+});
+
 export {
   callingDataFilter,
   callingDataFilterLightweight,
@@ -1745,4 +2173,8 @@ export {
   clientCallingDataFilter,
   assignCallingDataToCampaignClientSuggested,
   assignCallingDataToCampaignBoth,
+  generateMagicLink,
+  getSharedFilterStats,
+  deactivateSharedLink,
+  extendLinkExpiry,
 };

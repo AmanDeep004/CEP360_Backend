@@ -9,6 +9,10 @@ import {
   clientCallingDataFilter,
   assignCallingDataToCampaignClientSuggested,
   assignCallingDataToCampaignBoth,
+  generateMagicLink,
+  getSharedFilterStats,
+  deactivateSharedLink,
+  extendLinkExpiry,
 } from "../controllers/callingDataFiltrationController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -70,5 +74,10 @@ router.post(
 );
 
 router.post("/clientCallingDataFilter", protect, clientCallingDataFilter);
+router.get("/filterResultsSummary/:filterId", getSharedFilterStats);
+router.post("/generate", protect, generateMagicLink);
+
+router.patch("/:filterId/deactivate", protect, deactivateSharedLink);
+router.patch("/:filterId/extend", protect, extendLinkExpiry);
 
 export default router;
