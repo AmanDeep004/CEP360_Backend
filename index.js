@@ -48,8 +48,7 @@ const startServer = async () => {
     const whatsappRoute = (
       await import("./routes/whatsapp/doubleTickRoutes.js")
     ).default;
-
-    console.log("Routes loaded successfully");
+    const checkEndedCampaigns = await import("./utils/endedCampaign.js");
 
     const app = express();
 
@@ -149,6 +148,39 @@ const startServer = async () => {
       }
     );
 
+    // cron to check if campaign is completed or not everyday at 1:00 am
+    cron.schedule(
+      "00 01 * * *", // everyday at 1:00 pm
+
+      async () => {
+        const now = new Date().toLocaleString("en-IN", {
+          timeZone: "Asia/Kolkata",
+        });
+        console.log(`[CRON] Triggered at ${now} (IST)`);
+
+        try {
+          const endedCampaignsId =
+            await checkEndedCampaigns.checkEndedCampaigns();
+          s;
+          const dataTobeCorrected =
+            await checkEndedCampaigns.getAllCallHistoriesForCampaign(
+              endedCampaignsId
+            );
+          console.log(
+            "[CRON] Campaign completion check completed successfully."
+          );
+        } catch (err) {
+          console.error(
+            "[CRON] For campaign completion failed:",
+            err?.message || err
+          );
+        }
+      },
+      {
+        timezone: "Asia/Kolkata", // run on Indian time
+      }
+    );
+
     app.use("*", (req, res) => {
       res.status(404).json({
         success: false,
@@ -161,7 +193,7 @@ const startServer = async () => {
     app.use(expressWinston.errorLogger(expressWinstonErrorLogger));
     app.use(errorHandler);
 
-    const PORT = process.env.PORT || 6000;
+    const PORT = process.env.PORT || 4020;
     const server = app.listen(PORT, () => {
       console.log(
         ` Server running in ${

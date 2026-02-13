@@ -61,6 +61,12 @@ const ContactSchema = new mongoose.Schema(
       ref: "Company",
       index: true,
     },
+    discrepencyInData: {
+      status: { type: Boolean, default: false },
+      dispositionTag: { type: String, trim: true },
+      remark: { type: String, trim: true },
+      misc: { type: Object, default: {} },
+    },
 
     EngagementPoints: { type: Number, default: 0, index: true },
   },

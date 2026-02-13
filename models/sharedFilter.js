@@ -34,7 +34,7 @@ const SharedFilterSchema = new mongoose.Schema(
     expiresAt: {
       type: Date,
       required: true,
-      index: true,
+      // index: true,
     },
     views: {
       type: Number,
