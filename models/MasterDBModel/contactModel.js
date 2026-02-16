@@ -63,8 +63,7 @@ const ContactSchema = new mongoose.Schema(
     },
     discrepencyInData: {
       status: { type: Boolean, default: false },
-      dispositionTag: { type: String, trim: true },
-      remark: { type: String, trim: true },
+      chatHistory: { type: Array },
       misc: { type: Object, default: {} },
     },
 

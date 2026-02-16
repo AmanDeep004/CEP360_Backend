@@ -150,37 +150,63 @@ const startServer = async () => {
 
     // cron to check if campaign is completed or not everyday at 1:00 am
     cron.schedule(
-      "00 01 * * *", // everyday at 1:00 pm
-
+      "00 01 * * *",
       async () => {
         const now = new Date().toLocaleString("en-IN", {
           timeZone: "Asia/Kolkata",
         });
-        console.log(`[CRON] Triggered at ${now} (IST)`);
+
+        console.log("\n" + "=".repeat(70));
+        console.log(
+          `[CRON] CAMPAIGN DISCREPANCY CHECK - Triggered at ${now} (IST)`
+        );
+        console.log("=".repeat(70));
 
         try {
-          const endedCampaignsId =
+          // console.log("\nSTEP 1: Checking for ended campaigns...");
+          const endedCampaigns =
             await checkEndedCampaigns.checkEndedCampaigns();
-          s;
-          const dataTobeCorrected =
+
+          if (endedCampaigns.length === 0) {
+            console.log("No ended campaigns found. Nothing to process.");
+            return;
+          }
+
+          // Step 2: Get call histories with redundant data
+          // console.log(
+          // "\nSTEP 2: Fetching call histories with redundant remarks..."
+          // );
+          const redundantData =
             await checkEndedCampaigns.getAllCallHistoriesForCampaign(
-              endedCampaignsId
+              endedCampaigns
             );
-          console.log(
-            "[CRON] Campaign completion check completed successfully."
-          );
+
+          if (redundantData.length === 0) {
+            console.log("No redundant data found in ended campaigns.");
+            return;
+          }
+
+          // console.log("\nSTEP 2.1: Discrepancy data...", redundantData);
+          // Step 3: Update MasterDB
+          // console.log("\nSTEP 3: Updating MasterDB with discrepancy data...");
+          const updateResult =
+            await checkEndedCampaigns.updatingIncorrectDataInMasterDB(
+              redundantData
+            );
+          // console.log("\nSTEP 3.1: Update result...", updateResult);
+
+          // Final Summary
         } catch (err) {
           console.error(
-            "[CRON] For campaign completion failed:",
+            "[CRON] Campaign discrepancy check failed:",
             err?.message || err
           );
         }
       },
       {
-        timezone: "Asia/Kolkata", // run on Indian time
+        timezone: "Asia/Kolkata",
       }
     );
-
     app.use("*", (req, res) => {
       res.status(404).json({
         success: false,
