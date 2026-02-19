@@ -18,6 +18,7 @@ const DoubleTickWebhookSchema = new mongoose.Schema(
     },
     templateName: { type: String, trim: true },
     templateId: { type: String, trim: true },
+    templateData: { type: Object, default: {} },
     mobileNumber: { type: String, trim: true },
     messageHistory: { type: Array, default: [] },
     payload: { type: Object, required: true },

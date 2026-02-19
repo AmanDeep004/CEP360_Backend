@@ -108,6 +108,7 @@ const CallingDataSchema = new mongoose.Schema(
       templateId: { type: String },
       templateName: { type: String, trim: true },
       timestamp: { type: Date, default: Date.now },
+      templateDetails: { type: Object, default: {} },
       status: { type: String, trim: true },
       messageId: { type: String, trim: true },
       history: [
@@ -117,6 +118,7 @@ const CallingDataSchema = new mongoose.Schema(
           templateId: { type: String },
           templateName: { type: String, trim: true },
           data: { type: String, trim: true },
+          templateDetails: { type: Object, default: {} },
         },
       ],
     },
@@ -128,7 +130,7 @@ const CallingDataSchema = new mongoose.Schema(
         templateName: { type: String, trim: true },
         timestamp: { type: Date, default: Date.now },
         status: { type: String, trim: true },
-
+        templateDetails: { type: Object, default: {} },
         history: [
           {
             status: { type: String, trim: true },

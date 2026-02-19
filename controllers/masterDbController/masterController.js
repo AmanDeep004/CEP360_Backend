@@ -514,7 +514,7 @@ const batchCreateFromExcel = asyncHandler(async (req, res, next) => {
         duplicateEmailMap.add(contact.Personal_Email2.toLowerCase());
     }
 
-    // --- 🧠 Step 5a: Get latest sequential Contact_ID before processing ---
+    // ---  Step 5a: Get latest sequential Contact_ID before processing ---
     const lastContact = await Contact.findOne({}, { Contact_ID: 1 })
       .sort({ _id: -1 })
       .lean();
@@ -530,7 +530,7 @@ const batchCreateFromExcel = asyncHandler(async (req, res, next) => {
     const validRows = [];
 
     for (const r of rows) {
-      // ✅ Only skip if Company_Name is missing
+      // Only skip if Company_Name is missing
       if (!r.Company_Name) {
         skippedContacts++;
         skippedLogs.push({
@@ -541,7 +541,7 @@ const batchCreateFromExcel = asyncHandler(async (req, res, next) => {
         continue;
       }
 
-      // ✅ Generate Contact_ID sequentially if missing
+      // Generate Contact_ID sequentially if missing
       if (!r.Contact_ID || String(r.Contact_ID).trim() === "") {
         lastNumber += 1;
         r.Contact_ID = `CEP-A-${String(lastNumber).padStart(6, "0")}`;

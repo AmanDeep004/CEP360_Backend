@@ -16,11 +16,13 @@ const EngagementSchema = new mongoose.Schema(
       {
         templateId: { type: String, trim: true },
         templateName: { type: String, trim: true },
+        templateDetails: { type: Object },
         timestamp: { type: Date },
         status: { type: String, trim: true },
         history: [
           { status: { type: String, trim: true }, timestamp: { type: Date } },
         ],
+        misc: { type: Object },
       },
     ],
 
@@ -30,12 +32,14 @@ const EngagementSchema = new mongoose.Schema(
       timestamp: { type: Date, default: Date.now },
       status: { type: String, trim: true },
       messageId: { type: String, trim: true },
+      templateDetails: { type: Object },
       history: [
         {
           status: { type: String, trim: true },
           timestamp: { type: Date, default: Date.now },
           templateId: { type: String },
           templateName: { type: String, trim: true },
+          misc: { type: Object },
         },
       ],
     },

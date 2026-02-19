@@ -147,7 +147,6 @@ const messageStatusUpdateold = asyncHandler(async (req, res, next) => {
           "whatsappTemplates.$.status": status,
           "whatsappTemplates.$.timestamp": new Date(timestamp),
           "whatsappTemplates.$.templateId": templateId,
-          "whatsappTemplates.$.templateName": templateName,
         },
       },
       { new: true }
@@ -276,6 +275,7 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
           console.log(
             `Updating existing DoubleTickData for waMessageId: ${waMessageId}`
           );
+
           await DoubleTickData.findOneAndUpdate(
             { waMessageId: waMessageId },
             {
@@ -284,6 +284,7 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
                 updatedAt: new Date(),
               },
               $push: {
+                templateData: saveObj?.payload?.message,
                 messageHistory: {
                   status: saveObj.status,
                   timestamp: saveObj.timestamp,
@@ -293,7 +294,7 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
             }
           );
         } else {
-          throw err; // Re-throw if it's not a duplicate key error
+          throw err;
         }
       }
 
@@ -354,6 +355,7 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
           },
         },
         $set: {
+          "whatsappTemplates.$.templateDetails": saveObj?.payload?.message,
           "whatsappTemplates.$.status": status,
           "whatsappTemplates.$.timestamp": new Date(timestamp),
           "whatsappTemplates.$.templateId": templateId,

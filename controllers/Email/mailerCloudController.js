@@ -184,6 +184,7 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
       }
     );
 
+    //here
     const template = templateRes.data?.data?.data;
 
     if (!template?.html || !template?.plainText) {
@@ -218,7 +219,7 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
 
     for (let b = 0; b < batches.length; b++) {
       const batch = batches[b];
-      console.log(`📦 Processing Batch ${b + 1}/${batches.length}`);
+      console.log(`Processing Batch ${b + 1}/${batches.length}`);
 
       // Loop inside single batch
 
@@ -360,6 +361,7 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
                 "emailTemplates.status": "sent",
                 "emailTemplates.messageId": "",
                 "emailTemplates.timestamp": new Date(),
+                templateDetails: template,
               },
               // $push: {
               //   "emailTemplates.history": {
@@ -376,6 +378,7 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
                   messageId: "",
                   // error: err.response?.data, // always string
                   data: err.response?.data.message || err.message,
+                  templateDetails: template,
                 },
               },
             },
