@@ -10,6 +10,7 @@ import {
   unassignCallingDataFromAgents,
   reassignCallingDatatoAgents,
   UpdateCallingData,
+  getDatabaseByAssignmentUnmasked,
 } from "../controllers/callingDataController.js";
 import {
   uploadExternalDataController,
@@ -45,6 +46,10 @@ router.post(
 router.delete("/:id", protect, deletecallingData);
 router.get("/getAllCallingData/:CampaignId", protect, getAllCallingData);
 router.get("/campaignDataByAssignment/:CampaignId", getDatabaseByAssignment);
+router.get(
+  "/campaignDataByAssignmentUnmasked/:CampaignId",
+  getDatabaseByAssignmentUnmasked
+);
 router.put("/updateCallingData", UpdateCallingData);
 
 // to track external data registration

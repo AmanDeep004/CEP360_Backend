@@ -795,4 +795,5 @@ export {
   unassignCallingDataFromAgents,
   reassignCallingDatatoAgents,
   UpdateCallingData,
+  getDatabaseByAssignmentUnmasked,
 };
