@@ -8,7 +8,7 @@ const { asyncHandler, sendError, sendResponse } = errorHandler;
 
 const mailercloudWebhookOLD = asyncHandler(async (req, res, next) => {
   try {
-    console.log("📩 MailerCloud Webhook Data:", req.body);
+    console.log("MailerCloud Webhook Data:", req.body);
 
     const { email, event, camp_id, timestamp } = req.body;
 
@@ -38,6 +38,7 @@ const mailercloudWebhookOLD = asyncHandler(async (req, res, next) => {
             timestamp: new Date(),
             messageId: req.body.messageId,
             data: req.body,
+            templateDetails: req.body.templateDetails || {},
           },
         },
       },
@@ -149,8 +150,10 @@ const getMailercloudTemplateByName = asyncHandler(async (req, res, next) => {
 });
 //////////////////sending all data /////////////////////////
 
+// here
 const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
   try {
+    console.log("[MAILER_SEND] Stage 1: Request received");
     const {
       callingDataIds,
       templateName,
@@ -160,20 +163,23 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
       campaignName,
     } = req.body;
 
-    //console.log("Request Body:", req.body);
-
     if (!callingDataIds?.length || !templateName || !campaignId || !fromEmail) {
+      console.log("[MAILER_SEND] Stage 2: Validation failed");
       return sendError(
         next,
         "callingDataIds, templateName, SenderEmail  and campaignId are required",
         400
       );
     }
-    // console.log("Fetching MAILERtoken:", process.env.MAILERCLOUD_API_KEY);
+    console.log("[MAILER_SEND] Stage 2: Validation passed", {
+      totalContacts: callingDataIds.length,
+      templateName,
+      campaignId,
+    });
 
     ///////// FETCH TEMPLATE
     const baseUrl = process.env.BASE_URL;
-    console.log(baseUrl, "baseurl");
+    console.log("[MAILER_SEND] Stage 3: Fetching template", { baseUrl });
 
     const templateRes = await axios.get(
       `${baseUrl}api/mailercloud/template?name=${templateName}`,
@@ -184,14 +190,19 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
       }
     );
 
-    //here
+    console.log("[MAILER_SEND] Stage 4: Template API response received");
     const template = templateRes.data?.data?.data;
 
     if (!template?.html || !template?.plainText) {
+      console.log("[MAILER_SEND] Stage 4: Invalid template payload");
       return sendError(next, "Invalid template received", 400);
     }
+    console.log("[MAILER_SEND] Stage 4: Template validated", {
+      templateName: template.name || templateName,
+    });
 
     // 2. FETCH CALLING DATA
+    console.log("[MAILER_SEND] Stage 5: Fetching CallingData records");
 
     const callingDataList = await CallingData.find({
       _id: { $in: callingDataIds },
@@ -199,8 +210,42 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
       "Full_Name Office_Email_1 Office_Email_2 Personal_Email1 Personal_Email2  emailTemplates"
     );
 
+    console.log("[MAILER_SEND] Stage 5: CallingData fetched", {
+      found: callingDataList.length,
+    });
+
     const results = [];
     const BATCH_SIZE = 500;
+    let successCount = 0;
+    let failureCount = 0;
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    const normalizeEmail = (value) => {
+      if (typeof value !== "string") return "";
+      const trimmed = value.trim();
+      if (!trimmed) return "";
+      const lower = trimmed.toLowerCase();
+      if (["na", "n/a", "null", "undefined", "-"].includes(lower)) return "";
+      return trimmed;
+    };
+
+    const getRecipientEmail = (item) => {
+      const candidates = [
+        { key: "Office_Email_1", value: item.Office_Email_1 },
+        { key: "Office_Email_2", value: item.Office_Email_2 },
+        { key: "Personal_Email1", value: item.Personal_Email1 },
+        { key: "Personal_Email2", value: item.Personal_Email2 },
+      ];
+
+      for (const candidate of candidates) {
+        const normalized = normalizeEmail(candidate.value);
+        if (normalized && emailRegex.test(normalized)) {
+          return { email: normalized, source: candidate.key };
+        }
+      }
+
+      return { email: "", source: "" };
+    };
 
     // Helper: Split into batches of 500
     const chunkArray = (array, size) => {
@@ -213,13 +258,19 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
 
     const batches = chunkArray(callingDataList, BATCH_SIZE);
 
-    // console.log(`Total Batches: ${batches.length}`);
-
+    console.log("[MAILER_SEND] Stage 6: Batches prepared", {
+      batchSize: BATCH_SIZE,
+      totalBatches: batches.length,
+    });
     // 3. PROCESS EACH BATCH
 
     for (let b = 0; b < batches.length; b++) {
       const batch = batches[b];
-      console.log(`Processing Batch ${b + 1}/${batches.length}`);
+      console.log("[MAILER_SEND] Stage 7: Processing batch", {
+        batchNumber: b + 1,
+        totalBatches: batches.length,
+        batchSize: batch.length,
+      });
 
       // Loop inside single batch
 
@@ -235,17 +286,81 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
             item.Full_Name || "User"
           );
 
-          console.log("Sending email to:", item);
+          console.log("[MAILER_SEND] Stage 8: Preparing contact", {
+            callingDataId: item._id,
+            fullName: item.Full_Name || "",
+          });
 
           // 4. SEND EMAIL
-          const recipientEmail =
-            item.Office_Email_1 ||
-            item.Office_Email_2 ||
-            item.Personal_Email1 ||
-            item.Personal_Email2;
+          const { email: recipientEmail, source: recipientSource } =
+            getRecipientEmail(item);
+
+          console.log("[MAILER_SEND] Stage 8: Recipient resolution", {
+            callingDataId: item._id,
+            recipientEmail,
+            recipientSource,
+            rawEmails: {
+              Office_Email_1: item.Office_Email_1 || "",
+              Office_Email_2: item.Office_Email_2 || "",
+              Personal_Email1: item.Personal_Email1 || "",
+              Personal_Email2: item.Personal_Email2 || "",
+            },
+          });
 
           if (!recipientEmail) {
-            console.error("No valid email found for:", item._id);
+            console.error("[MAILER_SEND] Stage 8: No recipient email", {
+              callingDataId: item._id,
+            });
+
+            const noEmailTime = new Date();
+            await CallingData.findByIdAndUpdate(
+              item._id,
+              {
+                $set: {
+                  "emailTemplates.templateName": templateName,
+                  "emailTemplates.status": "failed",
+                  "emailTemplates.messageId": "",
+                  "emailTemplates.timestamp": noEmailTime,
+                  "emailTemplates.templateId": String(campaignId),
+                  "emailTemplates.templateDetails": template,
+                },
+                $push: {
+                  "emailTemplates.history": {
+                    status: "failed",
+                    timestamp: noEmailTime,
+                    messageId: "",
+                    data: "No email available",
+                    templateId: String(campaignId),
+                    templateName,
+                    templateDetails: template,
+                  },
+                },
+              },
+              { new: true }
+            );
+
+            await EmailStatus.create({
+              email: "",
+              event: "failed",
+              campaignId: String(campaignId),
+              callingDataId: String(item._id),
+              templateName,
+              messageId: "",
+              provider: "MailerCloud",
+              reason: "No email available",
+              requestPayload: {
+                templateName,
+                fromEmail,
+                campaignName: campaignName || "Campaign Team",
+                campaignType: campignType,
+                campaignId: String(campaignId),
+              },
+              responsePayload: {},
+              meta: {
+                recipientSource: "",
+              },
+              timestamp: noEmailTime,
+            });
 
             results.push({
               callingDataId: item._id,
@@ -253,18 +368,17 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
               status: "Failed",
               reason: "No email available",
             });
+            failureCount++;
 
             continue; // skip this user
           }
-          console.log("sending email payload", {
+          const providerPayload = {
             email: {
-              // from: "miki@kestoneglobal.com",
               from: fromEmail,
               fromName: campaignName || "Campaign Team",
               subject: template.name,
               text: personalizedText,
               html: personalizedHTML,
-              //   replyTo: ["miki@kestoneglobal.com"],
               replyTo: [fromEmail],
               recipients: {
                 to: [
@@ -284,39 +398,18 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
               },
             },
             version: "1.0",
+          };
+
+          console.log("[MAILER_SEND] Stage 8: Sending email", {
+            callingDataId: item._id,
+            recipientEmail,
+            payload: providerPayload,
           });
 
+          const sendTime = new Date();
           const sendRes = await axios.post(
             "https://email-api.mailercloud.com/email",
-            {
-              email: {
-                // from: "miki@kestoneglobal.com",
-                from: fromEmail,
-                fromName: campaignName || "Campaign Team",
-                subject: template.name,
-                text: personalizedText,
-                html: personalizedHTML,
-                //   replyTo: ["miki@kestoneglobal.com"],
-                replyTo: [fromEmail],
-                recipients: {
-                  to: [
-                    {
-                      name: item.Full_Name,
-                      email: recipientEmail,
-                    },
-                  ],
-                },
-              },
-              metadata: {
-                campaignType: campignType,
-                timestamp: new Date().toISOString(),
-                custom: {
-                  inbox_tracking: "true",
-                  campaign_id: campaignId,
-                },
-              },
-              version: "1.0",
-            },
+            providerPayload,
             {
               headers: {
                 Authorization: process.env.MAILERCLOUD_API_KEY,
@@ -325,87 +418,94 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
               timeout: 15000,
             }
           );
-          console.log("Email sent :", sendRes);
+          console.log("[MAILER_SEND] Stage 9: Provider response received", {
+            callingDataId: item._id,
+            recipientEmail,
+            statusCode: sendRes.status,
+            statusText: sendRes.statusText,
+            responseData: sendRes.data || {},
+          });
 
           const messageId = sendRes.data?.messageId || "";
+          console.log("[MAILER_SEND] Stage 9: MessageId extracted", {
+            callingDataId: item._id,
+            recipientEmail,
+            messageId,
+          });
 
-          // await CallingData.findOneAndUpdate(
-          //   { _id: item._id },
-          //   {
-          //     $setOnInsert: {
-          //       emailTemplates: [],
-          //     },
-          //     $push: {
-          //       emailTemplates: {
-          //         templateName,
-          //         status: "sent",
-          //         messageId,
-          //         timestamp: new Date(),
-          //         history: [
-          //           {
-          //             status: "sent",
-          //             timestamp: new Date(),
-          //             messageId,
-          //           },
-          //         ],
-          //       },
-          //     },
-          //   },
-          //   { upsert: true }
-          // );
+          console.log("[MAILER_SEND] Stage 10: Updating CallingData");
           await CallingData.findByIdAndUpdate(
             item._id,
             {
               $set: {
                 "emailTemplates.templateName": templateName,
                 "emailTemplates.status": "sent",
-                "emailTemplates.messageId": "",
-                "emailTemplates.timestamp": new Date(),
-                templateDetails: template,
+                "emailTemplates.messageId": messageId,
+                "emailTemplates.timestamp": sendTime,
+                "emailTemplates.templateId": String(campaignId),
+                "emailTemplates.templateDetails": template,
               },
-              // $push: {
-              //   "emailTemplates.history": {
-              //     status: err.response?.data,
-
-              //     timestamp: new Date(),
-              //     messageId: "",
-              //   },
-              // },
               $push: {
                 "emailTemplates.history": {
-                  status: "sent", // keep status consistent
-                  timestamp: new Date(),
-                  messageId: "",
-                  // error: err.response?.data, // always string
-                  data: err.response?.data.message || err.message,
+                  status: "sent",
+                  timestamp: sendTime,
+                  messageId,
+                  data: JSON.stringify(sendRes.data || {}),
+                  templateId: String(campaignId),
+                  templateName,
                   templateDetails: template,
                 },
               },
             },
             { new: true }
           );
+
+          console.log("[MAILER_SEND] Stage 11: Saving EmailStatus");
+          await EmailStatus.create({
+            email: recipientEmail,
+            event: "sent",
+            campaignId: String(campaignId),
+            callingDataId: String(item._id),
+            templateName,
+            messageId,
+            provider: "MailerCloud",
+            statusCode: sendRes.status,
+            statusText: sendRes.statusText,
+            reason: "",
+            requestPayload: providerPayload,
+            responsePayload: sendRes.data || {},
+            meta: {
+              recipientSource,
+              fullName: item.Full_Name || "",
+            },
+            timestamp: sendTime,
+          });
+
+          successCount++;
           results.push({
             callingDataId: item._id,
-            email: item.Office_Email_1,
+            email: recipientEmail,
             status: "Success",
             messageId,
           });
         } catch (err) {
-          console.error(
-            "Email failed for:",
-            item.Office_Email_1,
-            err.response?.data.message
-            // err.response?.data || err.message
-          );
+          const failTime = new Date();
+          const { email: recipientEmail } = getRecipientEmail(item);
 
-          // -----------------------------------------
-          // 6. UPDATE MongoDB on Failure
-          // -----------------------------------------
-          //         const errorDetails =
-          // typeof err?.response?.data === "string"
-          //   ? err.response.data
-          //   : JSON.stringify(err?.response?.data || err.message);
+          const failureReason =
+            err?.response?.data?.message ||
+            err?.response?.data?.error?.message ||
+            err?.message ||
+            "Failed";
 
+          console.error("[MAILER_SEND] Stage 9: Provider call failed", {
+            callingDataId: item._id,
+            recipientEmail,
+            reason: failureReason,
+            providerResponse: err?.response?.data || null,
+          });
+
+          console.log("[MAILER_SEND] Stage 10: Updating CallingData as failed");
           await CallingData.findByIdAndUpdate(
             item._id,
             {
@@ -413,41 +513,82 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
                 "emailTemplates.templateName": templateName,
                 "emailTemplates.status": "failed",
                 "emailTemplates.messageId": "",
-                "emailTemplates.timestamp": new Date(),
+                "emailTemplates.timestamp": failTime,
+                "emailTemplates.templateId": String(campaignId),
+                "emailTemplates.templateDetails": template,
               },
-              // $push: {
-              //   "emailTemplates.history": {
-              //     status: err.response?.data,
-
-              //     timestamp: new Date(),
-              //     messageId: "",
-              //   },
-              // },
               $push: {
                 "emailTemplates.history": {
                   status: "failed",
-                  timestamp: new Date(),
+                  timestamp: failTime,
                   messageId: "",
-                  // error: err.response?.data, // always string
-                  data: err.response?.data.message || err.message,
+                  data: failureReason,
+                  templateId: String(campaignId),
+                  templateName,
+                  templateDetails: template,
                 },
               },
             },
             { new: true }
           );
 
+          console.log("[MAILER_SEND] Stage 11: Saving EmailStatus as failed");
+          await EmailStatus.create({
+            email: recipientEmail,
+            event: "failed",
+            campaignId: String(campaignId),
+            callingDataId: String(item._id),
+            templateName,
+            messageId: "",
+            provider: "MailerCloud",
+            statusCode: err?.response?.status || null,
+            statusText: err?.response?.statusText || "",
+            reason: failureReason,
+            requestPayload: {
+              templateName,
+              fromEmail,
+              campaignName: campaignName || "Campaign Team",
+              campaignType: campignType,
+              campaignId: String(campaignId),
+              recipientEmail,
+              fullName: item.Full_Name || "",
+            },
+            responsePayload: err?.response?.data || {},
+            meta: {
+              fullName: item.Full_Name || "",
+            },
+            timestamp: failTime,
+          });
+
+          failureCount++;
           results.push({
             callingDataId: item._id,
-            email: item.Office_Email_1,
-            status: err.response?.data.message || "Failed",
+            email: recipientEmail,
+            status: failureReason,
           });
         }
       }
 
+      console.log("[MAILER_SEND] Stage 12: Batch completed", {
+        batchNumber: b + 1,
+        totalBatches: batches.length,
+        successCount,
+        failureCount,
+      });
       await new Promise((resolve) => setTimeout(resolve, 3000));
     }
 
-    return sendResponse(res, 200, "Email process completed", results);
+    console.log("[MAILER_SEND] Stage 13: Process completed", {
+      total: results.length,
+      successCount,
+      failureCount,
+    });
+    return sendResponse(res, 200, "Email process completed", {
+      total: results.length,
+      successCount,
+      failureCount,
+      results,
+    });
   } catch (err) {
     console.error("Send Email Fatal Error:", err);
 
