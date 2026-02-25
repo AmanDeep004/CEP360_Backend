@@ -421,10 +421,23 @@ const getDatabaseByAssignmentUnmasked = asyncHandler(async (req, res, next) => {
     if (agentId) filter.agentId = agentId;
 
     if (source) {
-      filter.source = { $regex: new RegExp(source, "i") };
+      filter.source = { $regex: source, $options: "i" };
     }
 
-    let data = await CallingData.find(filter)
+    // Validate range early before hitting the DB
+    let rangeMin, rangeMax;
+    if (range) {
+      const parts = range.split("-").map((v) => parseInt(v.trim(), 10));
+      if (parts.length !== 2 || parts.some((n) => isNaN(n))) {
+        return sendError(next, "Invalid range format. Use 100-200", 400);
+      }
+      [rangeMin, rangeMax] = parts;
+      if (rangeMin > rangeMax) {
+        return sendError(next, "Range minimum should be less than maximum", 400);
+      }
+    }
+
+    const baseQuery = CallingData.find(filter)
       .populate({
         path: "agentId",
         select: "employeeName email",
@@ -434,6 +447,25 @@ const getDatabaseByAssignmentUnmasked = asyncHandler(async (req, res, next) => {
         populate: { path: "chatHistory", model: "CallHistory" },
       })
       .lean();
+
+    // Fast path: no in-memory filtering needed — push skip/limit to DB
+    if (!remark && !range) {
+      const [data, total] = await Promise.all([
+        baseQuery.skip(skip).limit(limNum),
+        CallingData.countDocuments(filter),
+      ]);
+
+      return sendResponse(res, 200, "Filtered database fetched successfully", {
+        total,
+        page: pageNum,
+        limit: limNum,
+        totalPages: Math.ceil(total / limNum),
+        data,
+      });
+    }
+
+    // In-memory filtering path (remark or range requires full fetch)
+    let data = await baseQuery;
 
     if (remark) {
       if (remark === "Yet to Call") {
@@ -452,21 +484,7 @@ const getDatabaseByAssignmentUnmasked = asyncHandler(async (req, res, next) => {
     }
 
     if (range) {
-      const parts = range.split("-").map((v) => parseInt(v.trim(), 10));
-      if (parts.length !== 2 || parts.some((n) => isNaN(n))) {
-        return sendError(next, "Invalid range format. Use 100-200", 400);
-      }
-
-      const [min, max] = parts;
-      if (min > max) {
-        return sendError(
-          next,
-          "Range minimum should be less than maximum",
-          400
-        );
-      }
-
-      data = data.slice(min - 1, max);
+      data = data.slice(rangeMin - 1, rangeMax);
     }
 
     const total = data.length;
