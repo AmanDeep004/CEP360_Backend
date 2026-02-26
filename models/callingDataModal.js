@@ -130,11 +130,13 @@ const CallingDataSchema = new mongoose.Schema(
         templateName: { type: String, trim: true },
         timestamp: { type: Date, default: Date.now },
         status: { type: String, trim: true },
+        failureReason: { type: String, trim: true },
         templateDetails: { type: Object, default: {} },
         history: [
           {
             status: { type: String, trim: true },
             timestamp: { type: Date, default: Date.now },
+            failureReason: { type: String, trim: true },
           },
         ],
       },

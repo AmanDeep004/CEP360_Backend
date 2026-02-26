@@ -333,6 +333,7 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
       return sendError(next, "Payload missing", 400);
     }
 
+    // DoubleTick webhook: primary field is "messageId" at root
     const waMessageId =
       payload?.messageId ||
       payload?.message_id ||
@@ -340,6 +341,7 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
       payload?.referenceId ||
       "";
 
+    // DoubleTick webhook: status values are "SENT", "DELIVERED", "READ", "FAILED"
     const status =
       payload?.status ||
       payload?.delivery_status ||
@@ -347,15 +349,31 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
       payload?.event_type ||
       "";
 
+    // DoubleTick webhook: primary timestamp field is "statusTimestamp"
     const timestamp =
-      payload?.timestamp ||
       payload?.statusTimestamp ||
+      payload?.timestamp ||
       payload?.message?.timestamp ||
       Date.now();
 
     const parsedTimestamp = new Date(timestamp);
     const templateId = payload?.templateId || "";
-    const templateName = payload?.templateName || "";
+
+    // DoubleTick webhook: templateName lives inside payload.message object
+    const templateName =
+      payload?.message?.templateName ||
+      payload?.templateName ||
+      "";
+
+    // DoubleTick webhook: failure reason field is "failMessage" (only present when FAILED)
+    const failureReason =
+      payload?.failMessage ||
+      payload?.errorMessage ||
+      payload?.failureReason ||
+      payload?.error?.message ||
+      payload?.error_message ||
+      (typeof payload?.error === "string" ? payload.error : "") ||
+      "";
 
     const mobile = normalizeNumber(
       payload?.to || payload?.receiver || payload?.phone || payload?.recipient
@@ -364,7 +382,8 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
     if (!mobile) {
       console.log("No mobile number found in payload");
       // Keep raw webhook trace even when mobile number is unavailable.
-      await DoubleTickData.create({
+      // Use upsert so DoubleTick retries don't create duplicate records.
+      const noMobileDoc = {
         webhookType: "MessageStatus",
         mobileNumber: "",
         contactId: null,
@@ -376,15 +395,32 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
         templateData: payload?.message || {},
         templateId,
         templateName,
-        messageHistory: [
+        ...(failureReason && { failureReason }),
+      };
+      const noMobileHistory = {
+        payload,
+        status: status || "unknown",
+        timestamp: parsedTimestamp,
+        eventType: status || "unknown",
+        ...(failureReason && { failureReason }),
+      };
+
+      if (waMessageId) {
+        await DoubleTickData.findOneAndUpdate(
+          { waMessageId },
           {
-            payload,
-            status,
-            timestamp: parsedTimestamp,
-            eventType: status || "unknown",
+            $set: { ...noMobileDoc, updatedAt: new Date() },
+            $push: { messageHistory: noMobileHistory },
           },
-        ],
-      });
+          { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+      } else {
+        await DoubleTickData.create({
+          ...noMobileDoc,
+          messageHistory: [noMobileHistory],
+        });
+      }
+
       return sendResponse(res, 200, "No mobile number in payload", {
         received: true,
         mobile: null,
@@ -404,6 +440,8 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
       templateId,
       templateName,
       templateData: payload?.message || {},
+      // Only include failureReason when it has a value
+      ...(failureReason && { failureReason }),
     };
 
     // Always persist webhook in DoubleTickData.
@@ -413,6 +451,7 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
         status: status || "unknown",
         timestamp: parsedTimestamp,
         eventType: status || "unknown",
+        ...(failureReason && { failureReason }),
       };
 
       if (!waMessageId) {
@@ -465,6 +504,22 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
       `Found CallingData contact: ${callingDataContact._id}, updating status for message: ${waMessageId}`
     );
 
+    // Build the update fields — include failureReason only when present
+    const whatsappTemplateSetFields = {
+      "whatsappTemplates.$.templateDetails": payload?.message || {},
+      "whatsappTemplates.$.status": status,
+      "whatsappTemplates.$.timestamp": parsedTimestamp,
+      "whatsappTemplates.$.templateId": templateId,
+      "whatsappTemplates.$.templateName": templateName,
+    };
+    if (failureReason) {
+      whatsappTemplateSetFields["whatsappTemplates.$.failureReason"] =
+        failureReason;
+    }
+
+    const historyEntry = { status, timestamp: parsedTimestamp };
+    if (failureReason) historyEntry.failureReason = failureReason;
+
     // First, try to update existing whatsappTemplate entry
     let updated = await CallingData.findOneAndUpdate(
       {
@@ -472,19 +527,8 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
         "whatsappTemplates.waMessageId": waMessageId,
       },
       {
-        $push: {
-          "whatsappTemplates.$.history": {
-            status,
-            timestamp: parsedTimestamp,
-          },
-        },
-        $set: {
-          "whatsappTemplates.$.templateDetails": payload?.message || {},
-          "whatsappTemplates.$.status": status,
-          "whatsappTemplates.$.timestamp": parsedTimestamp,
-          "whatsappTemplates.$.templateId": templateId,
-          "whatsappTemplates.$.templateName": templateName,
-        },
+        $push: { "whatsappTemplates.$.history": historyEntry },
+        $set: whatsappTemplateSetFields,
       },
       { new: true }
     );
@@ -508,19 +552,8 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
             "whatsappTemplates.waMessageId": waMessageId,
           },
           {
-            $push: {
-              "whatsappTemplates.$.history": {
-                status,
-                timestamp: parsedTimestamp,
-              },
-            },
-            $set: {
-              "whatsappTemplates.$.templateDetails": payload?.message || {},
-              "whatsappTemplates.$.status": status,
-              "whatsappTemplates.$.timestamp": parsedTimestamp,
-              "whatsappTemplates.$.templateId": templateId,
-              "whatsappTemplates.$.templateName": templateName,
-            },
+            $push: { "whatsappTemplates.$.history": historyEntry },
+            $set: whatsappTemplateSetFields,
           },
           { new: true }
         );
@@ -530,26 +563,20 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
           `Creating new WhatsApp template entry for message: ${waMessageId}`
         );
 
+        const newEntry = {
+          waMessageId,
+          templateId,
+          templateName,
+          templateDetails: payload?.message || {},
+          status,
+          timestamp: parsedTimestamp,
+          history: [historyEntry],
+        };
+        if (failureReason) newEntry.failureReason = failureReason;
+
         updated = await CallingData.findByIdAndUpdate(
           callingDataContact._id,
-          {
-            $push: {
-              whatsappTemplates: {
-                waMessageId,
-                templateId,
-                templateName,
-                templateDetails: payload?.message || {},
-                status,
-                timestamp: parsedTimestamp,
-                history: [
-                  {
-                    status,
-                    timestamp: parsedTimestamp,
-                  },
-                ],
-              },
-            },
-          },
+          { $push: { whatsappTemplates: newEntry } },
           { new: true }
         );
       }
@@ -594,32 +621,39 @@ const messageReceiveUpdate = asyncHandler(async (req, res, next) => {
       payload?.from || payload?.sender || payload?.phone || payload?.number
     );
 
+    // DoubleTick webhook: "messageId" or "dtMessageId" for received messages
     const waMessageId =
       payload?.messageId ||
+      payload?.dtMessageId ||
       payload?.message_id ||
       payload?.message?.message_id ||
       payload?.id ||
       "";
 
     const msgText =
-      payload?.text ||
       payload?.message?.text ||
       payload?.message?.textMessage ||
+      payload?.text ||
       payload?.body ||
       "";
 
+    // DoubleTick webhook: timestamp field for received messages is "receivedAt"
     const timestamp =
-      payload?.timestamp || payload?.message?.timestamp || Date.now();
+      payload?.receivedAt ||
+      payload?.timestamp ||
+      payload?.message?.timestamp ||
+      Date.now();
 
     const messageType =
+      payload?.message?.type ||
       payload?.message_type ||
       payload?.type ||
-      payload?.message?.type ||
       "text";
 
     if (!mobile) {
       console.log("No mobile number found in payload");
-      await DoubleTickData.create({
+      // Use upsert so DoubleTick retries don't create duplicate records.
+      const noMobileDoc = {
         webhookType: "MessageReceived",
         mobileNumber: "",
         contactId: null,
@@ -628,17 +662,32 @@ const messageReceiveUpdate = asyncHandler(async (req, res, next) => {
         messageType,
         textMessage: msgText,
         timestamp: new Date(timestamp),
-        senderName: payload?.sender_name || payload?.name || "",
+        senderName: payload?.contact?.name || payload?.sender_name || payload?.name || "",
         eventType: "MessageReceived",
-        messageHistory: [
+      };
+      const noMobileHistory = {
+        payload,
+        status: "MessageReceived",
+        timestamp: new Date(timestamp),
+        eventType: "MessageReceived",
+      };
+
+      if (waMessageId) {
+        await DoubleTickData.findOneAndUpdate(
+          { waMessageId },
           {
-            payload,
-            status: "MessageReceived",
-            timestamp: new Date(timestamp),
-            eventType: "MessageReceived",
+            $set: { ...noMobileDoc, updatedAt: new Date() },
+            $push: { messageHistory: noMobileHistory },
           },
-        ],
-      });
+          { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+      } else {
+        await DoubleTickData.create({
+          ...noMobileDoc,
+          messageHistory: [noMobileHistory],
+        });
+      }
+
       return sendResponse(res, 200, "No mobile number in payload", {
         received: true,
       });
@@ -655,7 +704,7 @@ const messageReceiveUpdate = asyncHandler(async (req, res, next) => {
       messageType,
       textMessage: msgText,
       timestamp: new Date(timestamp),
-      senderName: payload?.sender_name || payload?.name || "",
+      senderName: payload?.contact?.name || payload?.sender_name || payload?.name || "",
       eventType: "MessageReceived",
     };
 

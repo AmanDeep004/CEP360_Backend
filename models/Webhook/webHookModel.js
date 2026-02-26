@@ -26,6 +26,7 @@ const DoubleTickWebhookSchema = new mongoose.Schema(
     waMessageId: { type: String, index: true },
     timestamp: { type: Date },
     status: { type: String, trim: true },
+    failureReason: { type: String, trim: true },
     messageType: { type: String, trim: true },
     textMessage: { type: String, trim: true },
     senderName: { type: String, trim: true },

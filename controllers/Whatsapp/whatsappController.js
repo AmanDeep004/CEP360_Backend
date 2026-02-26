@@ -1,6 +1,8 @@
 import errorHandler from "../../utils/index.js";
 import WhatsAppService from "../../services/doubletick.js";
 import pLimit from "p-limit";
+import CallingData from "../../models/callingDataModal.js";
+import DoubleTickData from "../../models/Webhook/webHookModel.js";
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
@@ -9,6 +11,26 @@ const BATCH_SIZE = 50; // Number of messages to send in each batch
 
 // Initialize WhatsApp Service
 const whatsappService = new WhatsAppService();
+
+const normalizeNumber = (num) => {
+  if (!num) return "";
+  return String(num)
+    .replace(/[^0-9]/g, "")
+    .replace(/^91/, "")
+    .replace(/^0/, "");
+};
+
+const findCallingDataContact = async (contactNo) => {
+  const normalized = normalizeNumber(contactNo);
+  if (!normalized) return null;
+  return await CallingData.findOne({
+    $or: [
+      { Contact_Direct_Phone1: new RegExp(`${normalized}$`) },
+      { Contact_Direct_Phone2: new RegExp(`${normalized}$`) },
+      { Mobile_No: new RegExp(`${normalized}$`) },
+    ],
+  });
+};
 
 /**
  * Get all WhatsApp templates
@@ -205,40 +227,154 @@ const sendTemplateMessage = asyncHandler(async (req, res, next) => {
           limit(async () => {
             const contactNo = contact?.contactNo || "";
             const fullName = contact?.fullName || "";
-            try {
-              if (!phoneRegex.test(contactNo)) {
-                failureCount++;
-                batchFailure++;
-                batchFailureReasons.push("Invalid contact number format");
-                return;
+            const now = new Date();
+
+            // Helper: persist a whatsappTemplates entry into CallingData
+            const trackInCallingData = async (entry) => {
+              try {
+                const callingDoc = await findCallingDataContact(contactNo);
+                if (callingDoc) {
+                  await CallingData.findByIdAndUpdate(callingDoc._id, {
+                    $push: { whatsappTemplates: entry },
+                  });
+                }
+                return callingDoc;
+              } catch (dbErr) {
+                console.error(
+                  "[WA_TEMPLATE] CallingData tracking error:",
+                  dbErr?.message
+                );
+                return null;
               }
+            };
 
-              const placeholders = [fullName];
+            // ---- Invalid phone format — no API call needed ----
+            if (!phoneRegex.test(contactNo)) {
+              failureCount++;
+              batchFailure++;
+              const invalidReason = "Invalid contact number format";
+              batchFailureReasons.push(invalidReason);
+              await trackInCallingData({
+                templateName,
+                status: "failed",
+                failureReason: invalidReason,
+                timestamp: now,
+                history: [{ status: "failed", timestamp: now, failureReason: invalidReason }],
+              });
+              return;
+            }
 
-              const result = await whatsappService.sendTemplateMessage({
+            // ---- API call ----
+            let result;
+            try {
+              result = await whatsappService.sendTemplateMessage({
                 templateName,
                 from: `+${wabaPhoneNumber}`,
                 to: contactNo,
-                placeholders,
+                placeholders: [fullName],
                 language,
               });
-
-              if (result?.success) {
-                successCount++;
-                batchSuccess++;
-              } else {
-                failureCount++;
-                batchFailure++;
-                batchFailureReasons.push(
-                  result?.error ||
-                    result?.message ||
-                    "WhatsApp service returned unsuccessful response"
-                );
-              }
-            } catch (err) {
+            } catch (apiErr) {
+              // Network / timeout error — service itself threw
               failureCount++;
               batchFailure++;
-              batchFailureReasons.push(err?.message || "Unknown exception");
+              const failureReason = apiErr?.message || "API call threw an exception";
+              batchFailureReasons.push(failureReason);
+              await trackInCallingData({
+                templateName,
+                status: "failed",
+                failureReason,
+                timestamp: now,
+                history: [{ status: "failed", timestamp: now, failureReason }],
+              });
+              return;
+            }
+
+            // ---- Handle API response ----
+            if (result?.success) {
+              successCount++;
+              batchSuccess++;
+
+              // DoubleTick send response: { messageId, status, recipient }
+              const waMessageId =
+                result.data?.messageId ||
+                result.data?.messages?.[0]?.messageId ||
+                result.data?.messages?.[0]?.id ||
+                result.data?.id ||
+                "";
+
+              // DB tracking is fire-and-forget — don't let it affect success count
+              try {
+                const callingDoc = await findCallingDataContact(contactNo);
+                if (callingDoc) {
+                  await CallingData.findByIdAndUpdate(callingDoc._id, {
+                    $push: {
+                      whatsappTemplates: {
+                        waMessageId,
+                        templateName,
+                        status: "sending",
+                        timestamp: now,
+                        history: [{ status: "sending", timestamp: now }],
+                      },
+                    },
+                  });
+                }
+
+                if (waMessageId) {
+                  await DoubleTickData.findOneAndUpdate(
+                    { waMessageId },
+                    {
+                      $setOnInsert: {
+                        webhookType: "MessageStatus",
+                        mobileNumber: normalizeNumber(contactNo),
+                        contactId: callingDoc?._id || null,
+                        templateName,
+                        waMessageId,
+                        status: "sending",
+                        timestamp: now,
+                        payload: result.data || {},
+                        templateData: result.data || {},
+                      },
+                      $push: {
+                        messageHistory: {
+                          status: "sending",
+                          timestamp: now,
+                          eventType: "sending",
+                        },
+                      },
+                    },
+                    { upsert: true, new: true, setDefaultsOnInsert: true }
+                  );
+                }
+              } catch (dbErr) {
+                console.error(
+                  "[WA_TEMPLATE] DB tracking error after successful send:",
+                  dbErr?.message
+                );
+              }
+            } else {
+              failureCount++;
+              batchFailure++;
+
+              // result.error may be an object (DoubleTick error response body) — stringify it
+              const rawError = result?.error;
+              const failureReason =
+                (rawError
+                  ? typeof rawError === "string"
+                    ? rawError
+                    : JSON.stringify(rawError)
+                  : null) ||
+                result?.message ||
+                "WhatsApp service returned unsuccessful response";
+              batchFailureReasons.push(failureReason);
+
+              await trackInCallingData({
+                templateName,
+                status: "failed",
+                failureReason,
+                timestamp: now,
+                history: [{ status: "failed", timestamp: now, failureReason }],
+              });
             }
           })
         );
