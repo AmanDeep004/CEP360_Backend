@@ -142,6 +142,12 @@ const CallingDataSchema = new mongoose.Schema(
       },
     ],
     registrationSource: { type: Object },
+    priority: {
+      isActive: { type: Boolean, default: false },
+      priorityDate: { type: Date, default: null },
+      setAt: { type: Date, default: null },
+      note: { type: String, trim: true, default: "" },
+    },
   },
   {
     timestamps: true,

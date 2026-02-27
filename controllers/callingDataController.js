@@ -802,6 +802,80 @@ const UpdateCallingData = asyncHandler(async (req, res, next) => {
   }
 });
 
+/* ── PRIORITY FEATURE ── */
+
+const setPriority = asyncHandler(async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { priorityDate, note } = req.body;
+
+    if (!priorityDate) {
+      return sendError(next, "priorityDate is required", 400);
+    }
+
+    const updated = await CallingData.findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          "priority.isActive": true,
+          "priority.priorityDate": new Date(priorityDate),
+          "priority.setAt": new Date(),
+          "priority.note": note || "",
+        },
+      },
+      { new: true }
+    ).lean();
+
+    if (!updated) return sendError(next, "Record not found", 404);
+
+    return sendResponse(res, 200, "Priority set successfully", updated);
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+const getPriorityList = asyncHandler(async (req, res, next) => {
+  try {
+    const { agentId } = req.params;
+
+    const endOfDay = new Date();
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const priorities = await CallingData.find({
+      agentId: new mongoose.Types.ObjectId(agentId),
+      "priority.isActive": true,
+      "priority.priorityDate": { $lte: endOfDay },
+    })
+      .select(
+        "Full_Name Company_Name Contact_Direct_Phone1 Mobile_No Job_Title priority CampaignId isRegistered"
+      )
+      .sort({ "priority.setAt": 1 })
+      .lean();
+
+    return sendResponse(res, 200, "Priority list fetched", priorities);
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+const closePriority = asyncHandler(async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const updated = await CallingData.findByIdAndUpdate(
+      id,
+      { $set: { "priority.isActive": false } },
+      { new: true }
+    ).lean();
+
+    if (!updated) return sendError(next, "Record not found", 404);
+
+    return sendResponse(res, 200, "Priority closed", updated);
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
 export {
   uploadcallingData,
   getCallingDataById,
@@ -814,4 +888,7 @@ export {
   reassignCallingDatatoAgents,
   UpdateCallingData,
   getDatabaseByAssignmentUnmasked,
+  setPriority,
+  getPriorityList,
+  closePriority,
 };

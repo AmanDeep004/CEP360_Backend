@@ -11,6 +11,9 @@ import {
   reassignCallingDatatoAgents,
   UpdateCallingData,
   getDatabaseByAssignmentUnmasked,
+  setPriority,
+  getPriorityList,
+  closePriority,
 } from "../controllers/callingDataController.js";
 import {
   uploadExternalDataController,
@@ -68,5 +71,9 @@ router.get(
 
 // here  need to add filter based  calling data as well
 // get all non assigned calling data
+
+router.put("/setPriority/:id", protect, setPriority);
+router.get("/getPriorityList/:agentId", protect, getPriorityList);
+router.put("/closePriority/:id", protect, closePriority);
 
 export default router;
