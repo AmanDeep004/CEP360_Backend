@@ -20,7 +20,12 @@ const normalizeNumber = (num) => {
     .replace(/^0/, "");
 };
 
-const findCallingDataContact = async (contactNo) => {
+// Prefer callingDataId (exact record) when available; fall back to phone-number
+// search only when it is absent (e.g. webhook updates).
+const findCallingDataContact = async (contactNo, callingDataId = null) => {
+  if (callingDataId) {
+    return await CallingData.findById(callingDataId);
+  }
   const normalized = normalizeNumber(contactNo);
   if (!normalized) return null;
   return await CallingData.findOne({
@@ -158,6 +163,7 @@ const sendTemplateMessage = asyncHandler(async (req, res, next) => {
       language = "en",
       wabaPhoneNumber,
       contacts,
+      templateDetails: templateInfo = {},
     } = req.body;
     console.log("[WA_TEMPLATE] Stage 1: Request received", {
       templateName,
@@ -227,12 +233,13 @@ const sendTemplateMessage = asyncHandler(async (req, res, next) => {
           limit(async () => {
             const contactNo = contact?.contactNo || "";
             const fullName = contact?.fullName || "";
+            const callingDataId = contact?.callingDataId || null;
             const now = new Date();
 
             // Helper: persist a whatsappTemplates entry into CallingData
             const trackInCallingData = async (entry) => {
               try {
-                const callingDoc = await findCallingDataContact(contactNo);
+                const callingDoc = await findCallingDataContact(contactNo, callingDataId);
                 if (callingDoc) {
                   await CallingData.findByIdAndUpdate(callingDoc._id, {
                     $push: { whatsappTemplates: entry },
@@ -256,6 +263,7 @@ const sendTemplateMessage = asyncHandler(async (req, res, next) => {
               batchFailureReasons.push(invalidReason);
               await trackInCallingData({
                 templateName,
+                templateDetails: templateInfo,
                 status: "failed",
                 failureReason: invalidReason,
                 timestamp: now,
@@ -282,6 +290,7 @@ const sendTemplateMessage = asyncHandler(async (req, res, next) => {
               batchFailureReasons.push(failureReason);
               await trackInCallingData({
                 templateName,
+                templateDetails: templateInfo,
                 status: "failed",
                 failureReason,
                 timestamp: now,
@@ -305,13 +314,14 @@ const sendTemplateMessage = asyncHandler(async (req, res, next) => {
 
               // DB tracking is fire-and-forget — don't let it affect success count
               try {
-                const callingDoc = await findCallingDataContact(contactNo);
+                const callingDoc = await findCallingDataContact(contactNo, callingDataId);
                 if (callingDoc) {
                   await CallingData.findByIdAndUpdate(callingDoc._id, {
                     $push: {
                       whatsappTemplates: {
                         waMessageId,
                         templateName,
+                        templateDetails: templateInfo,
                         status: "sending",
                         timestamp: now,
                         history: [{ status: "sending", timestamp: now }],
@@ -370,6 +380,7 @@ const sendTemplateMessage = asyncHandler(async (req, res, next) => {
 
               await trackInCallingData({
                 templateName,
+                templateDetails: templateInfo,
                 status: "failed",
                 failureReason,
                 timestamp: now,

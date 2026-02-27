@@ -1641,6 +1641,7 @@ const migrateToEngagementHistoryOld = asyncHandler(async (req, res, next) => {
                 timestamp: callingData.emailTemplates.timestamp,
                 status: callingData.emailTemplates.status,
                 messageId: callingData.emailTemplates.messageId,
+                templateDetails: callingData.emailTemplates.templateDetails,
                 history: callingData.emailTemplates.history || [],
               }
             : undefined,
@@ -1815,6 +1816,7 @@ const migrateToEngagementHistory = asyncHandler(async (req, res, next) => {
                 timestamp: callingData.emailTemplates.timestamp,
                 status: callingData.emailTemplates.status,
                 messageId: callingData.emailTemplates.messageId,
+                templateDetails: callingData.emailTemplates.templateDetails,
                 history: callingData.emailTemplates.history || [],
               }
             : undefined,
@@ -2041,7 +2043,7 @@ const getContactsWithEngagementsOld = asyncHandler(async (req, res, next) => {
         );
 
         const totalEmailsSent = engagements.filter(
-          (eng) => eng.emailHistory?.messageId
+          (eng) => eng.emailHistory?.templateName
         ).length;
 
         return {
@@ -2266,7 +2268,7 @@ const getContactsWithEngagementsWorking = asyncHandler(
               : 0;
 
             const totalEmailsSent = engagements
-              ? engagements.filter((eng) => eng.emailHistory?.messageId).length
+              ? engagements.filter((eng) => eng.emailHistory?.templateName).length
               : 0;
 
             return {
@@ -2470,12 +2472,55 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
           );
 
           // Find all engagements for this contact with explicit exec()
-          const engagements = await EngagementHistory.find(engagementQuery)
+          const rawEngagements = await EngagementHistory.find(engagementQuery)
             .sort({ updatedAt: -1, createdAt: -1, last_engagement_date: -1 })
             .lean()
             .exec();
 
-          console.log(`Engagements Found: ${engagements?.length || 0}`);
+          console.log(`Engagements Found: ${rawEngagements?.length || 0}`);
+
+          // Enrich engagements with latest CallingData (templateDetails for email & whatsapp)
+          let engagements = rawEngagements || [];
+          if (engagements.length > 0) {
+            const callingDataIds = engagements.map((eng) => eng.callingDataId).filter(Boolean);
+            if (callingDataIds.length > 0) {
+              const callingDocs = await CallingData.find(
+                { _id: { $in: callingDataIds } },
+                { emailTemplates: 1, whatsappTemplates: 1 }
+              ).lean();
+              const callingDataMap = {};
+              callingDocs.forEach((doc) => { callingDataMap[doc._id.toString()] = doc; });
+              engagements = engagements.map((eng) => {
+                const doc = callingDataMap[String(eng.callingDataId)];
+                if (!doc) return eng;
+                const enriched = { ...eng };
+                if (doc.emailTemplates?.templateName) {
+                  enriched.emailHistory = {
+                    templateId: doc.emailTemplates.templateId,
+                    templateName: doc.emailTemplates.templateName,
+                    timestamp: doc.emailTemplates.timestamp,
+                    status: doc.emailTemplates.status,
+                    messageId: doc.emailTemplates.messageId,
+                    templateDetails: doc.emailTemplates.templateDetails,
+                    history: doc.emailTemplates.history || [],
+                  };
+                }
+                if (doc.whatsappTemplates?.length > 0) {
+                  enriched.whatsappChatHistory = doc.whatsappTemplates.map((t) => ({
+                    waMessageId: t.waMessageId,
+                    templateId: t.templateId,
+                    templateName: t.templateName,
+                    timestamp: t.timestamp,
+                    status: t.status,
+                    failureReason: t.failureReason,
+                    templateDetails: t.templateDetails,
+                    history: t.history || [],
+                  }));
+                }
+                return enriched;
+              });
+            }
+          }
 
           if (engagements && engagements.length > 0) {
             console.log(`First Engagement Sample:`, {
@@ -2485,7 +2530,7 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
               isAtteneded: engagements[0].isAtteneded,
               agentName: engagements[0].agentName,
               whatsappCount: engagements[0].whatsappChatHistory?.length || 0,
-              emailExists: !!engagements[0].emailHistory?.messageId,
+              emailExists: !!engagements[0].emailHistory?.templateName,
               telecallingCount: engagements[0].telecalling_remarks?.length || 0,
             });
           }
@@ -2538,7 +2583,7 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
             : 0;
 
           const totalEmailsSent = engagements
-            ? engagements.filter((eng) => eng.emailHistory?.messageId).length
+            ? engagements.filter((eng) => eng.emailHistory?.templateName).length
             : 0;
 
           console.log(`Computed Stats:`, {

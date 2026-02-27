@@ -379,59 +379,55 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
       payload?.to || payload?.receiver || payload?.phone || payload?.recipient
     );
 
-    if (!mobile) {
-      console.log("No mobile number found in payload");
-      // Keep raw webhook trace even when mobile number is unavailable.
-      // Use upsert so DoubleTick retries don't create duplicate records.
-      const noMobileDoc = {
+    // ── Resolve CallingData contact ───────────────────────────────────────────
+    // Priority 1: look up the DoubleTickData record by waMessageId — it already
+    // carries the contactId that was stamped at send-time, which guarantees the
+    // correct campaign record even when the same phone exists in many campaigns.
+    // Priority 2: fall back to phone-number search (legacy / missing waMessageId).
+    let callingDataContact = null;
+
+    if (waMessageId) {
+      const existingDoc = await DoubleTickData.findOne({ waMessageId })
+        .select("contactId mobileNumber")
+        .lean();
+
+      if (existingDoc?.contactId) {
+        callingDataContact = await CallingData.findById(
+          existingDoc.contactId
+        ).lean();
+      }
+
+      // If DoubleTickData had no contactId yet, fall back to phone-number lookup
+      if (!callingDataContact && mobile) {
+        callingDataContact = await findCallingDataForNumber(mobile);
+      }
+    } else if (mobile) {
+      callingDataContact = await findCallingDataForNumber(mobile);
+    }
+
+    if (!mobile && !waMessageId) {
+      console.log("No mobile number or message ID found in payload");
+      await DoubleTickData.create({
         webhookType: "MessageStatus",
         mobileNumber: "",
         contactId: null,
         payload,
         eventType: status || "unknown",
-        waMessageId,
+        waMessageId: "",
         status,
         timestamp: parsedTimestamp,
         templateData: payload?.message || {},
         templateId,
         templateName,
         ...(failureReason && { failureReason }),
-      };
-      const noMobileHistory = {
-        payload,
-        status: status || "unknown",
-        timestamp: parsedTimestamp,
-        eventType: status || "unknown",
-        ...(failureReason && { failureReason }),
-      };
-
-      if (waMessageId) {
-        await DoubleTickData.findOneAndUpdate(
-          { waMessageId },
-          {
-            $set: { ...noMobileDoc, updatedAt: new Date() },
-            $push: { messageHistory: noMobileHistory },
-          },
-          { upsert: true, new: true, setDefaultsOnInsert: true }
-        );
-      } else {
-        await DoubleTickData.create({
-          ...noMobileDoc,
-          messageHistory: [noMobileHistory],
-        });
-      }
-
-      return sendResponse(res, 200, "No mobile number in payload", {
-        received: true,
-        mobile: null,
+        messageHistory: [{ payload, status: status || "unknown", timestamp: parsedTimestamp, eventType: status || "unknown", ...(failureReason && { failureReason }) }],
       });
+      return sendResponse(res, 200, "No mobile number in payload", { received: true, mobile: null });
     }
-
-    const callingDataContact = await findCallingDataForNumber(mobile);
 
     const saveObj = {
       webhookType: "MessageStatus",
-      mobileNumber: mobile,
+      mobileNumber: mobile || "",
       payload,
       eventType: status || "unknown",
       waMessageId,
