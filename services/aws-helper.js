@@ -9,7 +9,7 @@ const s3 = new AWS.S3({
 //import s3 from "../config/s3.js";
 const cdnBucket = process.env.CDN_LINK;
 const bucket = process.env.AWS_BUCKET_NAME;
-const uploadFile = async (bucketName, file, fileName, ContentType) => {
+const uploadFile = async (bucketName, file, fileName, ContentType, fileSize) => {
   try {
     var data = file;
     //var name = fileName + "_" + new Date().getTime();
@@ -22,7 +22,12 @@ const uploadFile = async (bucketName, file, fileName, ContentType) => {
       // ACL: 'public-read-write'
     };
 
-    var s3upload = await s3.upload(params).promise();
+    const options = {
+      partSize: 10 * 1024 * 1024,  // 10 MB per part
+      queueSize: 4,                 // 4 parallel uploads
+    };
+
+    var s3upload = await s3.upload(params, options).promise();
     //console.log(`File uploaded successfully at ${s3upload.Location}`);
     //return {fileName:name, src:s3upload.Location}; //https://cdn.vosmos.live/bucketName/name
     let folder = bucketName.split(`${bucket}`)[1];
