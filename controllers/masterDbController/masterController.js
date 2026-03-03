@@ -109,7 +109,7 @@ const batchCreateFromExcelOld = asyncHandler(async (req, res, next) => {
     // --- Step 3: Get company mapping in one query ---
     const allCompanyDocs = await Company.find(
       { Company_Name: { $in: [...uniqueCompanies] } },
-      { Company_Name: 1 }
+      { Company_Name: 1 },
     ).lean();
 
     const companyMap = new Map();
@@ -156,7 +156,7 @@ const batchCreateFromExcelOld = asyncHandler(async (req, res, next) => {
         Personal_Email1: 1,
         Personal_Email2: 1,
         Contact_ID: 1,
-      }
+      },
     ).lean();
 
     // Create lookup maps for O(1) duplicate checking
@@ -427,7 +427,7 @@ const getBatchJobStatus = asyncHandler(async (req, res, next) => {
 
   return sendResponse(res, 200, "Job status fetched", {
     jobId,
-    status: job.status,       // "processing" | "completed" | "failed"
+    status: job.status, // "processing" | "completed" | "failed"
     startedAt: job.startedAt,
     completedAt: job.completedAt,
     progress: job.progress,
@@ -521,7 +521,7 @@ const _batchCreateFromExcel_OLD_SYNC = async (req, res, next) => {
     // --- Step 3: Get company mapping in one query ---
     const allCompanyDocs = await Company.find(
       { Company_Name: { $in: [...uniqueCompanies] } },
-      { Company_Name: 1 }
+      { Company_Name: 1 },
     ).lean();
 
     const companyMap = new Map();
@@ -565,7 +565,7 @@ const _batchCreateFromExcel_OLD_SYNC = async (req, res, next) => {
         Personal_Email1: 1,
         Personal_Email2: 1,
         Contact_ID: 1,
-      }
+      },
     ).lean();
 
     const duplicatePhoneMap = new Set();
@@ -811,7 +811,7 @@ const getAllData = asyncHandler(async (req, res, next) => {
       Contact.find(finalFilter)
         .populate(
           "Company_ID",
-          "Company_Name Website Industry Company_Phone1 Company_Phone2"
+          "Company_Name Website Industry Company_Phone1 Company_Phone2",
         )
         .skip(skip)
         .limit(limit)
@@ -887,7 +887,7 @@ const getAllCompanyName = asyncHandler(async (req, res, next) => {
   try {
     const companies = await Company.find(
       {},
-      { _id: 1, Company_Name: 1 }
+      { _id: 1, Company_Name: 1 },
     ).lean();
 
     return sendResponse(res, 200, "Companies fetched successfully", {
@@ -1033,7 +1033,7 @@ const updateData = asyncHandler(async (req, res, next) => {
       // Create history: compare changed fields
       const changedFields = Object.keys(payload).filter(
         (key) =>
-          String(existingContact[key] ?? "") !== String(payload[key] ?? "")
+          String(existingContact[key] ?? "") !== String(payload[key] ?? ""),
       );
 
       if (changedFields.length > 0) {
@@ -1064,7 +1064,7 @@ const updateData = asyncHandler(async (req, res, next) => {
         res,
         200,
         "Contact updated successfully",
-        updatedContact
+        updatedContact,
       );
     }
 
@@ -1075,7 +1075,7 @@ const updateData = asyncHandler(async (req, res, next) => {
       // Create history: compare changed fields
       const changedFields = Object.keys(payload).filter(
         (key) =>
-          String(existingCompany[key] ?? "") !== String(payload[key] ?? "")
+          String(existingCompany[key] ?? "") !== String(payload[key] ?? ""),
       );
 
       if (changedFields.length > 0) {
@@ -1106,7 +1106,7 @@ const updateData = asyncHandler(async (req, res, next) => {
         res,
         200,
         "Company updated successfully",
-        updatedCompany
+        updatedCompany,
       );
     }
 
@@ -1134,7 +1134,7 @@ const createANewCompany = asyncHandler(async (req, res, next) => {
       return sendError(
         next,
         "Company with this name and website already exists",
-        400
+        400,
       );
     }
 
@@ -1198,7 +1198,7 @@ const updateCompany = asyncHandler(async (req, res, next) => {
         return sendError(
           next,
           "Another company with this name and website already exists",
-          400
+          400,
         );
       }
     }
@@ -1226,14 +1226,14 @@ const updateCompany = asyncHandler(async (req, res, next) => {
     const updatedCompany = await Company.findByIdAndUpdate(
       companyId,
       updatedData,
-      { new: true }
+      { new: true },
     );
 
     return sendResponse(
       res,
       200,
       "Company updated successfully",
-      updatedCompany
+      updatedCompany,
     );
   } catch (err) {
     return sendError(next, err.message || "Failed to update company", 500);
@@ -1456,10 +1456,10 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
     };
 
     companyData.turnovers = companyData.turnovers.sort(
-      (a, b) => parseRange(a) - parseRange(b)
+      (a, b) => parseRange(a) - parseRange(b),
     );
     companyData.employeeRanges = companyData.employeeRanges.sort(
-      (a, b) => parseRange(a) - parseRange(b)
+      (a, b) => parseRange(a) - parseRange(b),
     );
 
     companyData.industries = companyData.industries.sort();
@@ -1569,7 +1569,7 @@ const dumpAllHistoryData = asyncHandler(async (req, res, next) => {
           : null;
 
       const callingData = await CallingData.findById(
-        history.callingData_id
+        history.callingData_id,
       ).lean();
       if (!callingData) continue;
 
@@ -1652,7 +1652,7 @@ const migrateToEngagementHistoryOld = asyncHandler(async (req, res, next) => {
           const agentNamesSet = new Set(
             callingData.callHistory.chatHistory
               .map((chat) => chat.agentName)
-              .filter(Boolean)
+              .filter(Boolean),
           );
           uniqueAgentNames.push(...agentNamesSet);
         }
@@ -1698,7 +1698,7 @@ const migrateToEngagementHistoryOld = asyncHandler(async (req, res, next) => {
               timestamp: template.timestamp,
               status: template.status,
               history: template.history || [],
-            })
+            }),
           ),
 
           // Email history from CallingData.emailTemplates
@@ -1731,7 +1731,7 @@ const migrateToEngagementHistoryOld = asyncHandler(async (req, res, next) => {
               isRegistered: chat.isRegistered,
               agent_id: chat.agent_id,
               agentName: chat.agentName,
-            })
+            }),
           ),
         };
 
@@ -1746,7 +1746,7 @@ const migrateToEngagementHistoryOld = asyncHandler(async (req, res, next) => {
           await EngagementHistory.findByIdAndUpdate(
             existingEngagement._id,
             engagementData,
-            { new: true }
+            { new: true },
           );
           migrationResults.push({
             callingDataId: callingData._id,
@@ -1784,7 +1784,7 @@ const migrateToEngagementHistoryOld = asyncHandler(async (req, res, next) => {
     return sendError(
       next,
       err.message || "Failed to migrate to engagement history",
-      500
+      500,
     );
   }
 });
@@ -1827,7 +1827,7 @@ const migrateToEngagementHistory = asyncHandler(async (req, res, next) => {
           const agentNamesSet = new Set(
             callingData.callHistory.chatHistory
               .map((chat) => chat.agentName)
-              .filter(Boolean)
+              .filter(Boolean),
           );
           uniqueAgentNames.push(...agentNamesSet);
         }
@@ -1873,7 +1873,7 @@ const migrateToEngagementHistory = asyncHandler(async (req, res, next) => {
               timestamp: template.timestamp,
               status: template.status,
               history: template.history || [],
-            })
+            }),
           ),
 
           // Email history from CallingData.emailTemplates
@@ -1906,7 +1906,7 @@ const migrateToEngagementHistory = asyncHandler(async (req, res, next) => {
               isRegistered: chat.isRegistered,
               agent_id: chat.agent_id,
               agentName: chat.agentName,
-            })
+            }),
           ),
         };
 
@@ -1921,7 +1921,7 @@ const migrateToEngagementHistory = asyncHandler(async (req, res, next) => {
           await EngagementHistory.findByIdAndUpdate(
             existingEngagement._id,
             engagementData,
-            { new: true }
+            { new: true },
           );
           migrationResults.push({
             callingDataId: callingData._id,
@@ -1953,7 +1953,7 @@ const migrateToEngagementHistory = asyncHandler(async (req, res, next) => {
                 Last_Engagement_Campaign: campaign.name,
               },
             },
-            { new: true }
+            { new: true },
           );
 
           console.log("Contact update result:", res);
@@ -1980,7 +1980,7 @@ const migrateToEngagementHistory = asyncHandler(async (req, res, next) => {
     return sendError(
       next,
       err.message || "Failed to migrate to engagement history",
-      500
+      500,
     );
   }
 });
@@ -2051,8 +2051,8 @@ const getContactsWithEngagementsOld = asyncHandler(async (req, res, next) => {
         (contact) =>
           contact.Company_ID?.Industry &&
           contact.Company_ID.Industry.toLowerCase().includes(
-            industry.toLowerCase()
-          )
+            industry.toLowerCase(),
+          ),
       );
     }
 
@@ -2082,18 +2082,18 @@ const getContactsWithEngagementsOld = asyncHandler(async (req, res, next) => {
         const hasEngagements = totalEngagements > 0;
 
         const isRegisteredInAnyCampaign = engagements.some(
-          (eng) => eng.isRegistered == true
+          (eng) => eng.isRegistered == true,
         );
 
         const campaignNames = [
           ...new Set(
-            engagements.map((eng) => eng.campaignName).filter(Boolean)
+            engagements.map((eng) => eng.campaignName).filter(Boolean),
           ),
         ];
 
         const allAgentNames = [
           ...new Set(
-            engagements.flatMap((eng) => eng.agentName || []).filter(Boolean)
+            engagements.flatMap((eng) => eng.agentName || []).filter(Boolean),
           ),
         ];
 
@@ -2102,16 +2102,16 @@ const getContactsWithEngagementsOld = asyncHandler(async (req, res, next) => {
 
         const totalTelecallingRemarks = engagements.reduce(
           (sum, eng) => sum + (eng.telecalling_remarks?.length || 0),
-          0
+          0,
         );
 
         const totalWhatsappMessages = engagements.reduce(
           (sum, eng) => sum + (eng.whatsappChatHistory?.length || 0),
-          0
+          0,
         );
 
         const totalEmailsSent = engagements.filter(
-          (eng) => eng.emailHistory?.templateName
+          (eng) => eng.emailHistory?.templateName,
         ).length;
 
         return {
@@ -2128,7 +2128,7 @@ const getContactsWithEngagementsOld = asyncHandler(async (req, res, next) => {
           totalWhatsappMessages,
           totalEmailsSent,
         };
-      })
+      }),
     );
 
     const totalPages = Math.ceil(totalContacts / limitNum);
@@ -2158,7 +2158,7 @@ const getContactsWithEngagementsOld = asyncHandler(async (req, res, next) => {
     return sendError(
       next,
       err.message || "Failed to fetch contacts with engagements",
-      500
+      500,
     );
   }
 });
@@ -2259,8 +2259,8 @@ const getContactsWithEngagementsWorking = asyncHandler(
           (contact) =>
             contact.Company_ID?.Industry &&
             contact.Company_ID.Industry.toLowerCase().includes(
-              industry.toLowerCase()
-            )
+              industry.toLowerCase(),
+            ),
         );
       }
 
@@ -2299,7 +2299,7 @@ const getContactsWithEngagementsWorking = asyncHandler(
             const campaignNames = engagements
               ? [
                   ...new Set(
-                    engagements.map((eng) => eng.campaignName).filter(Boolean)
+                    engagements.map((eng) => eng.campaignName).filter(Boolean),
                   ),
                 ]
               : [];
@@ -2309,7 +2309,7 @@ const getContactsWithEngagementsWorking = asyncHandler(
                   ...new Set(
                     engagements
                       .flatMap((eng) => eng.agentName || [])
-                      .filter(Boolean)
+                      .filter(Boolean),
                   ),
                 ]
               : [];
@@ -2324,19 +2324,20 @@ const getContactsWithEngagementsWorking = asyncHandler(
             const totalTelecallingRemarks = engagements
               ? engagements.reduce(
                   (sum, eng) => sum + (eng.telecalling_remarks?.length || 0),
-                  0
+                  0,
                 )
               : 0;
 
             const totalWhatsappMessages = engagements
               ? engagements.reduce(
                   (sum, eng) => sum + (eng.whatsappChatHistory?.length || 0),
-                  0
+                  0,
                 )
               : 0;
 
             const totalEmailsSent = engagements
-              ? engagements.filter((eng) => eng.emailHistory?.templateName).length
+              ? engagements.filter((eng) => eng.emailHistory?.templateName)
+                  .length
               : 0;
 
             return {
@@ -2356,7 +2357,7 @@ const getContactsWithEngagementsWorking = asyncHandler(
           } catch (engagementError) {
             console.error(
               `Error fetching engagements for contact ${contact.Contact_ID}:`,
-              engagementError
+              engagementError,
             );
             // Return contact without engagements if there's an error
             return {
@@ -2373,7 +2374,7 @@ const getContactsWithEngagementsWorking = asyncHandler(
               totalEmailsSent: 0,
             };
           }
-        })
+        }),
       );
 
       const totalPages = Math.ceil(totalContacts / limitNum);
@@ -2404,10 +2405,10 @@ const getContactsWithEngagementsWorking = asyncHandler(
       return sendError(
         next,
         err.message || "Failed to fetch contacts with engagements",
-        500
+        500,
       );
     }
-  }
+  },
 );
 
 const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
@@ -2502,8 +2503,8 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
         (contact) =>
           contact.Company_ID?.Industry &&
           contact.Company_ID.Industry.toLowerCase().includes(
-            industry.toLowerCase()
-          )
+            industry.toLowerCase(),
+          ),
       );
     }
 
@@ -2516,7 +2517,7 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
 
           console.log(
             `Base Engagement Query:`,
-            JSON.stringify(engagementQuery)
+            JSON.stringify(engagementQuery),
           );
 
           // Filter engagements by campaign if provided
@@ -2530,13 +2531,13 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
             engagementQuery.isRegistered =
               isRegistered === "true" || isRegistered === true;
             console.log(
-              `Added isRegistered filter: ${engagementQuery.isRegistered}`
+              `Added isRegistered filter: ${engagementQuery.isRegistered}`,
             );
           }
 
           console.log(
             `Final Engagement Query:`,
-            JSON.stringify(engagementQuery, null, 2)
+            JSON.stringify(engagementQuery, null, 2),
           );
 
           // Find all engagements for this contact with explicit exec()
@@ -2550,14 +2551,18 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
           // Enrich engagements with latest CallingData (templateDetails for email & whatsapp)
           let engagements = rawEngagements || [];
           if (engagements.length > 0) {
-            const callingDataIds = engagements.map((eng) => eng.callingDataId).filter(Boolean);
+            const callingDataIds = engagements
+              .map((eng) => eng.callingDataId)
+              .filter(Boolean);
             if (callingDataIds.length > 0) {
               const callingDocs = await CallingData.find(
                 { _id: { $in: callingDataIds } },
-                { emailTemplates: 1, whatsappTemplates: 1 }
+                { emailTemplates: 1, whatsappTemplates: 1 },
               ).lean();
               const callingDataMap = {};
-              callingDocs.forEach((doc) => { callingDataMap[doc._id.toString()] = doc; });
+              callingDocs.forEach((doc) => {
+                callingDataMap[doc._id.toString()] = doc;
+              });
               engagements = engagements.map((eng) => {
                 const doc = callingDataMap[String(eng.callingDataId)];
                 if (!doc) return eng;
@@ -2574,16 +2579,18 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
                   };
                 }
                 if (doc.whatsappTemplates?.length > 0) {
-                  enriched.whatsappChatHistory = doc.whatsappTemplates.map((t) => ({
-                    waMessageId: t.waMessageId,
-                    templateId: t.templateId,
-                    templateName: t.templateName,
-                    timestamp: t.timestamp,
-                    status: t.status,
-                    failureReason: t.failureReason,
-                    templateDetails: t.templateDetails,
-                    history: t.history || [],
-                  }));
+                  enriched.whatsappChatHistory = doc.whatsappTemplates.map(
+                    (t) => ({
+                      waMessageId: t.waMessageId,
+                      templateId: t.templateId,
+                      templateName: t.templateName,
+                      timestamp: t.timestamp,
+                      status: t.status,
+                      failureReason: t.failureReason,
+                      templateDetails: t.templateDetails,
+                      history: t.history || [],
+                    }),
+                  );
                 }
                 return enriched;
               });
@@ -2614,7 +2621,7 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
           const campaignNames = engagements
             ? [
                 ...new Set(
-                  engagements.map((eng) => eng.campaignName).filter(Boolean)
+                  engagements.map((eng) => eng.campaignName).filter(Boolean),
                 ),
               ]
             : [];
@@ -2624,7 +2631,7 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
                 ...new Set(
                   engagements
                     .flatMap((eng) => eng.agentName || [])
-                    .filter(Boolean)
+                    .filter(Boolean),
                 ),
               ]
             : [];
@@ -2639,14 +2646,14 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
           const totalTelecallingRemarks = engagements
             ? engagements.reduce(
                 (sum, eng) => sum + (eng.telecalling_remarks?.length || 0),
-                0
+                0,
               )
             : 0;
 
           const totalWhatsappMessages = engagements
             ? engagements.reduce(
                 (sum, eng) => sum + (eng.whatsappChatHistory?.length || 0),
-                0
+                0,
               )
             : 0;
 
@@ -2680,17 +2687,17 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
             totalEmailsSent,
           };
 
-          console.log(`Contact Result Keys:`, Object.keys(result));
-          console.log(
-            `Engagements in Result:`,
-            result.engagements?.length || 0
-          );
+          // console.log(`Contact Result Keys:`, Object.keys(result));
+          // console.log(
+          //   `Engagements in Result:`,
+          //   result.engagements?.length || 0,
+          // );
 
           return result;
         } catch (engagementError) {
           console.error(
             `Error fetching engagements for contact ${contact.Contact_ID}:`,
-            engagementError
+            engagementError,
           );
           console.error(`Error Stack:`, engagementError.stack);
 
@@ -2709,7 +2716,7 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
             totalEmailsSent: 0,
           };
         }
-      })
+      }),
     );
     console.log("contacts-aman", contactsWithEngagements);
 
@@ -2721,10 +2728,10 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
         acc.totalRegistered += contact.isRegisteredInAnyCampaign ? 1 : 0;
         return acc;
       },
-      { totalEngagements: 0, totalWithEngagements: 0, totalRegistered: 0 }
+      { totalEngagements: 0, totalWithEngagements: 0, totalRegistered: 0 },
     );
 
-    console.log(`Summary Stats:`, summaryStats);
+    // console.log(`Summary Stats:`, summaryStats);
 
     const totalPages = Math.ceil(totalContacts / limitNum);
 
@@ -2749,8 +2756,8 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
       },
     };
 
-    console.log(`Response Pagination:`, response.pagination);
-    console.log(`=== END getContactsWithEngagements ===\n`);
+    // console.log(`Response Pagination:`, response.pagination);
+    // console.log(`=== END getContactsWithEngagements ===\n`);
 
     return sendResponse(res, 200, "Contacts fetched successfully", response);
   } catch (err) {
@@ -2759,7 +2766,7 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
     return sendError(
       next,
       err.message || "Failed to fetch contacts with engagements",
-      500
+      500,
     );
   }
 });
