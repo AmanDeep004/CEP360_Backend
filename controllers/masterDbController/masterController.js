@@ -10,6 +10,10 @@ import CallingData from "../../models/callingDataModal.js";
 import Campaign from "../../models/campaignModel.js";
 import dumpHistoryData from "../../models/MasterDBModel/dumpHistoryDataModel.js";
 import EngagementHistory from "../../models/MasterDBModel/enagagementHistoryModel.js";
+import {
+  jobStore,
+  processExcelInBackground,
+} from "../../services/excelStreamProcessor.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
 function parseDate(value) {
@@ -374,6 +378,70 @@ const batchCreateFromExcel = asyncHandler(async (req, res, next) => {
       return sendError(next, "No file uploaded", 400);
     }
 
+    const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const batchName = req.body.batchName || "default_batch";
+
+    jobStore.set(jobId, {
+      status: "processing",
+      startedAt: new Date(),
+      progress: {
+        totalRows: 0,
+        processed: 0,
+        skipped: 0,
+        contactsCreated: 0,
+        companiesCreated: 0,
+      },
+      error: null,
+      completedAt: null,
+    });
+
+    // Respond immediately — don't wait for processing to finish
+    res.status(202).json({
+      success: true,
+      message:
+        "File accepted. Processing in background. Poll GET /api/masterdb/batchJobStatus/:jobId for progress.",
+      jobId,
+    });
+
+    // Fire-and-forget background processing
+    processExcelInBackground(jobId, req.file.path, batchName).catch((err) => {
+      const job = jobStore.get(jobId);
+      if (job) {
+        job.status = "failed";
+        job.error = err.message;
+        job.completedAt = new Date();
+      }
+    });
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
+const getBatchJobStatus = asyncHandler(async (req, res, next) => {
+  const { jobId } = req.params;
+  const job = jobStore.get(jobId);
+
+  if (!job) {
+    return sendError(next, "Job not found or expired", 404);
+  }
+
+  return sendResponse(res, 200, "Job status fetched", {
+    jobId,
+    status: job.status,       // "processing" | "completed" | "failed"
+    startedAt: job.startedAt,
+    completedAt: job.completedAt,
+    progress: job.progress,
+    error: job.error || null,
+  });
+});
+
+// ---- DEAD CODE BELOW (old synchronous implementation, kept for reference) ----
+const _batchCreateFromExcel_OLD_SYNC = async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return sendError(next, "No file uploaded", 400);
+    }
+
     // 1. Parse Excel (keep original headers)
     const workbook = XLSX.readFile(req.file.path);
     const sheetName = workbook.SheetNames[0];
@@ -696,7 +764,7 @@ const batchCreateFromExcel = asyncHandler(async (req, res, next) => {
     }
     return sendError(next, err.message || "Batch insert failed", 500);
   }
-});
+};
 
 const getAllData = asyncHandler(async (req, res, next) => {
   try {
@@ -2698,6 +2766,7 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
 
 export {
   batchCreateFromExcel,
+  getBatchJobStatus,
   getAllData,
   getAllCompanyData,
   updateData,

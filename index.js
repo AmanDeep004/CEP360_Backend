@@ -219,6 +219,10 @@ const startServer = async () => {
     app.use(expressWinston.errorLogger(expressWinstonErrorLogger));
     app.use(errorHandler);
 
+    // Ensure uploads directory exists for multer disk storage
+    const { mkdirSync } = await import("fs");
+    mkdirSync("uploads", { recursive: true });
+
     const PORT = process.env.PORT || 4020;
     const server = app.listen(PORT, () => {
       console.log(
@@ -227,6 +231,16 @@ const startServer = async () => {
         } mode on port ${PORT}`
       );
     });
+
+    // 10-minute socket timeout — prevents gateway timeout on large Excel uploads.
+    // The upload route also sets res.setTimeout(600000) individually.
+    // NOTE: if nginx sits in front, also set:
+    //   proxy_read_timeout 600;
+    //   proxy_send_timeout 600;
+    //   client_max_body_size 500m;
+    server.timeout = 600000;          // 10 min — max time for any single request
+    server.keepAliveTimeout = 605000; // slightly above timeout
+    server.headersTimeout = 610000;   // slightly above keepAliveTimeout
 
     const gracefulShutdown = async (signal) => {
       console.log(`\n${signal} received. Shutting down gracefully...`);
