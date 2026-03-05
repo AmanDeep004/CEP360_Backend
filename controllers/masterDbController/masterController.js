@@ -387,9 +387,15 @@ const batchCreateFromExcel = asyncHandler(async (req, res, next) => {
       progress: {
         totalRows: 0,
         processed: 0,
-        skipped: 0,
-        contactsCreated: 0,
-        companiesCreated: 0,
+        inserted: 0,           // new contacts added to DB
+        updated: 0,            // existing contacts updated
+        duplicates: 0,         // skipped — phone/email already exists
+        failed: 0,             // skipped — missing/unresolved company
+        companiesCreated: 0,   // new companies created (only for non-duplicate contacts)
+        failReasons: {
+          missingCompanyName: 0,
+          companyNotFound: 0,
+        },
       },
       error: null,
       completedAt: null,
@@ -425,12 +431,24 @@ const getBatchJobStatus = asyncHandler(async (req, res, next) => {
     return sendError(next, "Job not found or expired", 404);
   }
 
+  const { progress } = job;
   return sendResponse(res, 200, "Job status fetched", {
     jobId,
-    status: job.status, // "processing" | "completed" | "failed"
+    status: job.status,       // "processing" | "completed" | "failed"
     startedAt: job.startedAt,
     completedAt: job.completedAt,
-    progress: job.progress,
+    summary: {
+      totalRows:        progress.totalRows,
+      inserted:         progress.inserted,
+      updated:          progress.updated,
+      duplicates:       progress.duplicates,
+      failed:           progress.failed,
+      companiesCreated: progress.companiesCreated,
+    },
+    failReasons: {
+      missingCompanyName: progress.failReasons?.missingCompanyName ?? 0,
+      companyNotFound:    progress.failReasons?.companyNotFound    ?? 0,
+    },
     error: job.error || null,
   });
 });
