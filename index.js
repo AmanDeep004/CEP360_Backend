@@ -2,6 +2,7 @@ import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
 import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import expressWinston from "express-winston";
 import cookieParser from "cookie-parser";
 import { connectDB } from "./config/db.js";
@@ -54,6 +55,26 @@ const startServer = async () => {
     const app = express();
 
     app.use(helmet());
+
+    const loginLimiter = rateLimit({
+      windowMs: 15 * 60 * 1000, // 15 minutes
+      max: 10,
+      message: { success: false, message: "Too many login attempts. Please try again after 15 minutes." },
+      standardHeaders: true,
+      legacyHeaders: false,
+    });
+
+    const generalLimiter = rateLimit({
+      windowMs: 60 * 1000, // 1 minute
+      max: 200,
+      message: { success: false, message: "Too many requests. Please slow down." },
+      standardHeaders: true,
+      legacyHeaders: false,
+    });
+
+    app.use("/api/auth/login", loginLimiter);
+    app.use(generalLimiter);
+
     app.use(express.json({ limit: "1500mb" }));
     app.use(express.urlencoded({ extended: false, limit: "1500mb" }));
 

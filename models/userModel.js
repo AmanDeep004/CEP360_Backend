@@ -145,6 +145,10 @@ const userSchema = new Schema(
       type: String,
       trim: true,
     },
+    tokenVersion: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,
@@ -162,8 +166,8 @@ userSchema.pre("save", async function (next) {
 
 // Sign JWT and return
 userSchema.methods.getSignedJwtToken = function () {
-  return sign({ id: this._id }, process.env.JWT_SECRET, {
-    expiresIn: "30d",
+  return sign({ id: this._id, tokenVersion: this.tokenVersion }, process.env.JWT_SECRET, {
+    expiresIn: "12h",
   });
 };
 

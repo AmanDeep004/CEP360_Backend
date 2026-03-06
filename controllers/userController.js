@@ -355,6 +355,8 @@ const deleteUser = asyncHandler(async (req, res, next) => {
  */
 const logout = asyncHandler(async (req, res, next) => {
   try {
+    await User.findByIdAndUpdate(req.user._id, { $inc: { tokenVersion: 1 } });
+
     res.cookie("token", "", {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
@@ -363,9 +365,8 @@ const logout = asyncHandler(async (req, res, next) => {
       path: "/",
     });
 
-    return sendError(next, "Logout SuccessFully", 500, { logOut: true });
+    return sendResponse(res, 200, "Logout Successfully", { logOut: true });
   } catch (error) {
-    console.log("error", error.message);
     return sendError(next, error.message, 500);
   }
 });

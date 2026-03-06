@@ -6,6 +6,7 @@ import CallingDataEditApproval from "../models/callingDataEditApprovalModel.js";
 import { UserRoleEnum } from "../utils/enum.js";
 import XLSX from "xlsx";
 import mongoose from "mongoose";
+import escapeStringRegexp from "escape-string-regexp";
 import { maskPhone, maskEmail } from "../utils/mobileEmailMasking.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 const {
@@ -247,7 +248,7 @@ const getAllCallingDataWithoutMasking = asyncHandler(async (req, res, next) => {
     // search on multiple fields
     if (req.query.search && req.query.search.trim() !== "") {
       const search = req.query.search.trim();
-      const regex = new RegExp(search, "i");
+      const regex = new RegExp(escapeStringRegexp(search), "i");
 
       filter.$or = [
         { Full_Name: regex },
@@ -302,7 +303,7 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
     // search on multiple fields
     if (req.query.search && req.query.search.trim() !== "") {
       const search = req.query.search.trim();
-      const regex = new RegExp(search, "i");
+      const regex = new RegExp(escapeStringRegexp(search), "i");
 
       filter.$or = [
         { Full_Name: regex },
@@ -527,7 +528,7 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
     if (agentId) filter.agentId = agentId;
 
     if (source) {
-      filter.source = { $regex: new RegExp(source, "i") };
+      filter.source = { $regex: new RegExp(escapeStringRegexp(source), "i") };
     }
 
     let data = await CallingData.find(filter)
@@ -776,6 +777,21 @@ const reassignCallingDatatoAgents = asyncHandler(async (req, res, next) => {
     return sendError(next, err.message, 500);
   }
 });
+const CALLING_DATA_ALLOWED_FIELDS = [
+  "Salutation", "First_Name", "Last_Name", "Full_Name", "Gender",
+  "Job_Title", "Job_Seniority", "Job_Function",
+  "Contact_Address_1", "Contact_Address_2", "Contact_Address_3",
+  "Contact_City", "Contact_Pin", "Contact_State", "Contact_Region", "Contact_Country",
+  "Contact_STD_ISD_Code", "Contact_Location_Tier",
+  "Contact_Direct_Phone1", "Contact_Direct_Phone2", "Contact_Extn_No", "Mobile_No",
+  "Office_Email_1", "Office_Email_2", "Personal_Email1", "Personal_Email2",
+  "Contact_LinkedIn_Profile", "Telecalling_Remarks",
+  "Company_Name", "Turnover_Range", "Employees_Range", "Industry", "Sub_Industry",
+  "Company_Segment", "Website", "Company_LinkedIn_Profile",
+  "Company_Phone1", "Company_Phone2",
+  "source", "batch", "dataSourceType",
+];
+
 const UpdateCallingData = asyncHandler(async (req, res, next) => {
   try {
     const { _id, ...updateFields } = req.body;
@@ -783,8 +799,13 @@ const UpdateCallingData = asyncHandler(async (req, res, next) => {
       return sendError(next, "_id is required for update", 400);
     }
 
+    const safeUpdate = {};
+    CALLING_DATA_ALLOWED_FIELDS.forEach((field) => {
+      if (updateFields[field] !== undefined) safeUpdate[field] = updateFields[field];
+    });
+
     const updatedData = await CallingData.findByIdAndUpdate(_id, {
-      $set: updateFields,
+      $set: safeUpdate,
     }).lean();
 
     if (!updatedData) {
