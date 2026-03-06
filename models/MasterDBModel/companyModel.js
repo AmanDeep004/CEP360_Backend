@@ -22,4 +22,7 @@ const CompanySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Compound index for duplicate-check (Company_Name + Website)
+CompanySchema.index({ Company_Name: 1, Website: 1 });
+
 export default getSecondaryConnection().model("Company", CompanySchema);

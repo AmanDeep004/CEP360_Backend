@@ -133,6 +133,7 @@ const callingDataFilterOld = asyncHandler(async (req, res, next) => {
       },
       {
         $match: {
+          "discrepencyInData.status": { $ne: true },
           ...includeQuery,
           ...excludeQuery,
         },
@@ -193,7 +194,7 @@ const callingDataFilterOld = asyncHandler(async (req, res, next) => {
         {
           $unwind: { path: "$company_info", preserveNullAndEmptyArrays: true },
         },
-        { $match: { ...includeQuery, ...excludeQuery } },
+        { $match: { "discrepencyInData.status": { $ne: true }, ...includeQuery, ...excludeQuery } },
         { $group: { _id: "$Company_ID" } },
         { $count: "uniqueCompanies" },
       ]),
@@ -359,6 +360,7 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
       },
       {
         $match: {
+          "discrepencyInData.status": { $ne: true },
           ...includeQuery,
           ...excludeQuery,
         },
@@ -424,7 +426,7 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
             preserveNullAndEmptyArrays: true,
           },
         },
-        { $match: { ...includeQuery, ...excludeQuery } },
+        { $match: { "discrepencyInData.status": { $ne: true }, ...includeQuery, ...excludeQuery } },
         { $group: { _id: "$Company_ID" } },
         { $count: "uniqueCompanies" },
       ]),
@@ -999,6 +1001,7 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
       },
       {
         $match: {
+          "discrepencyInData.status": { $ne: true },
           ...includeQuery,
           ...excludeQuery,
           ...companyIdFilter,
@@ -1063,6 +1066,7 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
         },
         {
           $match: {
+            "discrepencyInData.status": { $ne: true },
             ...includeQuery,
             ...excludeQuery,
             ...companyIdFilter,
@@ -1246,7 +1250,7 @@ const assignCallingDataToCampaign = asyncHandler(async (req, res, next) => {
           preserveNullAndEmptyArrays: true,
         },
       },
-      { $match: { ...includeQuery, ...excludeQuery } },
+      { $match: { "discrepencyInData.status": { $ne: true }, ...includeQuery, ...excludeQuery } },
       {
         $sort: {
           EngagementPoints: -1, // Higher points first
@@ -1499,6 +1503,7 @@ const assignCallingDataToCampaignClientSuggested = asyncHandler(
         },
         {
           $match: {
+            "discrepencyInData.status": { $ne: true },
             ...(lastFilter.misc?.companyIdsUsed?.length
               ? {
                   Company_ID: {
@@ -1752,7 +1757,7 @@ const assignCallingDataToCampaignBoth = asyncHandler(async (req, res, next) => {
       {
         $unwind: { path: "$company_info", preserveNullAndEmptyArrays: true },
       },
-      { $match: { ...kestoneInclude, ...kestoneExclude } },
+      { $match: { "discrepencyInData.status": { $ne: true }, ...kestoneInclude, ...kestoneExclude } },
       { $addFields: { sourceType: "Kestone" } },
     ];
 
@@ -1788,7 +1793,7 @@ const assignCallingDataToCampaignBoth = asyncHandler(async (req, res, next) => {
       {
         $unwind: { path: "$company_info", preserveNullAndEmptyArrays: true },
       },
-      { $match: { ...clientInclude } },
+      { $match: { "discrepencyInData.status": { $ne: true }, ...clientInclude } },
       {
         $sort: {
           EngagementPoints: -1, // Higher points first

@@ -70,6 +70,11 @@ const EngagementSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Indexes for getContactsWithEngagements performance
+EngagementSchema.index({ contact_id: 1 });
+EngagementSchema.index({ contact_id: 1, campaignId: 1 });
+EngagementSchema.index({ contact_id: 1, isRegistered: 1 });
+
 export default getSecondaryConnection().model(
   "EngagementHistory",
   EngagementSchema

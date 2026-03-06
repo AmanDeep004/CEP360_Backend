@@ -109,7 +109,7 @@ const batchCreateFromExcelOld = asyncHandler(async (req, res, next) => {
     // --- Step 3: Get company mapping in one query ---
     const allCompanyDocs = await Company.find(
       { Company_Name: { $in: [...uniqueCompanies] } },
-      { Company_Name: 1 },
+      { Company_Name: 1 }
     ).lean();
 
     const companyMap = new Map();
@@ -156,7 +156,7 @@ const batchCreateFromExcelOld = asyncHandler(async (req, res, next) => {
         Personal_Email1: 1,
         Personal_Email2: 1,
         Contact_ID: 1,
-      },
+      }
     ).lean();
 
     // Create lookup maps for O(1) duplicate checking
@@ -378,7 +378,9 @@ const batchCreateFromExcel = asyncHandler(async (req, res, next) => {
       return sendError(next, "No file uploaded", 400);
     }
 
-    const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const jobId = `job_${Date.now()}_${Math.random()
+      .toString(36)
+      .substr(2, 9)}`;
     const batchName = req.body.batchName || "default_batch";
 
     jobStore.set(jobId, {
@@ -387,11 +389,11 @@ const batchCreateFromExcel = asyncHandler(async (req, res, next) => {
       progress: {
         totalRows: 0,
         processed: 0,
-        inserted: 0,           // new contacts added to DB
-        updated: 0,            // existing contacts updated
-        duplicates: 0,         // skipped — phone/email already exists
-        failed: 0,             // skipped — missing/unresolved company
-        companiesCreated: 0,   // new companies created (only for non-duplicate contacts)
+        inserted: 0, // new contacts added to DB
+        updated: 0, // existing contacts updated
+        duplicates: 0, // skipped — phone/email already exists
+        failed: 0, // skipped — missing/unresolved company
+        companiesCreated: 0, // new companies created (only for non-duplicate contacts)
         failReasons: {
           missingCompanyName: 0,
           companyNotFound: 0,
@@ -434,20 +436,20 @@ const getBatchJobStatus = asyncHandler(async (req, res, next) => {
   const { progress } = job;
   return sendResponse(res, 200, "Job status fetched", {
     jobId,
-    status: job.status,       // "processing" | "completed" | "failed"
+    status: job.status, // "processing" | "completed" | "failed"
     startedAt: job.startedAt,
     completedAt: job.completedAt,
     summary: {
-      totalRows:        progress.totalRows,
-      inserted:         progress.inserted,
-      updated:          progress.updated,
-      duplicates:       progress.duplicates,
-      failed:           progress.failed,
+      totalRows: progress.totalRows,
+      inserted: progress.inserted,
+      updated: progress.updated,
+      duplicates: progress.duplicates,
+      failed: progress.failed,
       companiesCreated: progress.companiesCreated,
     },
     failReasons: {
       missingCompanyName: progress.failReasons?.missingCompanyName ?? 0,
-      companyNotFound:    progress.failReasons?.companyNotFound    ?? 0,
+      companyNotFound: progress.failReasons?.companyNotFound ?? 0,
     },
     error: job.error || null,
   });
@@ -539,7 +541,7 @@ const _batchCreateFromExcel_OLD_SYNC = async (req, res, next) => {
     // --- Step 3: Get company mapping in one query ---
     const allCompanyDocs = await Company.find(
       { Company_Name: { $in: [...uniqueCompanies] } },
-      { Company_Name: 1 },
+      { Company_Name: 1 }
     ).lean();
 
     const companyMap = new Map();
@@ -583,7 +585,7 @@ const _batchCreateFromExcel_OLD_SYNC = async (req, res, next) => {
         Personal_Email1: 1,
         Personal_Email2: 1,
         Contact_ID: 1,
-      },
+      }
     ).lean();
 
     const duplicatePhoneMap = new Set();
@@ -829,7 +831,7 @@ const getAllData = asyncHandler(async (req, res, next) => {
       Contact.find(finalFilter)
         .populate(
           "Company_ID",
-          "Company_Name Website Industry Company_Phone1 Company_Phone2",
+          "Company_Name Website Industry Company_Phone1 Company_Phone2"
         )
         .skip(skip)
         .limit(limit)
@@ -905,7 +907,7 @@ const getAllCompanyName = asyncHandler(async (req, res, next) => {
   try {
     const companies = await Company.find(
       {},
-      { _id: 1, Company_Name: 1 },
+      { _id: 1, Company_Name: 1 }
     ).lean();
 
     return sendResponse(res, 200, "Companies fetched successfully", {
@@ -1051,7 +1053,7 @@ const updateData = asyncHandler(async (req, res, next) => {
       // Create history: compare changed fields
       const changedFields = Object.keys(payload).filter(
         (key) =>
-          String(existingContact[key] ?? "") !== String(payload[key] ?? ""),
+          String(existingContact[key] ?? "") !== String(payload[key] ?? "")
       );
 
       if (changedFields.length > 0) {
@@ -1082,7 +1084,7 @@ const updateData = asyncHandler(async (req, res, next) => {
         res,
         200,
         "Contact updated successfully",
-        updatedContact,
+        updatedContact
       );
     }
 
@@ -1093,7 +1095,7 @@ const updateData = asyncHandler(async (req, res, next) => {
       // Create history: compare changed fields
       const changedFields = Object.keys(payload).filter(
         (key) =>
-          String(existingCompany[key] ?? "") !== String(payload[key] ?? ""),
+          String(existingCompany[key] ?? "") !== String(payload[key] ?? "")
       );
 
       if (changedFields.length > 0) {
@@ -1124,7 +1126,7 @@ const updateData = asyncHandler(async (req, res, next) => {
         res,
         200,
         "Company updated successfully",
-        updatedCompany,
+        updatedCompany
       );
     }
 
@@ -1152,7 +1154,7 @@ const createANewCompany = asyncHandler(async (req, res, next) => {
       return sendError(
         next,
         "Company with this name and website already exists",
-        400,
+        400
       );
     }
 
@@ -1216,7 +1218,7 @@ const updateCompany = asyncHandler(async (req, res, next) => {
         return sendError(
           next,
           "Another company with this name and website already exists",
-          400,
+          400
         );
       }
     }
@@ -1244,14 +1246,14 @@ const updateCompany = asyncHandler(async (req, res, next) => {
     const updatedCompany = await Company.findByIdAndUpdate(
       companyId,
       updatedData,
-      { new: true },
+      { new: true }
     );
 
     return sendResponse(
       res,
       200,
       "Company updated successfully",
-      updatedCompany,
+      updatedCompany
     );
   } catch (err) {
     return sendError(next, err.message || "Failed to update company", 500);
@@ -1474,10 +1476,10 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
     };
 
     companyData.turnovers = companyData.turnovers.sort(
-      (a, b) => parseRange(a) - parseRange(b),
+      (a, b) => parseRange(a) - parseRange(b)
     );
     companyData.employeeRanges = companyData.employeeRanges.sort(
-      (a, b) => parseRange(a) - parseRange(b),
+      (a, b) => parseRange(a) - parseRange(b)
     );
 
     companyData.industries = companyData.industries.sort();
@@ -1587,7 +1589,7 @@ const dumpAllHistoryData = asyncHandler(async (req, res, next) => {
           : null;
 
       const callingData = await CallingData.findById(
-        history.callingData_id,
+        history.callingData_id
       ).lean();
       if (!callingData) continue;
 
@@ -1670,7 +1672,7 @@ const migrateToEngagementHistoryOld = asyncHandler(async (req, res, next) => {
           const agentNamesSet = new Set(
             callingData.callHistory.chatHistory
               .map((chat) => chat.agentName)
-              .filter(Boolean),
+              .filter(Boolean)
           );
           uniqueAgentNames.push(...agentNamesSet);
         }
@@ -1716,7 +1718,7 @@ const migrateToEngagementHistoryOld = asyncHandler(async (req, res, next) => {
               timestamp: template.timestamp,
               status: template.status,
               history: template.history || [],
-            }),
+            })
           ),
 
           // Email history from CallingData.emailTemplates
@@ -1749,7 +1751,7 @@ const migrateToEngagementHistoryOld = asyncHandler(async (req, res, next) => {
               isRegistered: chat.isRegistered,
               agent_id: chat.agent_id,
               agentName: chat.agentName,
-            }),
+            })
           ),
         };
 
@@ -1764,7 +1766,7 @@ const migrateToEngagementHistoryOld = asyncHandler(async (req, res, next) => {
           await EngagementHistory.findByIdAndUpdate(
             existingEngagement._id,
             engagementData,
-            { new: true },
+            { new: true }
           );
           migrationResults.push({
             callingDataId: callingData._id,
@@ -1802,7 +1804,7 @@ const migrateToEngagementHistoryOld = asyncHandler(async (req, res, next) => {
     return sendError(
       next,
       err.message || "Failed to migrate to engagement history",
-      500,
+      500
     );
   }
 });
@@ -1845,7 +1847,7 @@ const migrateToEngagementHistory = asyncHandler(async (req, res, next) => {
           const agentNamesSet = new Set(
             callingData.callHistory.chatHistory
               .map((chat) => chat.agentName)
-              .filter(Boolean),
+              .filter(Boolean)
           );
           uniqueAgentNames.push(...agentNamesSet);
         }
@@ -1891,7 +1893,7 @@ const migrateToEngagementHistory = asyncHandler(async (req, res, next) => {
               timestamp: template.timestamp,
               status: template.status,
               history: template.history || [],
-            }),
+            })
           ),
 
           // Email history from CallingData.emailTemplates
@@ -1924,7 +1926,7 @@ const migrateToEngagementHistory = asyncHandler(async (req, res, next) => {
               isRegistered: chat.isRegistered,
               agent_id: chat.agent_id,
               agentName: chat.agentName,
-            }),
+            })
           ),
         };
 
@@ -1939,7 +1941,7 @@ const migrateToEngagementHistory = asyncHandler(async (req, res, next) => {
           await EngagementHistory.findByIdAndUpdate(
             existingEngagement._id,
             engagementData,
-            { new: true },
+            { new: true }
           );
           migrationResults.push({
             callingDataId: callingData._id,
@@ -1971,7 +1973,7 @@ const migrateToEngagementHistory = asyncHandler(async (req, res, next) => {
                 Last_Engagement_Campaign: campaign.name,
               },
             },
-            { new: true },
+            { new: true }
           );
 
           console.log("Contact update result:", res);
@@ -1998,7 +2000,7 @@ const migrateToEngagementHistory = asyncHandler(async (req, res, next) => {
     return sendError(
       next,
       err.message || "Failed to migrate to engagement history",
-      500,
+      500
     );
   }
 });
@@ -2069,8 +2071,8 @@ const getContactsWithEngagementsOld = asyncHandler(async (req, res, next) => {
         (contact) =>
           contact.Company_ID?.Industry &&
           contact.Company_ID.Industry.toLowerCase().includes(
-            industry.toLowerCase(),
-          ),
+            industry.toLowerCase()
+          )
       );
     }
 
@@ -2100,18 +2102,18 @@ const getContactsWithEngagementsOld = asyncHandler(async (req, res, next) => {
         const hasEngagements = totalEngagements > 0;
 
         const isRegisteredInAnyCampaign = engagements.some(
-          (eng) => eng.isRegistered == true,
+          (eng) => eng.isRegistered == true
         );
 
         const campaignNames = [
           ...new Set(
-            engagements.map((eng) => eng.campaignName).filter(Boolean),
+            engagements.map((eng) => eng.campaignName).filter(Boolean)
           ),
         ];
 
         const allAgentNames = [
           ...new Set(
-            engagements.flatMap((eng) => eng.agentName || []).filter(Boolean),
+            engagements.flatMap((eng) => eng.agentName || []).filter(Boolean)
           ),
         ];
 
@@ -2120,16 +2122,16 @@ const getContactsWithEngagementsOld = asyncHandler(async (req, res, next) => {
 
         const totalTelecallingRemarks = engagements.reduce(
           (sum, eng) => sum + (eng.telecalling_remarks?.length || 0),
-          0,
+          0
         );
 
         const totalWhatsappMessages = engagements.reduce(
           (sum, eng) => sum + (eng.whatsappChatHistory?.length || 0),
-          0,
+          0
         );
 
         const totalEmailsSent = engagements.filter(
-          (eng) => eng.emailHistory?.templateName,
+          (eng) => eng.emailHistory?.templateName
         ).length;
 
         return {
@@ -2146,7 +2148,7 @@ const getContactsWithEngagementsOld = asyncHandler(async (req, res, next) => {
           totalWhatsappMessages,
           totalEmailsSent,
         };
-      }),
+      })
     );
 
     const totalPages = Math.ceil(totalContacts / limitNum);
@@ -2176,7 +2178,7 @@ const getContactsWithEngagementsOld = asyncHandler(async (req, res, next) => {
     return sendError(
       next,
       err.message || "Failed to fetch contacts with engagements",
-      500,
+      500
     );
   }
 });
@@ -2277,8 +2279,8 @@ const getContactsWithEngagementsWorking = asyncHandler(
           (contact) =>
             contact.Company_ID?.Industry &&
             contact.Company_ID.Industry.toLowerCase().includes(
-              industry.toLowerCase(),
-            ),
+              industry.toLowerCase()
+            )
         );
       }
 
@@ -2317,7 +2319,7 @@ const getContactsWithEngagementsWorking = asyncHandler(
             const campaignNames = engagements
               ? [
                   ...new Set(
-                    engagements.map((eng) => eng.campaignName).filter(Boolean),
+                    engagements.map((eng) => eng.campaignName).filter(Boolean)
                   ),
                 ]
               : [];
@@ -2327,7 +2329,7 @@ const getContactsWithEngagementsWorking = asyncHandler(
                   ...new Set(
                     engagements
                       .flatMap((eng) => eng.agentName || [])
-                      .filter(Boolean),
+                      .filter(Boolean)
                   ),
                 ]
               : [];
@@ -2342,14 +2344,14 @@ const getContactsWithEngagementsWorking = asyncHandler(
             const totalTelecallingRemarks = engagements
               ? engagements.reduce(
                   (sum, eng) => sum + (eng.telecalling_remarks?.length || 0),
-                  0,
+                  0
                 )
               : 0;
 
             const totalWhatsappMessages = engagements
               ? engagements.reduce(
                   (sum, eng) => sum + (eng.whatsappChatHistory?.length || 0),
-                  0,
+                  0
                 )
               : 0;
 
@@ -2375,7 +2377,7 @@ const getContactsWithEngagementsWorking = asyncHandler(
           } catch (engagementError) {
             console.error(
               `Error fetching engagements for contact ${contact.Contact_ID}:`,
-              engagementError,
+              engagementError
             );
             // Return contact without engagements if there's an error
             return {
@@ -2392,7 +2394,7 @@ const getContactsWithEngagementsWorking = asyncHandler(
               totalEmailsSent: 0,
             };
           }
-        }),
+        })
       );
 
       const totalPages = Math.ceil(totalContacts / limitNum);
@@ -2423,10 +2425,10 @@ const getContactsWithEngagementsWorking = asyncHandler(
       return sendError(
         next,
         err.message || "Failed to fetch contacts with engagements",
-        500,
+        500
       );
     }
-  },
+  }
 );
 
 const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
@@ -2465,16 +2467,27 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
       ];
     }
 
-    // Filter by location
     if (city) contactQuery.Contact_City = { $regex: city, $options: "i" };
     if (state) contactQuery.Contact_State = { $regex: state, $options: "i" };
     if (country)
       contactQuery.Contact_Country = { $regex: country, $options: "i" };
 
+    // Pre-fetch company IDs for industry filter so pagination is accurate
+    if (industry && industry.trim()) {
+      const matchingCompanies = await Company.find(
+        { Industry: { $regex: industry.trim(), $options: "i" } },
+        { _id: 1 }
+      )
+        .lean()
+        .exec();
+      contactQuery.Company_ID = {
+        $in: matchingCompanies.map((c) => c._id),
+      };
+    }
+
     const sortObj = {};
     sortObj[sortBy] = sortOrder === "asc" ? 1 : -1;
 
-    // PARALLEL QUERIES for better performance
     const [totalContacts, contacts] = await Promise.all([
       Contact.countDocuments(contactQuery).exec(),
       Contact.find(contactQuery)
@@ -2489,9 +2502,8 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
         .lean()
         .exec(),
     ]);
-    // Check if contacts exist
+
     if (!contacts || contacts.length === 0) {
-      console.log("No contacts found, returning empty response");
       return sendResponse(res, 200, "No contacts found", {
         contacts: [],
         pagination: {
@@ -2514,242 +2526,153 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
       });
     }
 
-    // Filter by industry if provided (after population)
-    let filteredContacts = contacts;
-    if (industry && industry.trim()) {
-      filteredContacts = contacts.filter(
-        (contact) =>
-          contact.Company_ID?.Industry &&
-          contact.Company_ID.Industry.toLowerCase().includes(
-            industry.toLowerCase(),
-          ),
-      );
+    // Batch fetch all engagements for this page in ONE query
+    const contactIds = contacts.map((c) => c.Contact_ID).filter(Boolean);
+    const engagementQuery = { contact_id: { $in: contactIds } };
+    if (campaignId && campaignId.trim()) {
+      engagementQuery.campaignId = campaignId.trim();
+    }
+    if (
+      isRegistered !== undefined &&
+      isRegistered !== null &&
+      isRegistered !== ""
+    ) {
+      engagementQuery.isRegistered =
+        isRegistered === "true" || isRegistered === true;
     }
 
-    // For each contact, get their engagements
-    const contactsWithEngagements = await Promise.all(
-      filteredContacts.map(async (contact, index) => {
-        try {
-          // Build engagement query
-          let engagementQuery = { contact_id: contact.Contact_ID };
+    const allEngagements = await EngagementHistory.find(engagementQuery)
+      .sort({ updatedAt: -1, createdAt: -1, last_engagement_date: -1 })
+      .lean()
+      .exec();
 
-          console.log(
-            `Base Engagement Query:`,
-            JSON.stringify(engagementQuery),
-          );
+    // Batch fetch all CallingData for enrichment in ONE query
+    const allCallingDataIds = allEngagements
+      .map((eng) => eng.callingDataId)
+      .filter(Boolean);
 
-          // Filter engagements by campaign if provided
-          if (campaignId && campaignId.trim()) {
-            engagementQuery.campaignId = campaignId.trim();
-            console.log(`Added campaignId filter: ${campaignId.trim()}`);
-          }
+    const callingDataMap = {};
+    if (allCallingDataIds.length > 0) {
+      const callingDocs = await CallingData.find(
+        { _id: { $in: allCallingDataIds } },
+        { emailTemplates: 1, whatsappTemplates: 1 }
+      ).lean();
+      callingDocs.forEach((doc) => {
+        callingDataMap[doc._id.toString()] = doc;
+      });
+    }
 
-          // Filter engagements by registration status if provided
-          if (isRegistered !== undefined && isRegistered !== null) {
-            engagementQuery.isRegistered =
-              isRegistered === "true" || isRegistered === true;
-            console.log(
-              `Added isRegistered filter: ${engagementQuery.isRegistered}`,
-            );
-          }
+    // Group engagements by contact_id for O(1) lookup
+    const engagementsByContactId = {};
+    allEngagements.forEach((eng) => {
+      const cid = eng.contact_id;
+      if (!engagementsByContactId[cid]) engagementsByContactId[cid] = [];
+      engagementsByContactId[cid].push(eng);
+    });
 
-          console.log(
-            `Final Engagement Query:`,
-            JSON.stringify(engagementQuery, null, 2),
-          );
+    // Enrich and compute stats in-memory — no per-contact DB calls
+    const contactsWithEngagements = contacts.map((contact) => {
+      try {
+        let engagements = engagementsByContactId[contact.Contact_ID] || [];
 
-          // Find all engagements for this contact with explicit exec()
-          const rawEngagements = await EngagementHistory.find(engagementQuery)
-            .sort({ updatedAt: -1, createdAt: -1, last_engagement_date: -1 })
-            .lean()
-            .exec();
-
-          console.log(`Engagements Found: ${rawEngagements?.length || 0}`);
-
-          // Enrich engagements with latest CallingData (templateDetails for email & whatsapp)
-          let engagements = rawEngagements || [];
-          if (engagements.length > 0) {
-            const callingDataIds = engagements
-              .map((eng) => eng.callingDataId)
-              .filter(Boolean);
-            if (callingDataIds.length > 0) {
-              const callingDocs = await CallingData.find(
-                { _id: { $in: callingDataIds } },
-                { emailTemplates: 1, whatsappTemplates: 1 },
-              ).lean();
-              const callingDataMap = {};
-              callingDocs.forEach((doc) => {
-                callingDataMap[doc._id.toString()] = doc;
-              });
-              engagements = engagements.map((eng) => {
-                const doc = callingDataMap[String(eng.callingDataId)];
-                if (!doc) return eng;
-                const enriched = { ...eng };
-                if (doc.emailTemplates?.templateName) {
-                  enriched.emailHistory = {
-                    templateId: doc.emailTemplates.templateId,
-                    templateName: doc.emailTemplates.templateName,
-                    timestamp: doc.emailTemplates.timestamp,
-                    status: doc.emailTemplates.status,
-                    messageId: doc.emailTemplates.messageId,
-                    templateDetails: doc.emailTemplates.templateDetails,
-                    history: doc.emailTemplates.history || [],
-                  };
-                }
-                if (doc.whatsappTemplates?.length > 0) {
-                  enriched.whatsappChatHistory = doc.whatsappTemplates.map(
-                    (t) => ({
-                      waMessageId: t.waMessageId,
-                      templateId: t.templateId,
-                      templateName: t.templateName,
-                      timestamp: t.timestamp,
-                      status: t.status,
-                      failureReason: t.failureReason,
-                      templateDetails: t.templateDetails,
-                      history: t.history || [],
-                    }),
-                  );
-                }
-                return enriched;
-              });
+        if (engagements.length > 0) {
+          engagements = engagements.map((eng) => {
+            const doc = callingDataMap[String(eng.callingDataId)];
+            if (!doc) return eng;
+            const enriched = { ...eng };
+            if (doc.emailTemplates?.templateName) {
+              enriched.emailHistory = {
+                templateId: doc.emailTemplates.templateId,
+                templateName: doc.emailTemplates.templateName,
+                timestamp: doc.emailTemplates.timestamp,
+                status: doc.emailTemplates.status,
+                messageId: doc.emailTemplates.messageId,
+                templateDetails: doc.emailTemplates.templateDetails,
+                history: doc.emailTemplates.history || [],
+              };
             }
-          }
-
-          if (engagements && engagements.length > 0) {
-            console.log(`First Engagement Sample:`, {
-              _id: engagements[0]._id,
-              campaignName: engagements[0].campaignName,
-              isRegistered: engagements[0].isRegistered,
-              isAtteneded: engagements[0].isAtteneded,
-              agentName: engagements[0].agentName,
-              whatsappCount: engagements[0].whatsappChatHistory?.length || 0,
-              emailExists: !!engagements[0].emailHistory?.templateName,
-              telecallingCount: engagements[0].telecalling_remarks?.length || 0,
-            });
-          }
-
-          // Calculate engagement statistics
-          const totalEngagements = engagements?.length || 0;
-          const hasEngagements = totalEngagements > 0;
-
-          const isRegisteredInAnyCampaign = engagements
-            ? engagements.some((eng) => eng.isRegistered === true)
-            : false;
-
-          const campaignNames = engagements
-            ? [
-                ...new Set(
-                  engagements.map((eng) => eng.campaignName).filter(Boolean),
-                ),
-              ]
-            : [];
-
-          const allAgentNames = engagements
-            ? [
-                ...new Set(
-                  engagements
-                    .flatMap((eng) => eng.agentName || [])
-                    .filter(Boolean),
-                ),
-              ]
-            : [];
-
-          const latestEngagementDate =
-            engagements && engagements.length > 0
-              ? engagements[0].last_engagement_date ||
-                engagements[0].updatedAt ||
-                engagements[0].createdAt
-              : null;
-
-          const totalTelecallingRemarks = engagements
-            ? engagements.reduce(
-                (sum, eng) => sum + (eng.telecalling_remarks?.length || 0),
-                0,
-              )
-            : 0;
-
-          const totalWhatsappMessages = engagements
-            ? engagements.reduce(
-                (sum, eng) => sum + (eng.whatsappChatHistory?.length || 0),
-                0,
-              )
-            : 0;
-
-          const totalEmailsSent = engagements
-            ? engagements.filter((eng) => eng.emailHistory?.templateName).length
-            : 0;
-
-          console.log(`Computed Stats:`, {
-            totalEngagements,
-            hasEngagements,
-            isRegisteredInAnyCampaign,
-            campaignNames,
-            allAgentNames,
-            totalTelecallingRemarks,
-            totalWhatsappMessages,
-            totalEmailsSent,
+            if (doc.whatsappTemplates?.length > 0) {
+              enriched.whatsappChatHistory = doc.whatsappTemplates.map((t) => ({
+                waMessageId: t.waMessageId,
+                templateId: t.templateId,
+                templateName: t.templateName,
+                timestamp: t.timestamp,
+                status: t.status,
+                failureReason: t.failureReason,
+                templateDetails: t.templateDetails,
+                history: t.history || [],
+              }));
+            }
+            return enriched;
           });
-
-          const result = {
-            ...contact,
-            engagements: engagements || [],
-            // Computed fields
-            totalEngagements,
-            hasEngagements,
-            isRegisteredInAnyCampaign,
-            campaignNames,
-            allAgentNames,
-            latestEngagementDate,
-            totalTelecallingRemarks,
-            totalWhatsappMessages,
-            totalEmailsSent,
-          };
-
-          // console.log(`Contact Result Keys:`, Object.keys(result));
-          // console.log(
-          //   `Engagements in Result:`,
-          //   result.engagements?.length || 0,
-          // );
-
-          return result;
-        } catch (engagementError) {
-          console.error(
-            `Error fetching engagements for contact ${contact.Contact_ID}:`,
-            engagementError,
-          );
-          console.error(`Error Stack:`, engagementError.stack);
-
-          // Return contact without engagements if there's an error
-          return {
-            ...contact,
-            engagements: [],
-            totalEngagements: 0,
-            hasEngagements: false,
-            isRegisteredInAnyCampaign: false,
-            campaignNames: [],
-            allAgentNames: [],
-            latestEngagementDate: null,
-            totalTelecallingRemarks: 0,
-            totalWhatsappMessages: 0,
-            totalEmailsSent: 0,
-          };
         }
-      }),
-    );
-    console.log("contacts-aman", contactsWithEngagements);
 
-    // Log summary of engagements
-    const summaryStats = contactsWithEngagements.reduce(
-      (acc, contact) => {
-        acc.totalEngagements += contact.totalEngagements || 0;
-        acc.totalWithEngagements += contact.hasEngagements ? 1 : 0;
-        acc.totalRegistered += contact.isRegisteredInAnyCampaign ? 1 : 0;
-        return acc;
-      },
-      { totalEngagements: 0, totalWithEngagements: 0, totalRegistered: 0 },
-    );
+        const totalEngagements = engagements.length;
+        const hasEngagements = totalEngagements > 0;
+        const isRegisteredInAnyCampaign = engagements.some(
+          (eng) => eng.isRegistered === true
+        );
+        const campaignNames = [
+          ...new Set(
+            engagements.map((eng) => eng.campaignName).filter(Boolean)
+          ),
+        ];
+        const allAgentNames = [
+          ...new Set(
+            engagements.flatMap((eng) => eng.agentName || []).filter(Boolean)
+          ),
+        ];
+        const latestEngagementDate =
+          engagements.length > 0
+            ? engagements[0].last_engagement_date ||
+              engagements[0].updatedAt ||
+              engagements[0].createdAt
+            : null;
+        const totalTelecallingRemarks = engagements.reduce(
+          (sum, eng) => sum + (eng.telecalling_remarks?.length || 0),
+          0
+        );
+        const totalWhatsappMessages = engagements.reduce(
+          (sum, eng) => sum + (eng.whatsappChatHistory?.length || 0),
+          0
+        );
+        const totalEmailsSent = engagements.filter(
+          (eng) => eng.emailHistory?.templateName
+        ).length;
 
-    // console.log(`Summary Stats:`, summaryStats);
+        return {
+          ...contact,
+          engagements,
+          totalEngagements,
+          hasEngagements,
+          isRegisteredInAnyCampaign,
+          campaignNames,
+          allAgentNames,
+          latestEngagementDate,
+          totalTelecallingRemarks,
+          totalWhatsappMessages,
+          totalEmailsSent,
+        };
+      } catch (engagementError) {
+        console.error(
+          `Error processing engagements for contact ${contact.Contact_ID}:`,
+          engagementError
+        );
+        return {
+          ...contact,
+          engagements: [],
+          totalEngagements: 0,
+          hasEngagements: false,
+          isRegisteredInAnyCampaign: false,
+          campaignNames: [],
+          allAgentNames: [],
+          latestEngagementDate: null,
+          totalTelecallingRemarks: 0,
+          totalWhatsappMessages: 0,
+          totalEmailsSent: 0,
+        };
+      }
+    });
 
     const totalPages = Math.ceil(totalContacts / limitNum);
 
@@ -2774,9 +2697,6 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
       },
     };
 
-    // console.log(`Response Pagination:`, response.pagination);
-    // console.log(`=== END getContactsWithEngagements ===\n`);
-
     return sendResponse(res, 200, "Contacts fetched successfully", response);
   } catch (err) {
     console.error("CRITICAL ERROR in getContactsWithEngagements:", err);
@@ -2784,7 +2704,7 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
     return sendError(
       next,
       err.message || "Failed to fetch contacts with engagements",
-      500,
+      500
     );
   }
 });

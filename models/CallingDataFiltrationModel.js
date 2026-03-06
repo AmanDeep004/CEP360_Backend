@@ -64,4 +64,7 @@ const CampaignFilter = getPrimaryConnection().model(
   CampaignFilterSchema
 );
 
+// Compound index for campaign + dataType + revision sort
+CampaignFilterSchema.index({ campaignId: 1, dataType: 1, revisionNo: -1 });
+
 export default CampaignFilter;

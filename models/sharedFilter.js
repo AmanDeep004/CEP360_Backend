@@ -74,4 +74,11 @@ SharedFilterSchema.index({ campaignId: 1, revisionNo: 1 });
 // Auto-delete expired links
 SharedFilterSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
+// filterId + isActive (frequently queried together)
+SharedFilterSchema.index({ filterId: 1, isActive: 1 });
+// campaignFilterId + isActive
+SharedFilterSchema.index({ campaignFilterId: 1, isActive: 1 });
+// user-scoped access
+SharedFilterSchema.index({ createdBy: 1, filterId: 1, isActive: 1 });
+
 export default getPrimaryConnection().model("SharedFilter", SharedFilterSchema);

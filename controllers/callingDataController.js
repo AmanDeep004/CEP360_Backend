@@ -242,7 +242,7 @@ const getAllCallingDataWithoutMasking = asyncHandler(async (req, res, next) => {
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
 
-    const filter = { CampaignId };
+    const filter = { CampaignId, "discrepencyInData.status": { $ne: true } };
 
     // search on multiple fields
     if (req.query.search && req.query.search.trim() !== "") {
@@ -297,7 +297,7 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
 
-    const filter = { CampaignId };
+    const filter = { CampaignId, "discrepencyInData.status": { $ne: true } };
 
     // search on multiple fields
     if (req.query.search && req.query.search.trim() !== "") {
@@ -413,7 +413,7 @@ const getDatabaseByAssignmentUnmasked = asyncHandler(async (req, res, next) => {
     const limNum = parseInt(limit, 10);
     const skip = (pageNum - 1) * limNum;
 
-    const filter = { CampaignId };
+    const filter = { CampaignId, "discrepencyInData.status": { $ne: true } };
 
     if (assignment === "assigned") filter.agentId = { $ne: null };
     if (assignment === "notassigned") filter.agentId = null;
@@ -519,7 +519,7 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
     const limNum = parseInt(limit, 10);
     const skip = (pageNum - 1) * limNum;
 
-    const filter = { CampaignId };
+    const filter = { CampaignId, "discrepencyInData.status": { $ne: true } };
 
     if (assignment === "assigned") filter.agentId = { $ne: null };
     if (assignment === "notassigned") filter.agentId = null;
@@ -638,7 +638,7 @@ const assignCallingDataToAgents = asyncHandler(async (req, res, next) => {
       }
 
       const unassignedData = await CallingData.find(
-        { agentId: { $exists: false } },
+        { agentId: { $exists: false }, "discrepencyInData.status": { $ne: true } },
         { _id: 1 }
       )
         .sort({ createdAt: 1 })

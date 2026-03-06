@@ -107,7 +107,7 @@ const CallingDataSchema = new mongoose.Schema(
     emailTemplates: {
       templateId: { type: String },
       templateName: { type: String, trim: true },
-      timestamp: { type: Date, default: Date.now },
+      timestamp: { type: Date },
       templateDetails: { type: Object, default: {} },
       status: { type: String, trim: true },
       messageId: { type: String, trim: true },
@@ -148,12 +148,24 @@ const CallingDataSchema = new mongoose.Schema(
       setAt: { type: Date, default: null },
       note: { type: String, trim: true, default: "" },
     },
+    discrepencyInData: {
+      status: { type: Boolean, default: false },
+      chatHistory: { type: Array },
+      misc: { type: Object, default: {} },
+    },
   },
   {
     timestamps: true,
   }
 );
 
-CallingDataSchema.index({ createdAt: 1, CampaignId: 1, agentId: 1 });
+// Covers: CampaignId-only, CampaignId+agentId, and CampaignId+agentId+sort(createdAt) queries
+CallingDataSchema.index({ CampaignId: 1, agentId: 1, createdAt: 1 });
+
+// Duplicate detection (filtration controller: find by CampaignId + Contact_ID $in)
+CallingDataSchema.index({ CampaignId: 1, Contact_ID: 1 });
+
+// Priority list (agentId + priority.isActive filter + priority date sort)
+CallingDataSchema.index({ agentId: 1, "priority.isActive": 1, "priority.priorityDate": 1 });
 
 export default getPrimaryConnection().model("CallingData", CallingDataSchema);

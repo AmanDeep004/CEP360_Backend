@@ -72,4 +72,7 @@ const ContactSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Index for default sort by createdAt
+ContactSchema.index({ createdAt: -1 });
+
 export default getSecondaryConnection().model("Contact", ContactSchema);
