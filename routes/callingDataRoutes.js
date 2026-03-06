@@ -48,12 +48,13 @@ router.post(
 );
 router.delete("/:id", protect, deletecallingData);
 router.get("/getAllCallingData/:CampaignId", protect, getAllCallingData);
-router.get("/campaignDataByAssignment/:CampaignId", getDatabaseByAssignment);
+router.get("/campaignDataByAssignment/:CampaignId", protect, getDatabaseByAssignment);
 router.get(
   "/campaignDataByAssignmentUnmasked/:CampaignId",
+  protect,
   getDatabaseByAssignmentUnmasked
 );
-router.put("/updateCallingData", UpdateCallingData);
+router.put("/updateCallingData", protect, UpdateCallingData);
 
 // to track external data registration
 router.post(
