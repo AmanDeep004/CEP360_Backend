@@ -1,6 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
+import helmet from "helmet";
 import expressWinston from "express-winston";
 import cookieParser from "cookie-parser";
 import { connectDB } from "./config/db.js";
@@ -52,6 +53,7 @@ const startServer = async () => {
 
     const app = express();
 
+    app.use(helmet());
     app.use(express.json({ limit: "1500mb" }));
     app.use(express.urlencoded({ extended: false, limit: "1500mb" }));
 

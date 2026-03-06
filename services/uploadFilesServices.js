@@ -27,9 +27,7 @@ const upload = async (req) => {
     const type = fields.type?.[0];
     const subtype = fields.subType?.[0];
     if (files) {
-      //const userId = req.user._id;
-
-      const userId = "6846891806a8c26f44064f95";
+      const userId = req.user._id;
       const filesDetails = files.file[0];
       //    console.log(filesDetails, "filesDetails");
 

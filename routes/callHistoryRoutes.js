@@ -3,6 +3,7 @@ import {
   createCallHistory,
   updateCallHistory,
   getAllCallHistoryByCallingDataId,
+  proxyCallRecording,
 } from "../controllers/callHistoryController.js";
 import { createCallRecording } from "../controllers/callRecordingController.js";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -34,4 +35,5 @@ router.get(
 );
 
 router.post("/createCallRecording", protect, createCallRecording);
+router.get("/recording/proxy", protect, proxyCallRecording);
 export default router;
