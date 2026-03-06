@@ -374,10 +374,10 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
               "Unknown",
             ],
           },
-          normalizedJobTitle: {
+          normalizedSeniority: {
             $cond: [
-              { $ifNull: ["$Job_Title", false] },
-              "$Job_Title",
+              { $ifNull: ["$Job_Seniority", false] },
+              "$Job_Seniority",
               "Unknown",
             ],
           },
@@ -387,7 +387,7 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
         $group: {
           _id: {
             industry: "$normalizedIndustry",
-            jobTitle: "$normalizedJobTitle",
+            seniority: "$normalizedSeniority",
           },
           count: { $sum: 1 },
         },
@@ -398,7 +398,7 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
           crossTabData: {
             $push: {
               industry: "$_id.industry",
-              jobTitle: "$_id.jobTitle",
+              seniority: "$_id.seniority",
               count: "$count",
             },
           },
@@ -440,29 +440,29 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
     // ================= BUILD TABLE =================
     const industries = [...new Set(crossTabData.map((i) => i.industry))].sort();
 
-    const jobTitles = [...new Set(crossTabData.map((i) => i.jobTitle))].sort();
+    const seniorities = [...new Set(crossTabData.map((i) => i.seniority))].sort();
 
     const crossTabTable = {};
     const industryTotals = {};
-    const jobTitleTotals = {};
+    const seniorityTotals = {};
 
     industries.forEach((ind) => {
       crossTabTable[ind] = {};
       industryTotals[ind] = 0;
 
-      jobTitles.forEach((jt) => {
-        crossTabTable[ind][jt] = 0;
+      seniorities.forEach((sen) => {
+        crossTabTable[ind][sen] = 0;
       });
     });
 
-    jobTitles.forEach((jt) => {
-      jobTitleTotals[jt] = 0;
+    seniorities.forEach((sen) => {
+      seniorityTotals[sen] = 0;
     });
 
-    crossTabData.forEach(({ industry, jobTitle, count }) => {
-      crossTabTable[industry][jobTitle] = count;
+    crossTabData.forEach(({ industry, seniority, count }) => {
+      crossTabTable[industry][seniority] = count;
       industryTotals[industry] += count;
-      jobTitleTotals[jobTitle] += count;
+      seniorityTotals[seniority] += count;
     });
 
     // ================= FINAL FORMAT =================
@@ -471,13 +471,13 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
       uniqueCompanies,
       crossTabulation: {
         industries,
-        seniorities: jobTitles, // Keeping same key for frontend compatibility
+        seniorities,
         data: crossTabTable,
         industryTotals,
-        seniorityTotals: jobTitleTotals,
+        seniorityTotals,
       },
       industryBreakdown: industryTotals,
-      seniorityBreakdown: jobTitleTotals,
+      seniorityBreakdown: seniorityTotals,
     };
 
     const filteredData = {
@@ -516,7 +516,7 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
     return sendResponse(
       res,
       200,
-      "Industry vs Job Title stats generated successfully",
+      "Industry vs Job Seniority stats generated successfully",
       {
         filteredData,
         campaignFilterId: campaignFilter._id,
