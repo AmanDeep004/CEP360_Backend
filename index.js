@@ -54,7 +54,25 @@ const startServer = async () => {
 
     const app = express();
 
-    app.use(helmet());
+    const frontendOrigin = process.env.CLIENT_URL || "http://localhost:4021";
+
+    app.use(
+      helmet({
+        contentSecurityPolicy: {
+          directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", "data:", "https:"],
+            connectSrc: ["'self'", frontendOrigin, "https://cep360.kestoneapps.in"],
+            fontSrc: ["'self'", "https:", "data:"],
+            objectSrc: ["'none'"],
+            frameSrc: ["'none'"],
+            upgradeInsecureRequests: [],
+          },
+        },
+      })
+    );
 
     const loginLimiter = rateLimit({
       windowMs: 15 * 60 * 1000, // 15 minutes
@@ -75,8 +93,8 @@ const startServer = async () => {
     app.use("/api/auth/login", loginLimiter);
     app.use(generalLimiter);
 
-    app.use(express.json({ limit: "1500mb" }));
-    app.use(express.urlencoded({ extended: false, limit: "1500mb" }));
+    app.use(express.json({ limit: "50mb" }));
+    app.use(express.urlencoded({ extended: false, limit: "50mb" }));
 
     const corsOptions = {
       origin: process.env.CLIENT_URL || "http://localhost:4021",

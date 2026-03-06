@@ -194,7 +194,7 @@ const getUserProfile = asyncHandler(async (req, res, next) => {
  */
 const updateUserProfile = asyncHandler(async (req, res, next) => {
   try {
-    const user = await User.findById(req.body._id);
+    const user = await User.findById(req.user._id);
 
     if (!user) {
       return sendError(next, "User not found", 404);
