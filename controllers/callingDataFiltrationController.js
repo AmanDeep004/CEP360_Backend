@@ -194,7 +194,13 @@ const callingDataFilterOld = asyncHandler(async (req, res, next) => {
         {
           $unwind: { path: "$company_info", preserveNullAndEmptyArrays: true },
         },
-        { $match: { "discrepencyInData.status": { $ne: true }, ...includeQuery, ...excludeQuery } },
+        {
+          $match: {
+            "discrepencyInData.status": { $ne: true },
+            ...includeQuery,
+            ...excludeQuery,
+          },
+        },
         { $group: { _id: "$Company_ID" } },
         { $count: "uniqueCompanies" },
       ]),
@@ -426,7 +432,13 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
             preserveNullAndEmptyArrays: true,
           },
         },
-        { $match: { "discrepencyInData.status": { $ne: true }, ...includeQuery, ...excludeQuery } },
+        {
+          $match: {
+            "discrepencyInData.status": { $ne: true },
+            ...includeQuery,
+            ...excludeQuery,
+          },
+        },
         { $group: { _id: "$Company_ID" } },
         { $count: "uniqueCompanies" },
       ]),
@@ -440,7 +452,9 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
     // ================= BUILD TABLE =================
     const industries = [...new Set(crossTabData.map((i) => i.industry))].sort();
 
-    const seniorities = [...new Set(crossTabData.map((i) => i.seniority))].sort();
+    const seniorities = [
+      ...new Set(crossTabData.map((i) => i.seniority)),
+    ].sort();
 
     const crossTabTable = {};
     const industryTotals = {};
@@ -1250,7 +1264,13 @@ const assignCallingDataToCampaign = asyncHandler(async (req, res, next) => {
           preserveNullAndEmptyArrays: true,
         },
       },
-      { $match: { "discrepencyInData.status": { $ne: true }, ...includeQuery, ...excludeQuery } },
+      {
+        $match: {
+          "discrepencyInData.status": { $ne: true },
+          ...includeQuery,
+          ...excludeQuery,
+        },
+      },
       {
         $sort: {
           EngagementPoints: -1, // Higher points first
@@ -1757,7 +1777,13 @@ const assignCallingDataToCampaignBoth = asyncHandler(async (req, res, next) => {
       {
         $unwind: { path: "$company_info", preserveNullAndEmptyArrays: true },
       },
-      { $match: { "discrepencyInData.status": { $ne: true }, ...kestoneInclude, ...kestoneExclude } },
+      {
+        $match: {
+          "discrepencyInData.status": { $ne: true },
+          ...kestoneInclude,
+          ...kestoneExclude,
+        },
+      },
       { $addFields: { sourceType: "Kestone" } },
     ];
 
@@ -1793,7 +1819,9 @@ const assignCallingDataToCampaignBoth = asyncHandler(async (req, res, next) => {
       {
         $unwind: { path: "$company_info", preserveNullAndEmptyArrays: true },
       },
-      { $match: { "discrepencyInData.status": { $ne: true }, ...clientInclude } },
+      {
+        $match: { "discrepencyInData.status": { $ne: true }, ...clientInclude },
+      },
       {
         $sort: {
           EngagementPoints: -1, // Higher points first

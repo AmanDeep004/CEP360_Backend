@@ -108,17 +108,17 @@ const CallingDataSchema = new mongoose.Schema(
       templateId: { type: String },
       templateName: { type: String, trim: true },
       timestamp: { type: Date },
-      templateDetails: { type: Object, default: {} },
+      templateDetails: { type: Object },
       status: { type: String, trim: true },
       messageId: { type: String, trim: true },
       history: [
         {
           status: { type: String, trim: true },
-          timestamp: { type: Date, default: Date.now },
+          timestamp: { type: Date },
           templateId: { type: String },
           templateName: { type: String, trim: true },
           data: { type: String, trim: true },
-          templateDetails: { type: Object, default: {} },
+          templateDetails: { type: Object },
         },
       ],
     },
@@ -166,6 +166,10 @@ CallingDataSchema.index({ CampaignId: 1, agentId: 1, createdAt: 1 });
 CallingDataSchema.index({ CampaignId: 1, Contact_ID: 1 });
 
 // Priority list (agentId + priority.isActive filter + priority date sort)
-CallingDataSchema.index({ agentId: 1, "priority.isActive": 1, "priority.priorityDate": 1 });
+CallingDataSchema.index({
+  agentId: 1,
+  "priority.isActive": 1,
+  "priority.priorityDate": 1,
+});
 
 export default getPrimaryConnection().model("CallingData", CallingDataSchema);
