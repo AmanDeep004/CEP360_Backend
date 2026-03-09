@@ -56,7 +56,7 @@ router.put(
 
 router.get("/users-by-role", protect, authorize(...ALL), getUsersByRole);
 router.delete("/:id", protect, authorize(ADMIN, RESOURCE_MANAGER), deleteUser);
-router.post("/logout", logout);
+router.post("/logout", protect, logout);
 // Admin only routes
 // router.get("/", protect, authorize("admin"), getUsers);
 export default router;
