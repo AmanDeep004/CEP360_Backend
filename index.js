@@ -54,6 +54,9 @@ const startServer = async () => {
 
     const app = express();
 
+    // Trust the first proxy (Nginx) so express-rate-limit can read X-Forwarded-For correctly
+    app.set("trust proxy", 1);
+
     const frontendOrigin = process.env.CLIENT_URL || "http://localhost:4021";
 
     app.use(
