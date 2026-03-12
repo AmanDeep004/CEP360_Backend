@@ -800,26 +800,8 @@ const getAllData = asyncHandler(async (req, res, next) => {
 
     let searchFilter = {};
     if (search && search.trim()) {
-      const regex = new RegExp(search.trim(), "i");
-      searchFilter = {
-        $or: [
-          { First_Name: regex },
-          { Last_Name: regex },
-          { Full_Name: regex },
-
-          { Job_Title: regex },
-          { Office_Email_1: regex },
-          { Office_Email_2: regex },
-          { Personal_Email1: regex },
-          { Personal_Email2: regex },
-          { Contact_Direct_Phone1: regex },
-          { Contact_Direct_Phone2: regex },
-          { Mobile_No: regex },
-          { Contact_City: regex },
-          { Contact_State: regex },
-          { Contact_Country: regex },
-        ],
-      };
+      // Use MongoDB text index for fast full-text search (replaces slow $or regex scan)
+      searchFilter = { $text: { $search: search.trim() } };
     }
 
     const finalFilter = Object.keys(searchFilter).length
@@ -905,10 +887,17 @@ const getAllCompanyData = asyncHandler(async (req, res, next) => {
 
 const getAllCompanyName = asyncHandler(async (req, res, next) => {
   try {
-    const companies = await Company.find(
-      {},
-      { _id: 1, Company_Name: 1 }
-    ).lean();
+    const search = req.query.search?.trim();
+    const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+
+    const filter = {};
+    if (search) {
+      filter.Company_Name = new RegExp(search, "i");
+    }
+
+    const companies = await Company.find(filter, { _id: 1, Company_Name: 1 })
+      .limit(limit)
+      .lean();
 
     return sendResponse(res, 200, "Companies fetched successfully", {
       total: companies.length,

@@ -399,7 +399,6 @@ const getAllAgentsDashboardData = asyncHandler(async (req, res, next) => {
     let agents;
 
     if (campaignId) {
-      // Get agents assigned to the campaign
       const assignedAgents = await AgentAssigned.find({
         campaign_id: campaignId,
         isAssigned: true,
@@ -416,57 +415,78 @@ const getAllAgentsDashboardData = asyncHandler(async (req, res, next) => {
         .select("_id employeeName email")
         .lean();
     } else {
-      // Get all agents
       agents = await User.find({ role: AGENT })
         .select("_id employeeName email")
         .lean();
     }
 
-    const responseData = [];
+    // Build match for single aggregation (replaces N+1 loop)
+    const agentIds = agents.map((a) => a._id);
+    const callingDataMatch = { agentId: { $in: agentIds } };
+    if (campaignId)
+      callingDataMatch.CampaignId = new mongoose.Types.ObjectId(campaignId);
+    if (startDate || endDate) callingDataMatch.createdAt = dateFilter;
 
-    for (const agent of agents) {
-      const query = { agentId: agent._id };
-      if (campaignId)
-        query.CampaignId = new mongoose.Types.ObjectId(campaignId);
-      if (startDate || endDate) query.createdAt = dateFilter;
+    const agentStats = await CallingData.aggregate([
+      { $match: callingDataMatch },
+      {
+        $lookup: {
+          from: "callhistories",
+          localField: "callHistory",
+          foreignField: "_id",
+          as: "ch",
+          pipeline: [{ $project: { chatHistory: 1 } }],
+        },
+      },
+      { $set: { ch: { $arrayElemAt: ["$ch", 0] } } },
+      {
+        $group: {
+          _id: "$agentId",
+          totalCallingDataAssigned: { $sum: 1 },
+          allChatHistories: { $push: "$ch.chatHistory" },
+        },
+      },
+    ]);
 
-      const callingData = await CallingData.find(query)
-        .select("callHistory isRegistered")
-        .populate({
-          path: "callHistory",
-          select: "chatHistory",
-        })
-        .lean();
-
+    // Index stats by agentId for O(1) lookup
+    const statsMap = new Map();
+    for (const stat of agentStats) {
       let totalCallsMade = 0;
       let totalRegistrations = 0;
       const remarkCount = {};
 
-      for (const entry of callingData) {
-        if (entry.callHistory?.chatHistory) {
-          totalCallsMade += entry.callHistory.chatHistory.length;
-
-          entry.callHistory.chatHistory.forEach((chat) => {
-            if (chat.remarks) {
-              remarkCount[chat.remarks] = (remarkCount[chat.remarks] || 0) + 1;
-            }
-            if (chat.isRegistered) {
-              totalRegistrations += 1;
-            }
-          });
+      for (const chatHistory of stat.allChatHistories) {
+        if (!Array.isArray(chatHistory)) continue;
+        totalCallsMade += chatHistory.length;
+        for (const chat of chatHistory) {
+          if (chat.remarks)
+            remarkCount[chat.remarks] = (remarkCount[chat.remarks] || 0) + 1;
+          if (chat.isRegistered) totalRegistrations += 1;
         }
       }
 
-      responseData.push({
-        agentId: agent._id,
-        name: agent.employeeName,
-        email: agent.email,
-        totalCallingDataAssigned: callingData.length,
+      statsMap.set(String(stat._id), {
+        totalCallingDataAssigned: stat.totalCallingDataAssigned,
         totalCallsMade,
         totalRegistrations,
         remarkCount,
       });
     }
+
+    const responseData = agents.map((agent) => {
+      const s = statsMap.get(String(agent._id)) || {
+        totalCallingDataAssigned: 0,
+        totalCallsMade: 0,
+        totalRegistrations: 0,
+        remarkCount: {},
+      };
+      return {
+        agentId: agent._id,
+        name: agent.employeeName,
+        email: agent.email,
+        ...s,
+      };
+    });
 
     return sendResponse(
       res,
@@ -495,7 +515,6 @@ const getAllAgentsStatsReport = asyncHandler(async (req, res, next) => {
     let agents;
 
     if (campaignId) {
-      // ✅ Agents of specific campaign
       const assignedAgents = await AgentAssigned.find({
         campaign_id: campaignId,
         isAssigned: true,
@@ -512,76 +531,103 @@ const getAllAgentsStatsReport = asyncHandler(async (req, res, next) => {
         .select("_id employeeName email")
         .lean();
     } else {
-      // ✅ All Agents for All Campaigns
       agents = await User.find({ role: AGENT })
         .select("_id employeeName email")
         .lean();
     }
 
-    const responseData = [];
+    const agentIds = agents.map((a) => a._id);
 
-    for (const agent of agents) {
-      let campaignName = "All Campaigns";
-
-      // ✅ Case 1: All Campaigns → find agent's assigned campaign name
-      if (!campaignId) {
-        const agentCampaign = await AgentAssigned.findOne({
-          agent_id: agent._id,
-          isAssigned: true,
-        })
-          .populate("campaign_id", "name")
-          .lean();
-
-        if (agentCampaign?.campaign_id?.name) {
-          campaignName = agentCampaign.campaign_id.name;
-        }
-      }
-
-      const query = { agentId: agent._id };
-
-      // ✅ Case 2: Specific Campaign
-      if (campaignId) {
-        query.CampaignId = campaignId;
-        campaignName = campaign?.name || "N/A";
-      }
-
-      if (startDate || endDate) query.createdAt = dateFilter;
-
-      const callingData = await CallingData.find(query)
-        .select("callHistory isRegistered")
-        .populate({
-          path: "callHistory",
-          select: "chatHistory",
-        })
+    // Batch fetch campaign names for all agents (replaces per-agent AgentAssigned.findOne N+1)
+    const campaignNameMap = new Map();
+    if (!campaignId) {
+      const agentCampaigns = await AgentAssigned.find({
+        agent_id: { $in: agentIds },
+        isAssigned: true,
+      })
+        .populate("campaign_id", "name")
         .lean();
 
+      for (const ac of agentCampaigns) {
+        const id = String(ac.agent_id);
+        if (!campaignNameMap.has(id) && ac.campaign_id?.name) {
+          campaignNameMap.set(id, ac.campaign_id.name);
+        }
+      }
+    }
+
+    // Single aggregation replaces N+1 CallingData queries
+    const callingDataMatch = { agentId: { $in: agentIds } };
+    if (campaignId)
+      callingDataMatch.CampaignId = new mongoose.Types.ObjectId(campaignId);
+    if (startDate || endDate) callingDataMatch.createdAt = dateFilter;
+
+    const agentStats = await CallingData.aggregate([
+      { $match: callingDataMatch },
+      {
+        $lookup: {
+          from: "callhistories",
+          localField: "callHistory",
+          foreignField: "_id",
+          as: "ch",
+          pipeline: [{ $project: { chatHistory: 1 } }],
+        },
+      },
+      { $set: { ch: { $arrayElemAt: ["$ch", 0] } } },
+      {
+        $group: {
+          _id: "$agentId",
+          totalCallingDataAssigned: { $sum: 1 },
+          allChatHistories: { $push: "$ch.chatHistory" },
+        },
+      },
+    ]);
+
+    const statsMap = new Map();
+    for (const stat of agentStats) {
       let totalCallsMade = 0;
       let totalRegistrations = 0;
       const remarkCount = {};
 
-      for (const entry of callingData) {
-        if (entry.callHistory?.chatHistory) {
-          totalCallsMade += entry.callHistory.chatHistory.length;
-
-          entry.callHistory.chatHistory.forEach((chat) => {
-            if (chat.remarks) {
-              remarkCount[chat.remarks] = (remarkCount[chat.remarks] || 0) + 1;
-            }
-            if (chat.isRegistered) totalRegistrations += 1;
-          });
+      for (const chatHistory of stat.allChatHistories) {
+        if (!Array.isArray(chatHistory)) continue;
+        totalCallsMade += chatHistory.length;
+        for (const chat of chatHistory) {
+          if (chat.remarks)
+            remarkCount[chat.remarks] = (remarkCount[chat.remarks] || 0) + 1;
+          if (chat.isRegistered) totalRegistrations += 1;
         }
       }
 
-      responseData.push({
+      statsMap.set(String(stat._id), {
+        totalCallingDataAssigned: stat.totalCallingDataAssigned,
+        totalCallsMade,
+        totalRegistrations,
+        remarkCount,
+      });
+    }
+
+    const responseData = agents.map((agent) => {
+      const s = statsMap.get(String(agent._id)) || {
+        totalCallingDataAssigned: 0,
+        totalCallsMade: 0,
+        totalRegistrations: 0,
+        remarkCount: {},
+      };
+      const campaignName = campaignId
+        ? campaign?.name || "N/A"
+        : campaignNameMap.get(String(agent._id)) || "All Campaigns";
+
+      return {
         campaignName,
         agentName: agent.employeeName,
         email: agent.email,
-        totalCallingDataAssigned: callingData.length,
-        totalCallsMade,
-        totalRegistrations,
-        remarkCount: JSON.stringify(remarkCount),
-      });
-    }
+        totalCallingDataAssigned: s.totalCallingDataAssigned,
+        totalCallsMade: s.totalCallsMade,
+        totalRegistrations: s.totalRegistrations,
+        remarkCount: JSON.stringify(s.remarkCount),
+      };
+    });
 
     // ✅ Download as Excel
     if (download === "true") {

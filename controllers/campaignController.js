@@ -98,19 +98,48 @@ const createCampaign = asyncHandler(async (req, res, next) => {
  */
 const getAllCampaigns = asyncHandler(async (req, res, next) => {
   try {
-    const campaigns = await Campaign.find()
-      .populate({
-        path: "programManager",
-        select: "employeeName email",
-      })
-      .sort({ createdAt: -1 })
-      .lean();
-    return sendResponse(
-      res,
-      200,
-      "Campaigns retrieved successfully",
-      campaigns
-    );
+    const page = parseInt(req.query.page);
+    const limit = Math.min(parseInt(req.query.limit) || 20, 200);
+    const search = req.query.search?.trim();
+
+    const filter = {};
+    if (search) {
+      const regex = new RegExp(search, "i");
+      filter.$or = [
+        { name: regex },
+        { clientName: regex },
+        { brandName: regex },
+        { type: regex },
+      ];
+    }
+
+    // No page param → flat array (backward compat for dropdowns)
+    if (!page) {
+      const campaigns = await Campaign.find(filter)
+        .populate({ path: "programManager", select: "employeeName email" })
+        .sort({ createdAt: -1 })
+        .lean();
+      return sendResponse(res, 200, "Campaigns retrieved successfully", campaigns);
+    }
+
+    const skip = (page - 1) * limit;
+    const [total, campaigns] = await Promise.all([
+      Campaign.countDocuments(filter),
+      Campaign.find(filter)
+        .populate({ path: "programManager", select: "employeeName email" })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
+
+    return sendResponse(res, 200, "Campaigns retrieved successfully", {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      data: campaigns,
+    });
   } catch (error) {
     return sendError(next, error.message, 500);
   }

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { protect, authorize } from "../../middleware/authMiddleware.js";
+import { cache } from "../../middleware/cacheMiddleware.js";
 import {
   getAllData,
   batchCreateFromExcel,
@@ -53,7 +54,7 @@ router.get("/getAllData", protect, getAllData);
 router.get("/getCompanyDataById", protect, getCompanyDataById);
 router.get("/getAllCompanyData", protect, getAllCompanyData);
 router.get("/getAllCompanyName", protect, getAllCompanyName);
-router.get("/getDropdownFilters", protect, getDropdownFilters);
+router.get("/getDropdownFilters", protect, cache(7200), getDropdownFilters);
 router.get("/getFiltersStats", protect, getFiltersStats);
 router.get("/getAllDumpHistoryData", dumpAllHistoryData);
 router.get("/batchJobStatus/:jobId", protect, getBatchJobStatus);

@@ -254,11 +254,39 @@ const updateUserProfile = asyncHandler(async (req, res, next) => {
  */
 const getAllUsers = asyncHandler(async (req, res, next) => {
   try {
-    const users = await User.find({ role: { $ne: "admin" } })
-      .select("-password")
-      .sort({ createdAt: -1 });
+    const page = parseInt(req.query.page);
+    const limit = Math.min(parseInt(req.query.limit) || 20, 200);
+    const search = req.query.search?.trim();
 
-    return sendResponse(res, 200, "Users retrieved successfully", users);
+    const filter = { role: { $ne: "admin" } };
+    if (search) {
+      const regex = new RegExp(search, "i");
+      filter.$or = [
+        { employeeName: regex },
+        { email: regex },
+        { employeeCode: regex },
+      ];
+    }
+
+    // No page param → flat array (backward compat)
+    if (!page) {
+      const users = await User.find(filter).select("-password").sort({ createdAt: -1 });
+      return sendResponse(res, 200, "Users retrieved successfully", users);
+    }
+
+    const skip = (page - 1) * limit;
+    const [total, users] = await Promise.all([
+      User.countDocuments(filter),
+      User.find(filter).select("-password").sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+    ]);
+
+    return sendResponse(res, 200, "Users retrieved successfully", {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      data: users,
+    });
   } catch (error) {
     return sendError(next, error.message, 500);
   }
