@@ -23,6 +23,9 @@ export const protect = asyncHandler(async (req, res, next) => {
     if (!req.user) {
       return sendError(next, "User not found", 400);
     }
+    if (decoded.tokenVersion !== req.user.tokenVersion) {
+      return sendError(next, "Session expired. Please login again.", 401);
+    }
     next();
   } catch (error) {
     return sendError(next, "Not authorized to access this route", 400);
@@ -65,7 +68,5 @@ export const authorize = (...roles) => {
     next();
   };
 };
-
-
 
 // export default { protect, authorize };

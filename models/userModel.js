@@ -1,9 +1,31 @@
 import { Schema, model } from "mongoose";
 import pkg from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { createCipheriv, createDecipheriv, randomBytes } from "crypto";
 import { UserRoleEnum } from "../utils/enum.js";
+import { getPrimaryConnection } from "../config/db.js";
 const { genSalt, hash, compare } = pkg;
 const { sign } = jwt;
+
+const PAN_ALGO = "aes-256-cbc";
+const getPanKey = () => Buffer.from(process.env.PAN_ENCRYPTION_KEY, "hex");
+
+const encryptPAN = (pan) => {
+  const iv = randomBytes(16);
+  const cipher = createCipheriv(PAN_ALGO, getPanKey(), iv);
+  return iv.toString("hex") + ":" + cipher.update(pan, "utf8", "hex") + cipher.final("hex");
+};
+
+const decryptPAN = (encrypted) => {
+  try {
+    const [ivHex, data] = encrypted.split(":");
+    if (!ivHex || !data) return encrypted; // plaintext fallback for existing data
+    const decipher = createDecipheriv(PAN_ALGO, getPanKey(), Buffer.from(ivHex, "hex"));
+    return decipher.update(data, "hex", "utf8") + decipher.final("utf8");
+  } catch {
+    return encrypted; // return as-is if decryption fails (legacy plaintext)
+  }
+};
 
 const {
   ADMIN,
@@ -94,8 +116,14 @@ const userSchema = new Schema(
     },
     signature: {
       type: String,
-      required: [true, "Signature is required"],
+      // required: [true, "Signature is required"],
       trim: true,
+      default:
+        "https://cdn.vosmos.live/CxoAdmin/image/1761718616440_download.png",
+      set: (v) =>
+        v && v.trim() !== ""
+          ? v
+          : "https://cdn.vosmos.live/CxoAdmin/image/1761718616440_download.png",
     },
     mobile: {
       type: Number,
@@ -127,7 +155,8 @@ const userSchema = new Schema(
     pan: {
       type: String,
       trim: true,
-      match: [/[A-Z]{5}[0-9]{4}[A-Z]{1}/, "Please provide a valid PAN number"],
+      set: (v) => (v ? encryptPAN(v) : v),
+      get: (v) => (v ? decryptPAN(v) : v),
     },
     ctc: {
       type: Number,
@@ -138,9 +167,15 @@ const userSchema = new Schema(
       type: String,
       trim: true,
     },
+    tokenVersion: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,
+    toJSON: { getters: true },
+    toObject: { getters: true },
   }
 );
 
@@ -155,8 +190,8 @@ userSchema.pre("save", async function (next) {
 
 // Sign JWT and return
 userSchema.methods.getSignedJwtToken = function () {
-  return sign({ id: this._id }, process.env.JWT_SECRET, {
-    expiresIn: "30d",
+  return sign({ id: this._id, tokenVersion: this.tokenVersion }, process.env.JWT_SECRET, {
+    expiresIn: "12h",
   });
 };
 
@@ -169,4 +204,5 @@ userSchema.methods.matchPassword = async function (enteredPassword) {
   return await compare(enteredPassword, user.password);
 };
 
-export default model("User", userSchema);
+const User = getPrimaryConnection().model("User", userSchema);
+export default User;

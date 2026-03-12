@@ -1,4 +1,5 @@
-import mongoose from "mongoose";
+import mongoose, { get } from "mongoose";
+import { getPrimaryConnection } from "../config/db.js";
 
 const filesSchema = new mongoose.Schema(
   {
@@ -33,5 +34,8 @@ const filesSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-const UploadedFiles = mongoose.model("UploadedFiles", filesSchema);
+const UploadedFiles = getPrimaryConnection().model(
+  "UploadedFiles",
+  filesSchema
+);
 export default UploadedFiles;

@@ -3,7 +3,9 @@ import {
   createCallHistory,
   updateCallHistory,
   getAllCallHistoryByCallingDataId,
+  proxyCallRecording,
 } from "../controllers/callHistoryController.js";
+import { createCallRecording } from "../controllers/callRecordingController.js";
 import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
 
@@ -13,36 +15,25 @@ const { ADMIN, PROGRAM_MANAGER, PRESALES_MANAGER, AGENT, RESOURCE_MANAGER } =
 
 router.post(
   "/create",
-  // protect,
-  // authorize(ADMIN, PROGRAM_MANAGER, AGENT),
+  protect,
+  authorize(ADMIN, PROGRAM_MANAGER, AGENT),
   createCallHistory
 );
 
 router.put(
   "/update/:id",
-  //   protect,
-  //   authorize(ADMIN, PROGRAM_MANAGER, AGENT),
+  protect,
+  authorize(ADMIN, PROGRAM_MANAGER, AGENT),
   updateCallHistory
 );
 
-// router.get(
-//   "/call-history/:calling-data-id",
-//   //   protect,
-//   //   authorize(ADMIN, PROGRAM_MANAGER, AGENT),
-//   updateCallHistory
-// );
-
-// router.get(
-//   "/campaign/:campaignId",
-//   //protect,
-//   // authorize(ADMIN, PROGRAM_MANAGER, AGENT, PRESALES_MANAGER),
-//   getCallHistoryByCampaignId
-// );
-
 router.get(
   "/:callingDataId",
-  // protect,
-  // authorize(ADMIN, PROGRAM_MANAGER, AGENT),
+  protect,
+  authorize(ADMIN, PROGRAM_MANAGER, AGENT),
   getAllCallHistoryByCallingDataId
 );
+
+router.post("/createCallRecording", protect, createCallRecording);
+router.get("/recording/proxy", protect, proxyCallRecording);
 export default router;

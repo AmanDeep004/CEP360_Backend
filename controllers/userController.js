@@ -86,6 +86,34 @@ const registerUser = asyncHandler(async (req, res, next) => {
   }
 });
 
+const resetUserPassword = asyncHandler(async (req, res, next) => {
+  try {
+    const { userId, newPassword } = req.body;
+
+    if (!userId || !newPassword) {
+      return sendError(next, "User ID and new password are required", 400);
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return sendError(next, "User not found", 404);
+    }
+
+    // const salt = await bcrypt.genSalt(10);
+    // const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    user.password = newPassword;
+    await user.save();
+
+    return sendResponse(res, 200, "Password reset successfully", {
+      userId: user._id,
+      employeeName: user.employeeName,
+      email: user.email,
+    });
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
 /**
  * @desc    Authenticate a user
  * @route   POST /api/users/login
@@ -132,6 +160,7 @@ const loginUser = asyncHandler(async (req, res, next) => {
       employeeCode: user.employeeCode,
       email: user.email,
       role: user.role,
+      status: user.status,
       // token,
     });
   } catch (error) {
@@ -165,7 +194,7 @@ const getUserProfile = asyncHandler(async (req, res, next) => {
  */
 const updateUserProfile = asyncHandler(async (req, res, next) => {
   try {
-    const user = await User.findById(req.body._id);
+    const user = await User.findById(req.user._id);
 
     if (!user) {
       return sendError(next, "User not found", 404);
@@ -326,6 +355,8 @@ const deleteUser = asyncHandler(async (req, res, next) => {
  */
 const logout = asyncHandler(async (req, res, next) => {
   try {
+    await User.findByIdAndUpdate(req.user._id, { $inc: { tokenVersion: 1 } });
+
     res.cookie("token", "", {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
@@ -334,14 +365,14 @@ const logout = asyncHandler(async (req, res, next) => {
       path: "/",
     });
 
-    return sendError(next, "Logout SuccessFully", 500, { logOut: true });
+    return sendResponse(res, 200, "Logout Successfully", { logOut: true });
   } catch (error) {
-    console.log("error", error.message);
     return sendError(next, error.message, 500);
   }
 });
 
 export {
+  resetUserPassword,
   registerUser,
   loginUser,
   updateUserProfile,

@@ -216,8 +216,28 @@ const getAllCallHistoryByCallingDataId = asyncHandler(
   }
 );
 
+const proxyCallRecording = asyncHandler(async (req, res, next) => {
+  const { appid, file } = req.query;
+  if (!appid || !file) {
+    return sendError(next, "Missing appid or file parameter", 400);
+  }
+  const secret = process.env.TELECMI_SECRET;
+  if (!secret) {
+    return sendError(next, "TeleCMI secret not configured", 500);
+  }
+  const telecmiUrl = `https://rest.telecmi.com/v2/play?appid=${appid}&secret=${secret}&file=${file}`;
+  const response = await fetch(telecmiUrl);
+  if (!response.ok) {
+    return sendError(next, "Failed to fetch recording from TeleCMI", 502);
+  }
+  res.setHeader("Content-Type", response.headers.get("content-type") || "audio/mpeg");
+  const { Readable } = await import("stream");
+  Readable.fromWeb(response.body).pipe(res);
+});
+
 export {
   createCallHistory,
   updateCallHistory,
   getAllCallHistoryByCallingDataId,
+  proxyCallRecording,
 };

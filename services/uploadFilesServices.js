@@ -6,7 +6,10 @@ import fs from "fs";
 
 const parseForm = (req) => {
   return new Promise((resolve, reject) => {
-    const form = formidable({ keepExtensions: true });
+    const form = formidable({
+      keepExtensions: true,
+      maxFileSize: 500 * 1024 * 1024, // 500 MB limit
+    });
 
     form.parse(req, (err, fields, files) => {
       if (err) {
@@ -24,13 +27,11 @@ const upload = async (req) => {
     const type = fields.type?.[0];
     const subtype = fields.subType?.[0];
     if (files) {
-      //const userId = req.user._id;
-
-      const userId = "6846891806a8c26f44064f95";
+      const userId = req.user._id;
       const filesDetails = files.file[0];
       //    console.log(filesDetails, "filesDetails");
 
-      const fileData = fs.readFileSync(files.file[0].filepath);
+      const fileStream = fs.createReadStream(files.file[0].filepath);
 
       const getFileExtension = (filename) => {
         return filename.slice(((filename.lastIndexOf(".") - 1) >>> 0) + 2);
@@ -44,9 +45,10 @@ const upload = async (req) => {
 
       var upload = await uploadFile(
         `${AWSBucket}/` + type,
-        fileData,
+        fileStream,
         ReportName,
-        filesDetails.mimetype
+        filesDetails.mimetype,
+        filesDetails.size
       );
       if (upload.src) {
         var file = new UploadedFiles({

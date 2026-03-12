@@ -3,7 +3,6 @@ import errorHandler from "../utils/index.js";
 import User from "../models/userModel.js";
 import AgentAssigned from "../models/agentAssigned.js";
 import { UserRoleEnum } from "../utils/enum.js";
-import XLSX from "xlsx";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 const {
   ADMIN,
@@ -92,64 +91,6 @@ const createCampaign = asyncHandler(async (req, res, next) => {
   }
 });
 
-const createCampaign_not_use = asyncHandler(async (req, res, next) => {
-  try {
-    const {
-      name,
-      type,
-      startDate,
-      endDate,
-      programManager,
-      status,
-      keyAccountManager,
-      jcNumber,
-      brandName,
-      clientName,
-      clientEmail,
-      clientContact,
-      comments,
-    } = req.body;
-    const campaignExists = await Campaign.exists({ name: name.trim() });
-
-    if (campaignExists) {
-      return sendError(next, "Campaign with this name already exists", 400);
-    }
-
-    const campaign = await Campaign.create({
-      name: name.trim(),
-      type,
-      startDate,
-      endDate,
-      programManager,
-      status: status || "active",
-      keyAccountManager,
-      jcNumber,
-      brandName,
-      clientName,
-      clientEmail,
-      clientContact,
-      comments,
-    });
-    // const populatedCampaign = await Campaign.findById(campaign._id)
-    //   .populate({
-    //     path: "programManager",
-    //     select: "employeeName email",
-    //   })
-    //   .populate({
-    //     path: "resourcesAssigned",
-    //     select: "employeeName email role",
-    //   })
-    //   .populate({
-    //     path: "resourcesReleased",
-    //     select: "employeeName email role",
-    //   });
-
-    return sendResponse(res, 200, "Campaign created successfully", campaign);
-  } catch (error) {
-    return sendError(next, error.message, 500);
-  }
-});
-
 /**
  * @desc    Get all campaigns
  * @route   GET /api/campaigns
@@ -162,6 +103,7 @@ const getAllCampaigns = asyncHandler(async (req, res, next) => {
         path: "programManager",
         select: "employeeName email",
       })
+      .sort({ createdAt: -1 })
       .lean();
     return sendResponse(
       res,
@@ -206,11 +148,13 @@ const getCampaign = asyncHandler(async (req, res, next) => {
 const updateCampaign = asyncHandler(async (req, res, next) => {
   try {
     const { _id, ...updateData } = req.body;
+    console.log("Update Data:", updateData);
 
     const updatedCampaign = await Campaign.findByIdAndUpdate(_id, updateData, {
       new: true,
       runValidators: true,
     }).populate({ path: "programManager", select: "employeeName email role" });
+    console.log("Updated Campaign:", updatedCampaign);
 
     if (!updatedCampaign) return sendError(next, "Campaign not found", 404);
 
@@ -229,47 +173,6 @@ const updateCampaign = asyncHandler(async (req, res, next) => {
  * @route   GET /api/campaigns/user/:userId
  * @access  Private
  */
-const getCampaignsByUserIdold = asyncHandler(async (req, res, next) => {
-  try {
-    const user = await User.findById(req.params.userId).select("role");
-    if (!user) return sendError(next, "User not found", 404);
-
-    let query = {};
-    switch (user.role) {
-      case PROGRAM_MANAGER:
-        query = { programManager: user._id };
-        break;
-      case AGENT:
-        query = {
-          $or: [
-            { resourcesAssigned: user._id },
-            { resourcesReleased: user._id },
-          ],
-        };
-        break;
-      case PRESALES_MANAGER:
-      case RESOURCE_MANAGER:
-      case DATABASE_MANAGER:
-      case ADMIN:
-        break;
-      default:
-        return sendError(next, "Invalid user role", 400);
-    }
-
-    const campaigns = await Campaign.find(query)
-      .populate({ path: "programManager", select: "employeeName email role" })
-      .lean();
-
-    return sendResponse(
-      res,
-      200,
-      "Campaigns retrieved successfully",
-      campaigns
-    );
-  } catch (error) {
-    return sendError(next, error.message, 500);
-  }
-});
 const getCampaignsByUserId = asyncHandler(async (req, res, next) => {
   try {
     const user = await User.findById(req.params.userId).select("role");
@@ -377,6 +280,75 @@ const deleteCampaign = asyncHandler(async (req, res, next) => {
   }
 });
 
+//update camapign data source type
+const updateCampaignDataSourceType = asyncHandler(async (req, res, next) => {
+  try {
+    const { dataSourceType } = req.body;
+
+    if (!dataSourceType) {
+      return sendError(next, "dataSourceType is required", 400);
+    }
+
+    const campaign = await Campaign.findById(req.params.id);
+    if (!campaign) {
+      return sendError(next, "Campaign not found", 404);
+    }
+
+    campaign.dataSourceType = dataSourceType;
+    await campaign.save();
+
+    return sendResponse(
+      res,
+      200,
+      "Data Source Type updated successfully",
+      campaign
+    );
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
+//update campaign stage
+const updateCampaignStage = asyncHandler(async (req, res, next) => {
+  try {
+    const { stage } = req.body;
+
+    if (!stage) {
+      return sendError(next, "Stage is required", 400);
+    }
+
+    const campaign = await Campaign.findById(req.params.id);
+    if (!campaign) {
+      return sendError(next, "Campaign not found", 404);
+    }
+
+    campaign.stage = stage;
+    await campaign.save();
+
+    return sendResponse(
+      res,
+      200,
+      `Stage updated to ${stage} successfully`,
+      campaign
+    );
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
+const checkEndedCampaigns = asyncHandler(async () => {
+  try {
+    const now = new Date();
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const endedCampaign = await Campaign.find({
+      endDate: { $gte: yesterday, $gte: now },
+    });
+    return endedCampaign;
+  } catch (error) {
+    return [];
+  }
+});
+
 export {
   createCampaign,
   getAllCampaigns,
@@ -384,4 +356,7 @@ export {
   updateCampaign,
   deleteCampaign,
   getCampaignsByUserId,
+  updateCampaignDataSourceType,
+  updateCampaignStage,
+  checkEndedCampaigns,
 };

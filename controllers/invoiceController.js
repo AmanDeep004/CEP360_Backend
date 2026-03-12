@@ -164,7 +164,7 @@ const deleteInvoice = asyncHandler(async (req, res, next) => {
 });
 
 /**
- * @desc    Get all invoices with optional filters
+ * @desc    Get all invoices of a pm with optional filters
  * @route   GET /api/invoices
  * @access  Private
  */
@@ -178,6 +178,32 @@ const getAllInvoices = asyncHandler(async (req, res, next) => {
     if (programManagerId) filter.programManagers = programManagerId;
 
     const invoices = await Invoice.find(filter)
+      .populate(
+        "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
+      )
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return sendResponse(res, 200, "Invoices retrieved successfully", invoices);
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
+/**
+ * @desc    Get all invoices data with optional filters
+ * @route   GET /api/invoices
+ * @access  Private
+ */
+const getAllInvoicesData = asyncHandler(async (req, res, next) => {
+  try {
+    const { month } = req.query;
+
+    if (!month) {
+      return sendError(next, "Month is required", 400);
+    }
+
+    const invoices = await Invoice.find({ month })
       .populate(
         "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
       )
@@ -348,6 +374,175 @@ const generateAllInvoices = asyncHandler(async (req, res, next) => {
     });
   } catch (error) {
     return sendError(next, error.message, 500);
+  }
+});
+
+const runInvoiceGeneration = asyncHandler(async () => {
+  try {
+    console.log(">>> Invoice generation started...");
+
+    //Calculate  26th-25th cycle
+    const now = new Date();
+    const istNow = new Date(
+      now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+    );
+
+    const year = istNow.getFullYear();
+    const month = istNow.getMonth();
+
+    // Correct date format (26th of current month to 25th of next month)
+    const salaryStartDate = new Date(year, month, 26)
+      .toISOString()
+      .split("T")[0];
+
+    const salaryEndDate = new Date(year, month + 1, 25)
+      .toISOString()
+      .split("T")[0];
+
+    console.log(`[INFO] Salary cycle: ${salaryStartDate} → ${salaryEndDate}`);
+
+    const startDateRef = new Date(salaryStartDate);
+    const endDateRef = new Date(salaryEndDate);
+
+    //  Validate date range
+    if (startDateRef > endDateRef) {
+      throw new Error("Start date must be before End date");
+    }
+
+    //  Fetch active campaigns
+    const campaigns = await Campaign.find({ status: "active" }).lean();
+    const campaignIds = campaigns.map((c) => c._id.toString());
+
+    if (campaignIds.length === 0) {
+      console.log(">>> No active campaigns found.");
+      return {
+        success: true,
+        salaryStartDate,
+        salaryEndDate,
+        totalInvoicesAttempted: 0,
+        successfullyInserted: 0,
+      };
+    }
+
+    const assignments = await AgentAssigned.find({
+      campaign_id: { $in: campaignIds },
+    })
+      .populate("campaign_id agent_id")
+      .lean();
+
+    const invoicesToInsert = [];
+
+    //  Loop through assignments with proper data
+    for (const assignment of assignments) {
+      const agent = assignment.agent_id;
+      const campaign = assignment.campaign_id;
+
+      if (!agent || !campaign) continue;
+
+      const assignedAt = assignment.assigned_date
+        ? new Date(assignment.assigned_date)
+        : startDateRef;
+
+      const releasedAt = assignment.released_date
+        ? new Date(assignment.released_date)
+        : null;
+
+      let fromDate = assignedAt < startDateRef ? startDateRef : assignedAt;
+
+      let toDate = releasedAt
+        ? releasedAt
+        : campaign?.endDate
+        ? new Date(campaign.endDate)
+        : endDateRef;
+
+      if (toDate > endDateRef) toDate = endDateRef;
+
+      const attendanceSummary = await getAttendanceSummary(
+        agent._id,
+        fromDate,
+        toDate
+      );
+
+      const noOfDaysWorked = attendanceSummary.presentDays || 0;
+      const noOfDaysAbsent = attendanceSummary.absentDays || 0;
+      const totalDaysGenerated = attendanceSummary.totalDays || 0;
+
+      const month = fromDate.toLocaleString("default", {
+        month: "long",
+        year: "numeric",
+      });
+
+      //  Check for duplicate invoice
+      const existingInvoice = await Invoice.findOne({
+        employeeId: agent._id,
+        campaign_id: campaign._id,
+        month,
+      });
+
+      if (existingInvoice) continue;
+
+      //  Calculate salary with all values
+      const totalDaysInRange =
+        Math.ceil((endDateRef - startDateRef) / (1000 * 60 * 60 * 24)) + 1;
+      const daysAvailable = totalDaysInRange - noOfDaysWorked - noOfDaysAbsent;
+      const salary = (agent.ctc / totalDaysInRange) * noOfDaysWorked;
+
+      invoicesToInsert.push({
+        employeeId: agent._id,
+        campaign_id: campaign._id,
+        isMultiCampaign: false,
+        programManagers: campaign.programManager,
+        startDate: fromDate,
+        endDate: toDate,
+        month,
+        noOfDaysWorked,
+        noOfDaysAbsent,
+        incentive: 0,
+        arrears: 0,
+        extraPay: 0,
+        salaryGenBy: null, // cron = system
+        totalDaysGenerated,
+        daysAvailabletoGenerate: daysAvailable < 0 ? 0 : daysAvailable,
+        invoiceGenerated: {
+          status: false,
+          genBy: null,
+          invoiceUrl: "",
+        },
+        salary,
+      });
+    }
+
+    // Insert invoices with proper error handling
+    let insertedCount = 0;
+
+    if (invoicesToInsert.length > 0) {
+      await Invoice.insertMany(invoicesToInsert, { ordered: false })
+        .then((docs) => {
+          insertedCount = docs.length;
+        })
+        .catch((err) => {
+          if (err.code === 11000) {
+            console.warn("Some duplicate invoices were skipped.");
+          } else {
+            throw err;
+          }
+        });
+    }
+
+    console.log(">>> Invoice generation completed.");
+    console.log(`>>> Total attempted: ${invoicesToInsert.length}`);
+    console.log(`>>> Successfully inserted: ${insertedCount}`);
+
+    return {
+      success: true,
+      salaryStartDate,
+      salaryEndDate,
+      totalInvoicesAttempted: invoicesToInsert.length,
+      successfullyInserted: insertedCount,
+    };
+  } catch (error) {
+    console.error(">>> Invoice generation error:", error);
+    throw error;
   }
 });
 
@@ -853,9 +1048,11 @@ export {
   updateInvoice,
   deleteInvoice,
   getAllInvoices,
+  getAllInvoicesData,
   getInvoicesByPMId,
   generateAllInvoices,
   getAgentInvoicesDataByMonth,
+  runInvoiceGeneration,
   updateAndGenerateInvoice,
   getAgentsByProgramManager,
   getInvoicesByPMAndMonth,

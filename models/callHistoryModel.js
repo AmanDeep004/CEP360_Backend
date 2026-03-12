@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { getPrimaryConnection } from "../config/db.js";
 
 const chatEntrySchema = new mongoose.Schema(
   {
@@ -40,4 +41,4 @@ const callHistorySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-export default mongoose.model("CallHistory", callHistorySchema);
+export default getPrimaryConnection().model("CallHistory", callHistorySchema);

@@ -1,7 +1,10 @@
 import mongoose from "mongoose";
+import { getPrimaryConnection } from "../config/db.js";
 import User from "./userModel.js";
 import { ProgramType } from "../utils/enum.js";
 const { ALL } = ProgramType;
+
+// const briefSchema = new mongoose.Schema({});
 
 const campaignSchema = new mongoose.Schema(
   {
@@ -21,7 +24,7 @@ const campaignSchema = new mongoose.Schema(
 
     category: {
       type: String,
-      required: true,
+      required: false,
       enum: ["Virtual Event", "Webinar", "Physical Event"],
     },
 
@@ -82,13 +85,55 @@ const campaignSchema = new mongoose.Schema(
     jobFunctions: { type: String, required: false },
 
     comments: { type: String, required: false },
-    clientDataType: {
+    // for the data source type
+    dataSourceType: {
       type: String,
       required: false,
-      enum: ["Kestone", "Client", "Both"],
+      default: "Kestone",
+      enum: ["Kestone", "Client", "Both", "ThirdParty"],
     },
+
+    senderEmail: [
+      {
+        email: { type: String, trim: true },
+        timestamp: { type: Date, default: Date.now },
+      },
+    ],
+
+    stage: {
+      type: String,
+      required: true,
+      default: "NotFiltered",
+      enum: {
+        values: [
+          "NotFiltered",
+          "Filtered",
+          "SuggestedToClient",
+          "ClientSuggestedMoreFilters",
+          "RevisionRequested",
+          "Finalized",
+          "CallingDataAssigned",
+          "AddtionalCallingDataMidCampaign",
+        ],
+        message: "{VALUE} is not a valid stage",
+      },
+    },
+    isCallingDataAssigned: { type: Boolean, default: false },
+    filterBatches: [
+      {
+        filterBatchId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "CampaignFilter",
+        },
+      },
+    ],
+
+    // brief: {
+    //   type: [briefSchema],
+    //   required: false,
+    // },
   },
   { timestamps: true }
 );
 
-export default mongoose.model("Campaign", campaignSchema);
+export default getPrimaryConnection().model("Campaign", campaignSchema);

@@ -8,7 +8,17 @@ import {
   getDatabaseByAssignment,
   assignCallingDataToAgents,
   unassignCallingDataFromAgents,
+  reassignCallingDatatoAgents,
+  UpdateCallingData,
+  getDatabaseByAssignmentUnmasked,
+  setPriority,
+  getPriorityList,
+  closePriority,
 } from "../controllers/callingDataController.js";
+import {
+  uploadExternalDataController,
+  getAllExternalRegistrations,
+} from "../controllers/externalRegistrationController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
@@ -27,15 +37,44 @@ router.get("/getCallingDataById/:id", protect, getCallingDataById);
 router.put("/", protect, editcallingData);
 router.post("/assignCallingDataToAgents", protect, assignCallingDataToAgents);
 router.post(
+  "/reassignCallingDatatoAgents",
+  protect,
+  reassignCallingDatatoAgents
+);
+router.post(
   "/unassignCallingDataFromAgents",
   protect,
   unassignCallingDataFromAgents
 );
 router.delete("/:id", protect, deletecallingData);
 router.get("/getAllCallingData/:CampaignId", protect, getAllCallingData);
-router.get("/campaignDataByAssignment/:CampaignId", getDatabaseByAssignment);
+router.get("/campaignDataByAssignment/:CampaignId", protect, getDatabaseByAssignment);
+router.get(
+  "/campaignDataByAssignmentUnmasked/:CampaignId",
+  protect,
+  getDatabaseByAssignmentUnmasked
+);
+router.put("/updateCallingData", protect, UpdateCallingData);
+
+// to track external data registration
+router.post(
+  "/externalRegistrationData",
+  protect,
+  upload.single("file"),
+  uploadExternalDataController
+);
+
+router.get(
+  "/getAllExternalRegistrations/:CampaignId",
+  protect,
+  getAllExternalRegistrations
+);
 
 // here  need to add filter based  calling data as well
 // get all non assigned calling data
+
+router.put("/setPriority/:id", protect, setPriority);
+router.get("/getPriorityList/:agentId", protect, getPriorityList);
+router.put("/closePriority/:id", protect, closePriority);
 
 export default router;
