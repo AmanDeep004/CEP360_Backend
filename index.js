@@ -3,9 +3,12 @@ import dotenv from "dotenv";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import { RedisStore } from "rate-limit-redis";
 import expressWinston from "express-winston";
 import cookieParser from "cookie-parser";
 import { connectDB } from "./config/db.js";
+import { getRedisClient, disconnectRedis } from "./config/redis.js";
+import { getJob } from "./utils/jobTracker.js";
 import cron from "node-cron";
 import { errorHandler } from "./middleware/errorMiddleware.js";
 import { expressWinstonErrorLogger, logger } from "./logger/index.js";
@@ -77,20 +80,31 @@ const startServer = async () => {
       })
     );
 
+    // Initialize Redis client (auto-connects on first use)
+    const redisClient = getRedisClient();
+
     const loginLimiter = rateLimit({
-      windowMs: 15 * 60 * 1000, // 15 minutes
+      windowMs: 15 * 60 * 1000,
       max: 10,
       message: { success: false, message: "Too many login attempts. Please try again after 15 minutes." },
       standardHeaders: true,
       legacyHeaders: false,
+      store: new RedisStore({
+        sendCommand: (...args) => redisClient.call(...args),
+        prefix: "rl:login:",
+      }),
     });
 
     const generalLimiter = rateLimit({
-      windowMs: 60 * 1000, // 1 minute
+      windowMs: 60 * 1000,
       max: 200,
       message: { success: false, message: "Too many requests. Please slow down." },
       standardHeaders: true,
       legacyHeaders: false,
+      store: new RedisStore({
+        sendCommand: (...args) => redisClient.call(...args),
+        prefix: "rl:general:",
+      }),
     });
 
     app.use("/api/auth/login", loginLimiter);
@@ -133,6 +147,13 @@ const startServer = async () => {
     app.use("/api/linkedin", linkedinDataScrapingRoute);
     app.use("/api/mailercloud", mailerCloudRoute);
     app.use("/api/whatsapp", whatsappRoute);
+
+    // Job status endpoint — poll progress of bulk email/whatsapp sends
+    app.get("/api/jobs/:jobId", async (req, res) => {
+      const job = await getJob(req.params.jobId);
+      if (!job) return res.status(404).json({ success: false, message: "Job not found" });
+      return res.status(200).json({ success: true, message: "Job found", data: job });
+    });
 
     // Schedule: At 23:00 on day-of-month 25 for expected salary generation
     cron.schedule(
@@ -304,8 +325,9 @@ const startServer = async () => {
             await secondaryConnection.close();
             console.log("Secondary database connection closed");
           }
+          await disconnectRedis();
         } catch (error) {
-          console.error("Error closing database connections:", error);
+          console.error("Error closing connections:", error);
         }
 
         process.exit(0);

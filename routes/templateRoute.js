@@ -7,6 +7,7 @@ import {
 
 import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
+import { cache, invalidateCache } from "../middleware/cacheMiddleware.js";
 const { ADMIN, PROGRAM_MANAGER, PRESALES_MANAGER, AGENT, RESOURCE_MANAGER } =
   UserRoleEnum;
 
@@ -15,6 +16,7 @@ router.get(
   "/getAllTemplateData",
   protect,
   authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT),
+  cache(300),
   getAllTemplates
 );
 router.post(

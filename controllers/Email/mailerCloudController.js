@@ -3,6 +3,7 @@ import errorHandler from "../../utils/index.js";
 import EmailStatus from "../../models/Email/EmailStatusModel.js";
 import CallingData from "../../models/callingDataModal.js";
 import { logger } from "../../logger/index.js";
+import { createJob, updateJob, completeJob, failJob } from "../../utils/jobTracker.js";
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
@@ -177,6 +178,19 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
       campaignId,
     });
 
+    // Create Redis job and respond immediately
+    const jobId = await createJob("email", callingDataIds.length);
+    console.log("[MAILER_SEND] Stage 3: Job created", { jobId });
+    sendResponse(res, 200, "Email sending started", {
+      jobId,
+      totalContacts: callingDataIds.length,
+      templateName,
+    });
+
+    // ---- BACKGROUND PROCESSING ----
+    (async () => {
+      try {
+
     ///////// FETCH TEMPLATE
     const baseUrl = process.env.BASE_URL;
     console.log("[MAILER_SEND] Stage 3: Fetching template", { baseUrl });
@@ -195,7 +209,8 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
 
     if (!template?.html || !template?.plainText) {
       console.log("[MAILER_SEND] Stage 4: Invalid template payload");
-      return sendError(next, "Invalid template received", 400);
+      await failJob(jobId, "Invalid template received");
+      return;
     }
     console.log("[MAILER_SEND] Stage 4: Template validated", {
       templateName: template.name || templateName,
@@ -575,6 +590,7 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
         successCount,
         failureCount,
       });
+      await updateJob(jobId, successCount, failureCount);
       await new Promise((resolve) => setTimeout(resolve, 3000));
     }
 
@@ -583,22 +599,26 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
       successCount,
       failureCount,
     });
-    return sendResponse(res, 200, "Email process completed", {
-      total: results.length,
-      successCount,
-      failureCount,
-      results,
-    });
+    await completeJob(jobId);
+
+      } catch (err) {
+        const fatalErrorMessage =
+          err?.response?.data?.message ||
+          err?.response?.data?.error?.message ||
+          err?.message ||
+          "Email sending failed";
+        console.error("[MAILER_SEND] Background process failed:", fatalErrorMessage);
+        await failJob(jobId, fatalErrorMessage);
+      }
+    })();
+
   } catch (err) {
     console.error("Send Email Fatal Error:", err);
-
     const fatalErrorMessage =
       err?.response?.data?.message ||
       err?.response?.data?.error?.message ||
       err?.message ||
       "Email sending failed";
-    console.log("fatalErrorMessage:", fatalErrorMessage);
-
     return sendError(next, fatalErrorMessage, 500);
   }
 });
