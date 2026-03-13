@@ -431,7 +431,7 @@ const uploadProfiles = asyncHandler(async (req, res, next) => {
       } catch (wizaError) {
         console.error(
           "Wiza API Error:",
-          wizaError.response?.data || wizaError.message
+          wizaError.response?.data || wizaError.message || wizaError
         );
 
         // Extract error message from Wiza response
