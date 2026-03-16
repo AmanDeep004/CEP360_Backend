@@ -3,11 +3,9 @@ import dotenv from "dotenv";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import { RedisStore } from "rate-limit-redis";
 import expressWinston from "express-winston";
 import cookieParser from "cookie-parser";
 import { connectDB } from "./config/db.js";
-import { getRedisClient, disconnectRedis } from "./config/redis.js";
 import { getJob } from "./utils/jobTracker.js";
 import cron from "node-cron";
 import { errorHandler } from "./middleware/errorMiddleware.js";
@@ -80,19 +78,12 @@ const startServer = async () => {
       })
     );
 
-    // Initialize Redis client (auto-connects on first use)
-    const redisClient = getRedisClient();
-
     const loginLimiter = rateLimit({
       windowMs: 15 * 60 * 1000,
       max: 10,
       message: { success: false, message: "Too many login attempts. Please try again after 15 minutes." },
       standardHeaders: true,
       legacyHeaders: false,
-      store: new RedisStore({
-        sendCommand: (...args) => redisClient.call(...args),
-        prefix: "rl:login:",
-      }),
     });
 
     const generalLimiter = rateLimit({
@@ -101,10 +92,6 @@ const startServer = async () => {
       message: { success: false, message: "Too many requests. Please slow down." },
       standardHeaders: true,
       legacyHeaders: false,
-      store: new RedisStore({
-        sendCommand: (...args) => redisClient.call(...args),
-        prefix: "rl:general:",
-      }),
     });
 
     app.use("/api/auth/login", loginLimiter);
@@ -325,7 +312,7 @@ const startServer = async () => {
             await secondaryConnection.close();
             console.log("Secondary database connection closed");
           }
-          await disconnectRedis();
+
         } catch (error) {
           console.error("Error closing connections:", error);
         }

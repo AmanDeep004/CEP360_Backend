@@ -29,7 +29,6 @@
     "formidable": "^3.5.4",
     "fs": "^0.0.1-security",
     "helmet": "^8.1.0",
-    "ioredis": "^5.10.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.12.2",
     "morgan": "^1.10.0",
@@ -39,7 +38,6 @@
     "number-to-words": "^1.2.4",
     "p-limit": "^7.2.0",
     "pdfkit": "^0.17.1",
-    "rate-limit-redis": "^4.3.1",
     "winston": "^3.17.0",
     "winston-daily-rotate-file": "^5.0.0",
     "xlsx": "^0.18.5"
