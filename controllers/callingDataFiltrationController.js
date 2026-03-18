@@ -288,7 +288,7 @@ async function insertContactsChunk(entries, campaignId) {
  */
 async function streamInsertContacts(pipeline, opts) {
   const CHUNK_SIZE = 1000;
-  const cursor = Contact.aggregate(pipeline, { allowDiskUse: true }).cursor();
+  const cursor = Contact.aggregate(pipeline).option({ allowDiskUse: true }).cursor();
 
   let chunk = [];
   let insertedCount = 0;
