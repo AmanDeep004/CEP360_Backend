@@ -162,15 +162,16 @@ const ASSIGN_PROJECT = {
 /**
  * Build the optimised assignment pipeline:
  *   $match (contact fields only)         ← uses indexes, small docs
- *   $sort (EngagementPoints, date)        ← sort BEFORE $lookup → no 32MB limit
  *   $lookup + $unwind (companies)
  *   $match (company fields, if any)
  *   $project (only needed fields)
+ *
+ * $sort removed — exceeds MongoDB 32MB in-memory limit on large collections.
+ * All contacts are inserted regardless, so order does not affect result data.
  */
 function buildAssignPipeline(preLookupMatch, postLookupMatch) {
   const pipeline = [
     { $match: preLookupMatch },
-    { $sort: { EngagementPoints: -1, Last_Engagement_Date: -1 } },
     {
       $lookup: {
         from: "companies",
@@ -288,7 +289,7 @@ async function insertContactsChunk(entries, campaignId) {
  */
 async function streamInsertContacts(pipeline, opts) {
   const CHUNK_SIZE = 1000;
-  const cursor = Contact.aggregate(pipeline).option({ allowDiskUse: true }).cursor();
+  const cursor = Contact.collection.aggregate(pipeline, { allowDiskUse: true });
 
   let chunk = [];
   let insertedCount = 0;
