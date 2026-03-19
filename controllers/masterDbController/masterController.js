@@ -3,6 +3,7 @@ import fs from "fs";
 import errorHandler from "../../utils/index.js";
 import Company from "../../models/MasterDBModel/companyModel.js";
 import Contact from "../../models/MasterDBModel/contactModel.js";
+import CampaignFilter from "../../models/CallingDataFiltrationModel.js";
 import CompanyHistory from "../../models/MasterDBModel/companyHistory.js";
 import ContactHistory from "../../models/MasterDBModel/contactHistory.js";
 import CallHistory from "../../models/callHistoryModel.js";
@@ -1251,6 +1252,8 @@ const updateCompany = asyncHandler(async (req, res, next) => {
 
 const getDropdownFilters = asyncHandler(async (req, res, next) => {
   try {
+    const { campaignId } = req.query;
+
     const [companyFilters, contactFilters] = await Promise.all([
       Company.aggregate([
         {
@@ -1482,9 +1485,28 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
     contactData.jobSeniorities = contactData.jobSeniorities.sort();
     contactData.jobFunctions = contactData.jobFunctions.sort();
 
+    // Fetch applied filters for the campaign if campaignId is provided
+    let appliedFilters = [];
+    let appliedExclusions = [];
+    if (campaignId) {
+      const latestFilter = await CampaignFilter.findOne(
+        { campaignId, dataType: "Client" },
+        { filters: 1, exclusions: 1 }
+      )
+        .sort({ revisionNo: -1 })
+        .lean();
+
+      if (latestFilter) {
+        appliedFilters = latestFilter.filters || [];
+        appliedExclusions = latestFilter.exclusions || [];
+      }
+    }
+
     return sendResponse(res, 200, "Unique filters fetched successfully", {
       ...companyData,
       ...contactData,
+      appliedFilters,
+      appliedExclusions,
     });
   } catch (err) {
     return sendError(next, err.message || "Failed to fetch filters", 500);

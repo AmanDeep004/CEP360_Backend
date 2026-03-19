@@ -13,6 +13,8 @@ import {
   getSharedFilterStats,
   deactivateSharedLink,
   extendLinkExpiry,
+  getClientMatchData,
+  updateClientMatchAction,
 } from "../controllers/callingDataFiltrationController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -79,5 +81,8 @@ router.post("/generate", protect, generateMagicLink);
 
 router.patch("/:filterId/deactivate", protect, deactivateSharedLink);
 router.patch("/:filterId/extend", protect, extendLinkExpiry);
+
+router.get("/clientMatchData/:campaignId", protect, getClientMatchData);
+router.patch("/clientMatchData/:campaignId/action", protect, updateClientMatchAction);
 
 export default router;

@@ -1096,11 +1096,6 @@ const companiesMatchedDataWithExcel = asyncHandler(async (req, res, next) => {
     }
 
     fs.unlinkSync(filePath);
-    await ClientCompanyList.create({
-      campaignId,
-      dataType,
-      companyNames,
-    });
 
     if (!Array.isArray(companyNames) || companyNames.length === 0) {
       return sendError(next, "No valid company names found in the file", 400);
@@ -1170,9 +1165,22 @@ const companiesMatchedDataWithExcel = asyncHandler(async (req, res, next) => {
       }
     }
 
+    const matchedNames = new Set([
+      ...completelyMatched.map((c) => c.matchedWith.toLowerCase()),
+      ...partiallyMatched.map((p) => p.input.toLowerCase()),
+    ]);
+    const notMatched = companyNames.filter(
+      (name) => !matchedNames.has(name.toLowerCase())
+    );
+
+    // Save company names (replace any previous upload for this campaign)
+    await ClientCompanyList.deleteMany({ campaignId, dataType });
+    await ClientCompanyList.create({ campaignId, dataType, companyNames });
+
     return sendResponse(res, 200, "Company name match results", {
       completelyMatched,
       partiallyMatched,
+      notMatched,
     });
   } catch (err) {
     console.error("Error in companiesMatchedDataWithExcel:", err);
@@ -1877,6 +1885,156 @@ const extendLinkExpiry = asyncHandler(async (req, res, next) => {
   }
 });
 
+// GET: fetch saved company names for campaign and re-run matching
+const getClientMatchData = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    if (!campaignId) return sendError(next, "Campaign ID is required", 400);
+
+    const doc = await ClientCompanyList.findOne({
+      campaignId,
+      dataType: "Client",
+    })
+      .sort({ updatedAt: -1 })
+      .lean();
+
+    if (!doc || !doc.companyNames?.length) {
+      return sendResponse(res, 200, "No match data found", null);
+    }
+
+    const { companyNames } = doc;
+
+    const regexArr = companyNames.map((name) => ({
+      Company_Name: {
+        $regex: name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        $options: "i",
+      },
+    }));
+
+    const allMatches = await Company.find({ $or: regexArr }).lean();
+
+    function similarity(a, b) {
+      if (!a || !b) return 0;
+      a = a.toLowerCase();
+      b = b.toLowerCase();
+      if (a === b) return 1;
+      const aWords = new Set(a.split(/\s+/));
+      const bWords = new Set(b.split(/\s+/));
+      const intersection = new Set([...aWords].filter((x) => bWords.has(x)));
+      const union = new Set([...aWords, ...bWords]);
+      return intersection.size / union.size;
+    }
+
+    const completelyMatched = [];
+    const partiallyMatched = [];
+
+    for (const inputName of companyNames) {
+      const matches = allMatches.filter(
+        (c) =>
+          c.Company_Name &&
+          c.Company_Name.toLowerCase().includes(inputName.toLowerCase())
+      );
+
+      const exact = matches.find(
+        (c) =>
+          c.Company_Name &&
+          c.Company_Name.trim().toLowerCase() === inputName.trim().toLowerCase()
+      );
+
+      if (exact) {
+        completelyMatched.push({
+          _id: exact._id,
+          Company_Name: exact.Company_Name,
+          matchedWith: inputName,
+        });
+        continue;
+      }
+
+      const partials = matches
+        .map((c) => ({
+          _id: c._id,
+          Company_Name: c.Company_Name,
+          matchedWith: inputName,
+          matchPercent: Math.round(similarity(inputName, c.Company_Name) * 100),
+        }))
+        .filter((obj) => obj.matchPercent > 0);
+
+      if (partials.length > 0) {
+        partials.sort((a, b) => b.matchPercent - a.matchPercent);
+        partiallyMatched.push({ input: inputName, suggestions: partials });
+      }
+    }
+
+    const matchedNames = new Set([
+      ...completelyMatched.map((c) => c.matchedWith.toLowerCase()),
+      ...partiallyMatched.map((p) => p.input.toLowerCase()),
+    ]);
+    const notMatched = companyNames.filter(
+      (name) => !matchedNames.has(name.toLowerCase())
+    );
+
+    return sendResponse(res, 200, "Client match data fetched", {
+      completelyMatched,
+      partiallyMatched,
+      notMatched,
+      // Return as { _id, Company_Name } so the frontend can display names
+      approvedIds: (doc.approvedIds || []).map((e) => ({
+        _id: String(e.companyId),
+        Company_Name: e.Company_Name,
+      })),
+      rejectedIds: (doc.rejectedIds || []).map((e) => ({
+        _id: String(e.companyId),
+        Company_Name: e.Company_Name,
+      })),
+    });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+// PATCH: persist approve/reject action — stores { companyId, Company_Name }
+const updateClientMatchAction = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    const { companyId, companyName, type, action } = req.body;
+    // type: "approved" | "rejected"
+    // action: "add" | "remove"
+
+    if (!campaignId || !companyId || !type || !action) {
+      return sendError(next, "campaignId, companyId, type and action are required", 400);
+    }
+
+    const field = type === "approved" ? "approvedIds" : "rejectedIds";
+    const filter = { campaignId, dataType: "Client" };
+    const sortOpt = { sort: { updatedAt: -1 } };
+
+    if (action === "add") {
+      // Remove any existing entry for this companyId first (prevents duplicates),
+      // then push the new entry with the company name included.
+      await ClientCompanyList.findOneAndUpdate(
+        filter,
+        { $pull: { [field]: { companyId } } },
+        sortOpt
+      );
+      await ClientCompanyList.findOneAndUpdate(
+        filter,
+        { $push: { [field]: { companyId, Company_Name: companyName } } },
+        sortOpt
+      );
+    } else {
+      await ClientCompanyList.findOneAndUpdate(
+        filter,
+        { $pull: { [field]: { companyId } } },
+        sortOpt
+      );
+    }
+
+    return sendResponse(res, 200, "Action saved", null);
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
 export {
   callingDataFilter,
   callingDataFilterLightweight,
@@ -1891,4 +2049,6 @@ export {
   getSharedFilterStats,
   deactivateSharedLink,
   extendLinkExpiry,
+  getClientMatchData,
+  updateClientMatchAction,
 };
