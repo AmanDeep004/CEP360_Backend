@@ -119,6 +119,13 @@ const campaignSchema = new mongoose.Schema(
       },
     },
     isCallingDataAssigned: { type: Boolean, default: false },
+
+    // Set when this campaign is a reconfirmation of another campaign
+    parentCampaignId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Campaign",
+      default: null,
+    },
     filterBatches: [
       {
         filterBatchId: {
