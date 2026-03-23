@@ -1250,7 +1250,7 @@ const updateCompany = asyncHandler(async (req, res, next) => {
   }
 });
 
-const getDropdownFilters = asyncHandler(async (req, res, next) => {
+const getDropdownFiltersOld = asyncHandler(async (req, res, next) => {
   try {
     const { campaignId } = req.query;
 
@@ -1510,6 +1510,188 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
     });
   } catch (err) {
     return sendError(next, err.message || "Failed to fetch filters", 500);
+  }
+});
+
+// ─── Dynamic Dropdown Filters ────────────────────────────────────────────────
+// Hierarchies:
+//   Country → Region → State → City
+//   Industry → Sub Industry
+//   Job Function → Job Seniority
+//
+// Query params (all optional, accept comma-separated or repeated array keys):
+//   campaignId, country, region, state, industry, jobFunction
+const getDropdownFilters = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.query;
+
+    // Normalise a query param to an array (handles string, array, undefined)
+    const toArray = (val) => {
+      if (!val) return null;
+      const arr = Array.isArray(val) ? val : val.split(",").map((s) => s.trim());
+      return arr.filter(Boolean).length ? arr.filter(Boolean) : null;
+    };
+
+    const selectedCountries    = toArray(req.query.country);
+    const selectedRegions      = toArray(req.query.region);
+    const selectedStates       = toArray(req.query.state);
+    const selectedIndustries   = toArray(req.query.industry);
+    const selectedJobFunctions = toArray(req.query.jobFunction);
+
+    const BLANK_FILTER = { $nin: [null, "", "Blank"] };
+
+    // Helper: distinct values from the Contact collection with a given match
+    const distinctContactValues = async (matchStage, field) => {
+      const results = await Contact.aggregate([
+        { $match: matchStage },
+        { $group: { _id: `$${field}` } },
+        { $match: { _id: { $nin: [null, "", "Blank"] } } },
+        { $sort: { _id: 1 } },
+        { $project: { _id: 0, value: "$_id" } },
+      ]);
+      return results.map((r) => r.value);
+    };
+
+    // Helper: distinct values from the Company collection with a given match
+    const distinctCompanyValues = async (matchStage, field) => {
+      const results = await Company.aggregate([
+        { $match: matchStage },
+        { $group: { _id: `$${field}` } },
+        { $match: { _id: { $nin: [null, "", "Blank"] } } },
+        { $sort: { _id: 1 } },
+        { $project: { _id: 0, value: "$_id" } },
+      ]);
+      return results.map((r) => r.value);
+    };
+
+    // ── Geo match stages ─────────────────────────────────────────────────────
+    const countryMatchStage = { Contact_Country: BLANK_FILTER };
+    const regionMatchStage  = {
+      Contact_Region: BLANK_FILTER,
+      ...(selectedCountries ? { Contact_Country: { $in: selectedCountries } } : {}),
+    };
+    const stateMatchStage   = {
+      Contact_State: BLANK_FILTER,
+      ...(selectedCountries ? { Contact_Country: { $in: selectedCountries } } : {}),
+      ...(selectedRegions   ? { Contact_Region:  { $in: selectedRegions   } } : {}),
+    };
+    const cityMatchStage    = {
+      Contact_City: BLANK_FILTER,
+      ...(selectedCountries ? { Contact_Country: { $in: selectedCountries } } : {}),
+      ...(selectedRegions   ? { Contact_Region:  { $in: selectedRegions   } } : {}),
+      ...(selectedStates    ? { Contact_State:   { $in: selectedStates    } } : {}),
+    };
+
+    // ── Industry / Sub Industry match stages ─────────────────────────────────
+    // Industries are always unfiltered (parent selector)
+    const industryMatchStage    = { Industry: BLANK_FILTER };
+    // Sub industries filtered by selected industries
+    const subIndustryMatchStage = {
+      Sub_Industry: BLANK_FILTER,
+      ...(selectedIndustries ? { Industry: { $in: selectedIndustries } } : {}),
+    };
+
+    // ── Job Function / Job Seniority match stages ────────────────────────────
+    // Job functions are always unfiltered (parent selector)
+    const jobFunctionMatchStage  = { Job_Function: BLANK_FILTER };
+    // Job seniorities filtered by selected job functions
+    const jobSeniorityMatchStage = {
+      Job_Seniority: BLANK_FILTER,
+      ...(selectedJobFunctions ? { Job_Function: { $in: selectedJobFunctions } } : {}),
+    };
+
+    const parseRange = (str) => {
+      if (!str) return Infinity;
+      const plusMatch = str.match(/^(\d+)[\s&+A-Za-z]*/);
+      if (plusMatch) return parseInt(plusMatch[1], 10);
+      if (str.includes("B")) return 10_000_000;
+      const rangeMatch = str.match(/(\d+)\s*to\s*(\d+)/);
+      if (rangeMatch) return parseInt(rangeMatch[1], 10);
+      return Infinity;
+    };
+
+    // ── Run all queries in parallel ──────────────────────────────────────────
+    const [
+      staticCompanyFilters,
+      countries,
+      regions,
+      states,
+      cities,
+      industries,
+      subIndustries,
+      jobFunctions,
+      jobSeniorities,
+    ] = await Promise.all([
+      // Static company fields (segments, employeeRanges, turnovers — no parent filter)
+      Company.aggregate([
+        {
+          $group: {
+            _id: null,
+            segments:       { $addToSet: "$Company_Segment" },
+            employeeRanges: { $addToSet: "$Employees_Range" },
+            turnovers:      { $addToSet: "$Turnover_Range" },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            segments:       { $filter: { input: "$segments",       as: "v", cond: { $and: [{ $ne: ["$$v", null] }, { $ne: ["$$v", ""] }, { $ne: ["$$v", "Blank"] }] } } },
+            employeeRanges: { $filter: { input: "$employeeRanges", as: "v", cond: { $and: [{ $ne: ["$$v", null] }, { $ne: ["$$v", ""] }, { $ne: ["$$v", "Blank"] }] } } },
+            turnovers:      { $filter: { input: "$turnovers",      as: "v", cond: { $and: [{ $ne: ["$$v", null] }, { $ne: ["$$v", ""] }, { $ne: ["$$v", "Blank"] }] } } },
+          },
+        },
+      ]),
+      // Geo
+      distinctContactValues(countryMatchStage,   "Contact_Country"),
+      distinctContactValues(regionMatchStage,    "Contact_Region"),
+      distinctContactValues(stateMatchStage,     "Contact_State"),
+      distinctContactValues(cityMatchStage,      "Contact_City"),
+      // Industry hierarchy
+      distinctCompanyValues(industryMatchStage,    "Industry"),
+      distinctCompanyValues(subIndustryMatchStage, "Sub_Industry"),
+      // Job hierarchy
+      distinctContactValues(jobFunctionMatchStage,  "Job_Function"),
+      distinctContactValues(jobSeniorityMatchStage, "Job_Seniority"),
+    ]);
+
+    const staticData = staticCompanyFilters[0] || { segments: [], employeeRanges: [], turnovers: [] };
+
+    staticData.turnovers      = staticData.turnovers.sort((a, b) => parseRange(a) - parseRange(b));
+    staticData.employeeRanges = staticData.employeeRanges.sort((a, b) => parseRange(a) - parseRange(b));
+    staticData.segments       = staticData.segments.sort();
+
+    // Fetch applied filters for the campaign if campaignId is provided
+    let appliedFilters = [];
+    let appliedExclusions = [];
+    if (campaignId) {
+      const latestFilter = await CampaignFilter.findOne(
+        { campaignId, dataType: "Client" },
+        { filters: 1, exclusions: 1 }
+      )
+        .sort({ revisionNo: -1 })
+        .lean();
+
+      if (latestFilter) {
+        appliedFilters    = latestFilter.filters    || [];
+        appliedExclusions = latestFilter.exclusions || [];
+      }
+    }
+
+    return sendResponse(res, 200, "Dynamic filters fetched successfully", {
+      ...staticData,
+      industries,
+      subIndustries,
+      jobFunctions,
+      jobSeniorities,
+      countries,
+      regions,
+      states,
+      cities,
+      appliedFilters,
+      appliedExclusions,
+    });
+  } catch (err) {
+    return sendError(next, err.message || "Failed to fetch dynamic filters", 500);
   }
 });
 
@@ -2728,6 +2910,7 @@ export {
   updateData,
   createANewCompany,
   getAllCompanyName,
+  getDropdownFiltersOld,
   getDropdownFilters,
   getFiltersStats,
   updateCompany,
