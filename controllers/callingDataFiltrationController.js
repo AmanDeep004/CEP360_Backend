@@ -1206,54 +1206,15 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
       return sendError(next, "Data Type is required", 400);
     }
 
-    // const fieldMapping = {
-    //   Contact_Country: "Contact_Country",
-    //   Contact_Region: "Contact_Region",
-    //   Job_Function: "Job_Function",
-    //   Job_Seniority: "Job_Seniority",
-    //   Industry: "company_info.Industry",
-    //   Employees_Range: "company_info.Employees_Range",
-    // };
-    const fieldMapping = {
-      Industry: "company_info.Industry",
-      Sub_Industry: "company_info.Sub_Industry",
-      Company_Segment: "company_info.Company_Segment",
-      Employees_Range: "company_info.Employees_Range",
-      Turnover_Range: "company_info.Turnover_Range",
-      Contact_Country: "Contact_Country",
-      Contact_State: "Contact_State",
-      Contact_Region: "Contact_Region",
-      Contact_City: "Contact_City",
-      Job_Function: "Job_Function",
-      Job_Seniority: "Job_Seniority",
-    };
-
-    const buildMongoQuery = (filtersArr, operator = "$in") => {
-      const q = {};
-      filtersArr.forEach(({ field, value }) => {
-        const mappedField = fieldMapping[field] || field;
-        if (Array.isArray(value) && value.length > 0) {
-          q[mappedField] = { [operator]: value };
-        }
-      });
-      return q;
-    };
-
-    const includeQuery = buildMongoQuery(filters, "$in");
-    const excludeQuery = buildMongoQuery(exclusions, "$nin");
-
-    const companyIdFilter =
-      Array.isArray(companyIds) && companyIds.length > 0
-        ? {
-            Company_ID: {
-              $in: companyIds.map((id) => new mongoose.Types.ObjectId(id)),
-            },
-          }
-        : {};
+    // Split filters into pre-lookup (contact fields + Company_ID) and post-lookup (company fields)
+    const preLookup  = buildPreLookupMatch(filters, exclusions, companyIds);
+    const postLookup = buildPostLookupMatch(filters, exclusions);
 
     req.setTimeout(300000);
 
     const statsPipeline = [
+      // Pre-lookup: filters contact-only fields + Company_ID before the expensive join
+      { $match: preLookup },
       {
         $lookup: {
           from: "companies",
@@ -1268,14 +1229,8 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
           preserveNullAndEmptyArrays: true,
         },
       },
-      {
-        $match: {
-          "discrepencyInData.status": { $ne: true },
-          ...includeQuery,
-          ...excludeQuery,
-          ...companyIdFilter,
-        },
-      },
+      // Post-lookup: filters on joined company fields (Industry, Employees_Range, etc.)
+      ...(Object.keys(postLookup).length > 0 ? [{ $match: postLookup }] : []),
       {
         $addFields: {
           normalizedIndustry: {
@@ -1322,6 +1277,7 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
     const [statsResult, uniqueCompaniesCount] = await Promise.all([
       Contact.aggregate(statsPipeline, { allowDiskUse: true }),
       Contact.aggregate([
+        { $match: preLookup },
         {
           $lookup: {
             from: "companies",
@@ -1333,14 +1289,7 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
         {
           $unwind: { path: "$company_info", preserveNullAndEmptyArrays: true },
         },
-        {
-          $match: {
-            "discrepencyInData.status": { $ne: true },
-            ...includeQuery,
-            ...excludeQuery,
-            ...companyIdFilter,
-          },
-        },
+        ...(Object.keys(postLookup).length > 0 ? [{ $match: postLookup }] : []),
         { $group: { _id: "$Company_ID" } },
         { $count: "uniqueCompanies" },
       ], { allowDiskUse: true }),
@@ -1413,6 +1362,16 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
       listName = `List${revisionNo}`;
     }
 
+    // Resolve company names for the IDs used in this filter
+    let companyNamesUsed = [];
+    if (companyIds.length > 0) {
+      const companiesUsed = await Company.find(
+        { _id: { $in: companyIds.map((id) => new mongoose.Types.ObjectId(id)) } },
+        { Company_Name: 1 }
+      ).lean();
+      companyNamesUsed = companiesUsed.map((c) => c.Company_Name).filter(Boolean);
+    }
+
     const campaignFilter = await CampaignFilter.create({
       campaignId,
       filters,
@@ -1423,7 +1382,7 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
       dataType: datatype,
       contactCount: stats.totalContacts,
       status: "Pending",
-      misc: { companyIdsUsed: companyIds },
+      misc: { companyIdsUsed: companyIds, companyNamesUsed },
     });
 
     return sendResponse(
