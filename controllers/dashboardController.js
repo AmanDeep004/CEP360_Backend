@@ -14,6 +14,13 @@ const { asyncHandler, sendError, sendResponse } = errorHandler;
 const { ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT } =
   UserRoleEnum;
 
+// Set time to end of day (23:59:59.999) so today's records are always included
+const endOfDay = (dateStr) => {
+  const d = new Date(dateStr);
+  d.setHours(23, 59, 59, 999);
+  return d;
+};
+
 const dashboardData1 = asyncHandler(async (req, res, next) => {
   try {
     const user = req?.user;
@@ -22,7 +29,7 @@ const dashboardData1 = asyncHandler(async (req, res, next) => {
     if (startDate || endDate) {
       query.createdAt = {};
       if (startDate) query.createdAt.$gte = new Date(startDate);
-      if (endDate) query.createdAt.$lte = new Date(endDate);
+      if (endDate) query.createdAt.$lte = endOfDay(endDate);
     }
 
     if (campaignId) {
@@ -176,7 +183,7 @@ const dashboardData = asyncHandler(async (req, res, next) => {
     if (startDate || endDate) {
       query.createdAt = {};
       if (startDate) query.createdAt.$gte = new Date(startDate);
-      if (endDate) query.createdAt.$lte = new Date(endDate);
+      if (endDate) query.createdAt.$lte = endOfDay(endDate);
     }
     const parentData = {};
 
@@ -324,7 +331,7 @@ const getAllAgentsDashboardData1 = asyncHandler(async (req, res, next) => {
 
     const dateFilter = {};
     if (startDate) dateFilter.$gte = new Date(startDate);
-    if (endDate) dateFilter.$lte = new Date(endDate);
+    if (endDate) dateFilter.$lte = endOfDay(endDate);
 
     // Get all agents
     const agents = await User.find({ role: AGENT })
@@ -394,7 +401,7 @@ const getAllAgentsDashboardData = asyncHandler(async (req, res, next) => {
 
     const dateFilter = {};
     if (startDate) dateFilter.$gte = new Date(startDate);
-    if (endDate) dateFilter.$lte = new Date(endDate);
+    if (endDate) dateFilter.$lte = endOfDay(endDate);
 
     let agents;
 
@@ -505,7 +512,7 @@ const getAllAgentsStatsReport = asyncHandler(async (req, res, next) => {
 
     const dateFilter = {};
     if (startDate) dateFilter.$gte = new Date(startDate);
-    if (endDate) dateFilter.$lte = new Date(endDate);
+    if (endDate) dateFilter.$lte = endOfDay(endDate);
 
     let campaign = null;
     if (campaignId) {
@@ -667,7 +674,7 @@ const getRegisteredUsersWithCampaignOld = asyncHandler(
 
       const dateFilter = {};
       if (startDate) dateFilter.$gte = new Date(startDate);
-      if (endDate) dateFilter.$lte = new Date(endDate);
+      if (endDate) dateFilter.$lte = endOfDay(endDate);
 
       const matchQuery = { isRegistered: true };
       if (campaignId) matchQuery.CampaignId = campaignId;
@@ -754,7 +761,7 @@ const getRegisteredUsersWithCampaignold3 = asyncHandler(
       // ✅ Setup date filter if provided
       const dateFilter = {};
       if (startDate) dateFilter.$gte = new Date(startDate);
-      if (endDate) dateFilter.$lte = new Date(endDate);
+      if (endDate) dateFilter.$lte = endOfDay(endDate);
 
       // ✅ Base query for registered users
       const matchQuery = { isRegistered: true };
@@ -850,7 +857,7 @@ const getRegisteredUsersWithCampaignOld2 = asyncHandler(
       // ✅ Date filter setup
       const dateFilter = {};
       if (startDate) dateFilter.$gte = new Date(startDate);
-      if (endDate) dateFilter.$lte = new Date(endDate);
+      if (endDate) dateFilter.$lte = endOfDay(endDate);
 
       // ✅ Base filter — only registered users
       const matchQuery = { isRegistered: true };
@@ -941,7 +948,7 @@ const getRegisteredUsersWithCampaign = asyncHandler(async (req, res, next) => {
 
     const dateFilter = {};
     if (startDate) dateFilter.$gte = new Date(startDate);
-    if (endDate) dateFilter.$lte = new Date(endDate);
+    if (endDate) dateFilter.$lte = endOfDay(endDate);
 
     const matchQuery = { isRegistered: true };
     if (campaignId && campaignId !== "all") matchQuery.CampaignId = campaignId;
@@ -1015,7 +1022,7 @@ const getCombinedReportOld = asyncHandler(async (req, res, next) => {
 
     const dateFilter = {};
     if (startDate) dateFilter.$gte = new Date(startDate);
-    if (endDate) dateFilter.$lte = new Date(endDate);
+    if (endDate) dateFilter.$lte = endOfDay(endDate);
 
     // ===================== AGENT STATS REPORT ===================== //
     let campaign = null;
@@ -1163,7 +1170,7 @@ const getCombinedReportOld2 = asyncHandler(async (req, res, next) => {
 
     const dateFilter = {};
     if (startDate) dateFilter.$gte = new Date(startDate);
-    if (endDate) dateFilter.$lte = new Date(endDate);
+    if (endDate) dateFilter.$lte = endOfDay(endDate);
 
     //---------------------- 1) AGENT STATS REPORT ----------------------//
 
@@ -1284,7 +1291,7 @@ const getCombinedReportOld2 = asyncHandler(async (req, res, next) => {
 
 //     const dateFilter = {};
 //     if (startDate) dateFilter.$gte = new Date(startDate);
-//     if (endDate) dateFilter.$lte = new Date(endDate);
+//     if (endDate) dateFilter.$lte = endOfDay(endDate);
 
 //     let campaign = null;
 //     if (campaignId) {
