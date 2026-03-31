@@ -169,20 +169,44 @@ const deleteInvoice = asyncHandler(async (req, res, next) => {
 const getAllInvoices = asyncHandler(async (req, res, next) => {
   try {
     const { campaign_id, employeeId, programManagerId } = req.query;
+    const page = parseInt(req.query.page);
+    const limit = Math.min(parseInt(req.query.limit) || 20, 200);
 
     const filter = {};
     if (campaign_id) filter.campaign_id = campaign_id;
     if (employeeId) filter.employeeId = employeeId;
     if (programManagerId) filter.programManagers = programManagerId;
 
-    const invoices = await Invoice.find(filter)
-      .populate(
-        "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
-      )
-      .sort({ createdAt: -1 })
-      .lean();
+    if (!page) {
+      const invoices = await Invoice.find(filter)
+        .populate(
+          "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
+        )
+        .sort({ createdAt: -1 })
+        .lean();
+      return sendResponse(res, 200, "Invoices retrieved successfully", invoices);
+    }
 
-    return sendResponse(res, 200, "Invoices retrieved successfully", invoices);
+    const skip = (page - 1) * limit;
+    const [total, invoices] = await Promise.all([
+      Invoice.countDocuments(filter),
+      Invoice.find(filter)
+        .populate(
+          "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
+        )
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
+
+    return sendResponse(res, 200, "Invoices retrieved successfully", {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      data: invoices,
+    });
   } catch (error) {
     return sendError(next, error.message, 500);
   }
@@ -196,19 +220,43 @@ const getAllInvoices = asyncHandler(async (req, res, next) => {
 const getAllInvoicesData = asyncHandler(async (req, res, next) => {
   try {
     const { month } = req.query;
+    const page = parseInt(req.query.page);
+    const limit = Math.min(parseInt(req.query.limit) || 20, 200);
 
     if (!month) {
       return sendError(next, "Month is required", 400);
     }
 
-    const invoices = await Invoice.find({ month })
-      .populate(
-        "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
-      )
-      .sort({ createdAt: -1 })
-      .lean();
+    if (!page) {
+      const invoices = await Invoice.find({ month })
+        .populate(
+          "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
+        )
+        .sort({ createdAt: -1 })
+        .lean();
+      return sendResponse(res, 200, "Invoices retrieved successfully", invoices);
+    }
 
-    return sendResponse(res, 200, "Invoices retrieved successfully", invoices);
+    const skip = (page - 1) * limit;
+    const [total, invoices] = await Promise.all([
+      Invoice.countDocuments({ month }),
+      Invoice.find({ month })
+        .populate(
+          "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
+        )
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
+
+    return sendResponse(res, 200, "Invoices retrieved successfully", {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      data: invoices,
+    });
   } catch (error) {
     return sendError(next, error.message, 500);
   }
@@ -222,23 +270,47 @@ const getAllInvoicesData = asyncHandler(async (req, res, next) => {
 const getInvoicesByPMId = asyncHandler(async (req, res, next) => {
   try {
     const pmId = req.params.pmId;
+    const page = parseInt(req.query.page);
+    const limit = Math.min(parseInt(req.query.limit) || 20, 200);
 
     if (!pmId) {
       return sendError(next, "Program Manager ID is required", 400);
     }
 
-    const invoices = await Invoice.find({ programManagers: pmId })
-      .populate(
-        "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
-      )
-      .sort({ createdAt: -1 })
-      .lean();
+    if (!page) {
+      const invoices = await Invoice.find({ programManagers: pmId })
+        .populate(
+          "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
+        )
+        .sort({ createdAt: -1 })
+        .lean();
 
-    if (invoices.length === 0) {
-      return sendError(next, "No invoices found for this Program Manager", 404);
+      if (invoices.length === 0) {
+        return sendError(next, "No invoices found for this Program Manager", 404);
+      }
+      return sendResponse(res, 200, "Invoices retrieved successfully", invoices);
     }
 
-    return sendResponse(res, 200, "Invoices retrieved successfully", invoices);
+    const skip = (page - 1) * limit;
+    const [total, invoices] = await Promise.all([
+      Invoice.countDocuments({ programManagers: pmId }),
+      Invoice.find({ programManagers: pmId })
+        .populate(
+          "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
+        )
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
+
+    return sendResponse(res, 200, "Invoices retrieved successfully", {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      data: invoices,
+    });
   } catch (error) {
     return sendError(next, error.message, 500);
   }
@@ -947,24 +1019,50 @@ const getInvoicesByPMAndMonth = asyncHandler(async (req, res, next) => {
   try {
     const { pmId } = req.params;
     const { month } = req.query;
+    const page = parseInt(req.query.page);
+    const limit = Math.min(parseInt(req.query.limit) || 20, 200);
 
     if (!pmId || !month) {
       return sendError(next, "Program Manager ID and month are required", 400);
     }
 
     const normalizedMonth = month.trim();
-    const invoices = await Invoice.find({
+    const filter = {
       programManagers: new mongoose.Types.ObjectId(pmId),
       month: normalizedMonth,
       "invoiceGenerated.status": true,
-    })
-      .populate(
-        "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
-      )
-      .sort({ createdAt: -1 })
-      .lean();
+    };
 
-    return sendResponse(res, 200, "Invoices retrieved successfully", invoices);
+    if (!page) {
+      const invoices = await Invoice.find(filter)
+        .populate(
+          "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
+        )
+        .sort({ createdAt: -1 })
+        .lean();
+      return sendResponse(res, 200, "Invoices retrieved successfully", invoices);
+    }
+
+    const skip = (page - 1) * limit;
+    const [total, invoices] = await Promise.all([
+      Invoice.countDocuments(filter),
+      Invoice.find(filter)
+        .populate(
+          "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
+        )
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
+
+    return sendResponse(res, 200, "Invoices retrieved successfully", {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      data: invoices,
+    });
   } catch (error) {
     return sendError(next, error.message, 500);
   }
@@ -973,19 +1071,48 @@ const getInvoicesByPMAndMonth = asyncHandler(async (req, res, next) => {
 const getInvoicesOfAgent = asyncHandler(async (req, res, next) => {
   try {
     const { agentId } = req.params;
+    const page = parseInt(req.query.page);
+    const limit = Math.min(parseInt(req.query.limit) || 20, 200);
+
     if (!agentId) {
       return sendError(next, "Agent ID is required", 400);
     }
-    const invoices = await Invoice.find({
+
+    const filter = {
       employeeId: agentId,
       "invoiceGenerated.invoiceUrl": { $exists: true, $ne: null },
-    })
-      .populate(
-        "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
-      )
-      .sort({ createdAt: -1 })
-      .lean();
-    return sendResponse(res, 200, "Invoices retrieved successfully", invoices);
+    };
+
+    if (!page) {
+      const invoices = await Invoice.find(filter)
+        .populate(
+          "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
+        )
+        .sort({ createdAt: -1 })
+        .lean();
+      return sendResponse(res, 200, "Invoices retrieved successfully", invoices);
+    }
+
+    const skip = (page - 1) * limit;
+    const [total, invoices] = await Promise.all([
+      Invoice.countDocuments(filter),
+      Invoice.find(filter)
+        .populate(
+          "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
+        )
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
+
+    return sendResponse(res, 200, "Invoices retrieved successfully", {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      data: invoices,
+    });
   } catch (error) {
     return sendError(next, error.message, 500);
   }

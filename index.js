@@ -6,6 +6,7 @@ import rateLimit from "express-rate-limit";
 import expressWinston from "express-winston";
 import cookieParser from "cookie-parser";
 import { connectDB } from "./config/db.js";
+import { getJob } from "./utils/jobTracker.js";
 import cron from "node-cron";
 import { errorHandler } from "./middleware/errorMiddleware.js";
 import { expressWinstonErrorLogger, logger } from "./logger/index.js";
@@ -67,7 +68,11 @@ const startServer = async () => {
             scriptSrc: ["'self'"],
             styleSrc: ["'self'", "'unsafe-inline'"],
             imgSrc: ["'self'", "data:", "https:"],
-            connectSrc: ["'self'", frontendOrigin, "https://cep360.kestoneapps.in"],
+            connectSrc: [
+              "'self'",
+              frontendOrigin,
+              "https://cep360.kestoneapps.in",
+            ],
             fontSrc: ["'self'", "https:", "data:"],
             objectSrc: ["'none'"],
             frameSrc: ["'none'"],
@@ -78,17 +83,23 @@ const startServer = async () => {
     );
 
     const loginLimiter = rateLimit({
-      windowMs: 15 * 60 * 1000, // 15 minutes
-      max: 10,
-      message: { success: false, message: "Too many login attempts. Please try again after 15 minutes." },
+      windowMs: 15 * 60 * 1000,
+      max: 30, // maximum 30 login attempts per 15 minutes per IP
+      message: {
+        success: false,
+        message: "Too many login attempts. Please try again after 15 minutes.",
+      },
       standardHeaders: true,
       legacyHeaders: false,
     });
 
     const generalLimiter = rateLimit({
-      windowMs: 60 * 1000, // 1 minute
+      windowMs: 60 * 1000,
       max: 200,
-      message: { success: false, message: "Too many requests. Please slow down." },
+      message: {
+        success: false,
+        message: "Too many requests. Please slow down.",
+      },
       standardHeaders: true,
       legacyHeaders: false,
     });
@@ -133,6 +144,18 @@ const startServer = async () => {
     app.use("/api/linkedin", linkedinDataScrapingRoute);
     app.use("/api/mailercloud", mailerCloudRoute);
     app.use("/api/whatsapp", whatsappRoute);
+
+    // Job status endpoint — poll progress of bulk email/whatsapp sends
+    app.get("/api/jobs/:jobId", async (req, res) => {
+      const job = await getJob(req.params.jobId);
+      if (!job)
+        return res
+          .status(404)
+          .json({ success: false, message: "Job not found" });
+      return res
+        .status(200)
+        .json({ success: true, message: "Job found", data: job });
+    });
 
     // Schedule: At 23:00 on day-of-month 25 for expected salary generation
     cron.schedule(
@@ -282,9 +305,9 @@ const startServer = async () => {
     //   proxy_read_timeout 600;
     //   proxy_send_timeout 600;
     //   client_max_body_size 500m;
-    server.timeout = 600000;          // 10 min — max time for any single request
+    server.timeout = 600000; // 10 min — max time for any single request
     server.keepAliveTimeout = 605000; // slightly above timeout
-    server.headersTimeout = 610000;   // slightly above keepAliveTimeout
+    server.headersTimeout = 610000; // slightly above keepAliveTimeout
 
     const gracefulShutdown = async (signal) => {
       console.log(`\n${signal} received. Shutting down gracefully...`);
@@ -305,7 +328,7 @@ const startServer = async () => {
             console.log("Secondary database connection closed");
           }
         } catch (error) {
-          console.error("Error closing database connections:", error);
+          console.error("Error closing connections:", error);
         }
 
         process.exit(0);

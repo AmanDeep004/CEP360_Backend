@@ -41,4 +41,13 @@ const callHistorySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Fetch all call histories for a specific contact (most common query)
+callHistorySchema.index({ callingData_id: 1 });
+
+// Fetch all call histories for a campaign (reporting, dashboards)
+callHistorySchema.index({ campaign_id: 1, createdAt: -1 });
+
+// Compound: filter by campaign + contact (upsert / update patterns)
+callHistorySchema.index({ callingData_id: 1, campaign_id: 1 });
+
 export default getPrimaryConnection().model("CallHistory", callHistorySchema);

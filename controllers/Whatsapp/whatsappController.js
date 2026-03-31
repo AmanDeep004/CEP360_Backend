@@ -3,6 +3,7 @@ import WhatsAppService from "../../services/doubletick.js";
 import pLimit from "p-limit";
 import CallingData from "../../models/callingDataModal.js";
 import DoubleTickData from "../../models/Webhook/webHookModel.js";
+import { createJob, updateJob, completeJob, failJob } from "../../utils/jobTracker.js";
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
@@ -194,7 +195,9 @@ const sendTemplateMessage = asyncHandler(async (req, res, next) => {
 
     // ---------------- QUICK RESPONSE ----------------
     console.log("[WA_TEMPLATE] Stage 3: Sending immediate response to client");
+    const jobId = await createJob("whatsapp", contacts.length);
     sendResponse(res, 200, "Message sending started", {
+      jobId,
       totalContacts: contacts.length,
       templateName,
     });
@@ -404,6 +407,7 @@ const sendTemplateMessage = asyncHandler(async (req, res, next) => {
           batchFailure,
           failureReasons: failureReasonSummary,
         });
+        await updateJob(jobId, batchSuccess, batchFailure);
         await new Promise((r) => setTimeout(r, 500));
       }
 
@@ -412,10 +416,12 @@ const sendTemplateMessage = asyncHandler(async (req, res, next) => {
         failureCount,
         total: contacts.length,
       });
-    })().catch((err) => {
+      await completeJob(jobId);
+    })().catch(async (err) => {
       console.error("[WA_TEMPLATE] Stage X: Background process failed", {
         reason: err?.message || "Unknown error",
       });
+      await failJob(jobId, err?.message || "Unknown error");
     });
   } catch (error) {
     console.error("[WA_TEMPLATE] Stage X: Handler failed", {

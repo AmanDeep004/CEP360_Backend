@@ -497,7 +497,7 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
 
     // Basic filters
     if (source) filter.source = { $regex: new RegExp(source, "i") };
-    if (registered !== "") filter.isRegistered = registered === "true";
+    if (registered !== undefined && registered !== "") filter.isRegistered = registered === "true";
 
     let searchFilter = {};
 

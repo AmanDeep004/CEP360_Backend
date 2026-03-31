@@ -7,27 +7,40 @@ const { asyncHandler, sendError, sendResponse } = errorHandler;
 
 const getAllPendingEditApprovals = asyncHandler(async (req, res, next) => {
   try {
-    const pendingApprovals = await CallingDataEditApproval.find({
-      status: "Pending",
-    })
-      .populate("requestedBy", "employeeName email employeeCode mobile")
-      .populate(
-        "approvedorRejectedBy",
-        "employeeName email employeeCode mobile"
-      )
-      .populate("callingDataId", "CampaignId");
-    return sendResponse(
-      res,
-      200,
-      "Pending Calling Data Retrieved Successfully",
-      pendingApprovals
-    );
+    const page = parseInt(req.query.page);
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+    const filter = { status: "Pending" };
+
+    // No page param → flat array (backward compat)
+    if (!page) {
+      const pendingApprovals = await CallingDataEditApproval.find(filter)
+        .populate("requestedBy", "employeeName email employeeCode mobile")
+        .populate("approvedorRejectedBy", "employeeName email employeeCode mobile")
+        .populate("callingDataId", "CampaignId");
+      return sendResponse(res, 200, "Pending Calling Data Retrieved Successfully", pendingApprovals);
+    }
+
+    const skip = (page - 1) * limit;
+    const [total, pendingApprovals] = await Promise.all([
+      CallingDataEditApproval.countDocuments(filter),
+      CallingDataEditApproval.find(filter)
+        .populate("requestedBy", "employeeName email employeeCode mobile")
+        .populate("approvedorRejectedBy", "employeeName email employeeCode mobile")
+        .populate("callingDataId", "CampaignId")
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
+
+    return sendResponse(res, 200, "Pending Calling Data Retrieved Successfully", {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      data: pendingApprovals,
+    });
   } catch (error) {
-    return sendError(
-      next,
-      err.message || "Failed to fetch campaign filters",
-      500
-    );
+    return sendError(next, error.message || "Failed to fetch pending approvals", 500);
   }
 });
 

@@ -4,7 +4,6 @@ import {
   sendTemplateMessage,
   sendBulkMessages,
 } from "../../controllers/Whatsapp/whatsappController.js";
-
 const router = Router();
 
 router.get("/getAllWhatsappTemplates", getAllTemplates);

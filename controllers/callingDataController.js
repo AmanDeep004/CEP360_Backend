@@ -531,15 +531,44 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
       filter.source = { $regex: new RegExp(escapeStringRegexp(source), "i") };
     }
 
+    const applyMask = (row) => ({
+      ...row,
+      Contact_Direct_Phone1: maskPhone(row.Contact_Direct_Phone1),
+      Contact_Direct_Phone2: maskPhone(row.Contact_Direct_Phone2),
+      Mobile_No: maskPhone(row.Mobile_No),
+      Office_Email_1: maskEmail(row.Office_Email_1),
+      Office_Email_2: maskEmail(row.Office_Email_2),
+      Personal_Email1: maskEmail(row.Personal_Email1),
+      Personal_Email2: maskEmail(row.Personal_Email2),
+    });
+
+    // ── FAST PATH: no remark, no range ──────────────────────────────────────
+    // Uses index { CampaignId, agentId } — pagination done at DB level
+    if (!remark && !range) {
+      const [docs, total] = await Promise.all([
+        CallingData.find(filter)
+          .populate({ path: "agentId", select: "employeeName email" })
+          .populate({ path: "callHistory" })
+          .skip(skip)
+          .limit(limNum)
+          .lean(),
+        CallingData.countDocuments(filter),
+      ]);
+
+      return sendResponse(res, 200, "Filtered database fetched successfully", {
+        total,
+        page: pageNum,
+        limit: limNum,
+        totalPages: Math.ceil(total / limNum),
+        data: docs.map(applyMask),
+      });
+    }
+
+    // ── SLOW PATH: remark or range filter needs full dataset ─────────────────
+    // chatHistory is embedded in CallHistory — nested populate removed (was a no-op)
     let data = await CallingData.find(filter)
-      .populate({
-        path: "agentId",
-        select: "employeeName email",
-      })
-      .populate({
-        path: "callHistory",
-        populate: { path: "chatHistory", model: "CallHistory" },
-      })
+      .populate({ path: "agentId", select: "employeeName email" })
+      .populate({ path: "callHistory" })
       .lean();
 
     if (remark) {
@@ -578,24 +607,13 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
 
     const total = data.length;
     const paginatedData = data.slice(skip, skip + limNum);
-    const maskedData = paginatedData.map((row) => ({
-      ...row,
-      Contact_Direct_Phone1: maskPhone(row.Contact_Direct_Phone1),
-      Contact_Direct_Phone2: maskPhone(row.Contact_Direct_Phone2),
-      Mobile_No: maskPhone(row.Mobile_No),
-
-      Office_Email_1: maskEmail(row.Office_Email_1),
-      Office_Email_2: maskEmail(row.Office_Email_2),
-      Personal_Email1: maskEmail(row.Personal_Email1),
-      Personal_Email2: maskEmail(row.Personal_Email2),
-    }));
 
     return sendResponse(res, 200, "Filtered database fetched successfully", {
       total,
       page: pageNum,
       limit: limNum,
       totalPages: Math.ceil(total / limNum),
-      data: maskedData,
+      data: paginatedData.map(applyMask),
     });
   } catch (err) {
     return sendError(next, err.message, 500);

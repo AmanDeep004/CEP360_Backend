@@ -194,7 +194,7 @@ const getUserProfile = asyncHandler(async (req, res, next) => {
  */
 const updateUserProfile = asyncHandler(async (req, res, next) => {
   try {
-    const user = await User.findById(req.user._id);
+    const user = await User.findById(req.body._id);
 
     if (!user) {
       return sendError(next, "User not found", 404);
@@ -217,7 +217,6 @@ const updateUserProfile = asyncHandler(async (req, res, next) => {
       "mobile",
     ];
 
-    // console.log("User role:", req.user.role);
     if (req.user.role === ADMIN || req.user.role === RESOURCE_MANAGER) {
       updateFields.push("ctc");
     }
@@ -234,14 +233,8 @@ const updateUserProfile = asyncHandler(async (req, res, next) => {
 
     const updatedUser = await user.save();
 
-    // return sendResponse(res, 200, "Profile updated successfully", {
-    //   _id: updatedUser._id,
-    //   employeeName: updatedUser.employeeName,
-    //   email: updatedUser.email,
-    //   role: updatedUser.role,
-    //   status: updatedUser.status,
-    // });
-    return sendResponse(res, 200, "Profile updated successfully", updatedUser);
+    const { password, tokenVersion, __v, ...safeUser } = updatedUser.toObject();
+    return sendResponse(res, 200, "Profile updated successfully", safeUser);
   } catch (error) {
     return sendError(next, error.message, 500);
   }
@@ -254,11 +247,46 @@ const updateUserProfile = asyncHandler(async (req, res, next) => {
  */
 const getAllUsers = asyncHandler(async (req, res, next) => {
   try {
-    const users = await User.find({ role: { $ne: "admin" } })
-      .select("-password")
-      .sort({ createdAt: -1 });
+    const page = parseInt(req.query.page);
+    const limit = Math.min(parseInt(req.query.limit) || 20, 200);
+    const search = req.query.search?.trim();
 
-    return sendResponse(res, 200, "Users retrieved successfully", users);
+    const filter = { role: { $ne: "admin" } };
+    if (search) {
+      const regex = new RegExp(search, "i");
+      filter.$or = [
+        { employeeName: regex },
+        { email: regex },
+        { employeeCode: regex },
+      ];
+    }
+
+    // No page param → flat array (backward compat)
+    if (!page) {
+      const users = await User.find(filter)
+        .select("-password")
+        .sort({ createdAt: -1 });
+      return sendResponse(res, 200, "Users retrieved successfully", users);
+    }
+
+    const skip = (page - 1) * limit;
+    const [total, users] = await Promise.all([
+      User.countDocuments(filter),
+      User.find(filter)
+        .select("-password")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
+
+    return sendResponse(res, 200, "Users retrieved successfully", {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      data: users,
+    });
   } catch (error) {
     return sendError(next, error.message, 500);
   }

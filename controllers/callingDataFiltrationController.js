@@ -69,6 +69,253 @@ function buildMongoQuery(filters = [], exclusions = []) {
   return query;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Shared helpers for scalable assignment pipelines
+//  (handles crores of records via cursor streaming + pre-lookup sort)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Contact-doc fields that can be matched/sorted BEFORE $lookup (no join needed) */
+const CONTACT_ONLY_FIELDS = new Set([
+  "Contact_Country", "Contact_State", "Contact_Region", "Contact_City",
+  "Job_Function", "Job_Seniority", "Job_Title",
+]);
+
+/** Company fields that require $lookup — mapped to company_info.* */
+const COMPANY_FIELD_MAP = {
+  Industry: "company_info.Industry",
+  Sub_Industry: "company_info.Sub_Industry",
+  Company_Segment: "company_info.Company_Segment",
+  Employees_Range: "company_info.Employees_Range",
+  Turnover_Range: "company_info.Turnover_Range",
+};
+
+/**
+ * $match stage that runs BEFORE $lookup.
+ * Covers: discrepency check, contact-only field filters, optional Company_ID filter.
+ */
+function buildPreLookupMatch(filters = [], exclusions = [], companyIds = []) {
+  const q = { "discrepencyInData.status": { $ne: true } };
+
+  for (const { field, value } of filters) {
+    if (CONTACT_ONLY_FIELDS.has(field) && Array.isArray(value) && value.length) {
+      q[field] = { $in: value };
+    }
+  }
+  for (const { field, value } of exclusions) {
+    if (CONTACT_ONLY_FIELDS.has(field) && Array.isArray(value) && value.length) {
+      if (q[field]) {
+        q.$and = (q.$and || []).concat({ [field]: { $nin: value } });
+      } else {
+        q[field] = { $nin: value };
+      }
+    }
+  }
+  if (companyIds.length > 0) {
+    q.Company_ID = { $in: companyIds.map((id) => new mongoose.Types.ObjectId(id)) };
+  }
+  return q;
+}
+
+/**
+ * $match stage that runs AFTER $lookup + $unwind.
+ * Covers: company-mapped field filters/exclusions.
+ */
+function buildPostLookupMatch(filters = [], exclusions = []) {
+  const q = {};
+  for (const { field, value } of filters) {
+    const mapped = COMPANY_FIELD_MAP[field];
+    if (mapped && Array.isArray(value) && value.length) q[mapped] = { $in: value };
+  }
+  for (const { field, value } of exclusions) {
+    const mapped = COMPANY_FIELD_MAP[field];
+    if (mapped && Array.isArray(value) && value.length) q[mapped] = { $nin: value };
+  }
+  return q;
+}
+
+/** Only the fields needed for CallingData mapping — keeps cursor docs lean */
+const ASSIGN_PROJECT = {
+  Contact_ID: 1, Contact_Source: 1, Contact_Create_Date: 1,
+  Salutation: 1, First_Name: 1, Last_Name: 1, Full_Name: 1, Gender: 1,
+  Job_Title: 1, Job_Seniority: 1, Job_Function: 1,
+  Contact_Address_1: 1, Contact_Address_2: 1, Contact_Address_3: 1,
+  Contact_City: 1, Contact_Pin: 1, Contact_State: 1, Contact_Region: 1,
+  Contact_Country: 1, Contact_STD_ISD_Code: 1, Contact_Location_Tier: 1,
+  Contact_Direct_Phone1: 1, Contact_Direct_Phone2: 1, Contact_Extn_No: 1,
+  Mobile_No: 1, Office_Email_1: 1, Office_Email_2: 1,
+  Personal_Email1: 1, Personal_Email2: 1,
+  Contact_LinkedIn_Profile: 1,
+  Unsubscribe_Flag: 1, Unsubscribe_Account_Tag: 1,
+  DND_Flag: 1, DND_Account_Tag: 1,
+  Last_Engagement: 1, Last_Engagement_Date: 1,
+  Last_Engagement_Campaign: 1, Telecalling_Remarks: 1, EngagementPoints: 1,
+  "company_info._id": 1, "company_info.Company_Name": 1,
+  "company_info.Company_ID_Kestone": 1, "company_info.Affinity_ID_Dell": 1,
+  "company_info.Company_ID_Google": 1, "company_info.Company_Source": 1,
+  "company_info.Year_Founded": 1, "company_info.Turnover_Range": 1,
+  "company_info.Employees_Range": 1, "company_info.Industry": 1,
+  "company_info.Sub_Industry": 1, "company_info.Company_Segment": 1,
+  "company_info.Website": 1, "company_info.Company_LinkedIn_Profile": 1,
+  "company_info.Company_Phone1": 1, "company_info.Company_Phone2": 1,
+};
+
+/**
+ * Build the optimised assignment pipeline:
+ *   $match (contact fields only)         ← uses indexes, small docs
+ *   $lookup + $unwind (companies)
+ *   $match (company fields, if any)
+ *   $project (only needed fields)
+ *
+ * $sort removed — exceeds MongoDB 32MB in-memory limit on large collections.
+ * All contacts are inserted regardless, so order does not affect result data.
+ */
+function buildAssignPipeline(preLookupMatch, postLookupMatch) {
+  const pipeline = [
+    { $match: preLookupMatch },
+    {
+      $lookup: {
+        from: "companies",
+        localField: "Company_ID",
+        foreignField: "_id",
+        as: "company_info",
+      },
+    },
+    { $unwind: { path: "$company_info", preserveNullAndEmptyArrays: true } },
+  ];
+  if (Object.keys(postLookupMatch).length > 0) {
+    pipeline.push({ $match: postLookupMatch });
+  }
+  pipeline.push({ $project: ASSIGN_PROJECT });
+  return pipeline;
+}
+
+/** Map one aggregation row → CallingData insert document */
+function mapContactToEntry(row, { campaignId, uploadedBy, batchLabel, dataSourceType, source }) {
+  return {
+    CampaignId: new mongoose.Types.ObjectId(campaignId),
+    UploadedBy: new mongoose.Types.ObjectId(uploadedBy),
+    source,
+    batch: batchLabel,
+    dataSourceType,
+    Contact_ID: row.Contact_ID,
+    Contact_Source: row.Contact_Source,
+    Contact_Create_Date: row.Contact_Create_Date,
+    Salutation: row.Salutation,
+    First_Name: row.First_Name,
+    Last_Name: row.Last_Name,
+    Full_Name: row.Full_Name,
+    Gender: row.Gender,
+    Job_Title: row.Job_Title,
+    Job_Seniority: row.Job_Seniority,
+    Job_Function: row.Job_Function,
+    Contact_Address_1: row.Contact_Address_1,
+    Contact_Address_2: row.Contact_Address_2,
+    Contact_Address_3: row.Contact_Address_3,
+    Contact_City: row.Contact_City,
+    Contact_Pin: row.Contact_Pin,
+    Contact_State: row.Contact_State,
+    Contact_Region: row.Contact_Region,
+    Contact_Country: row.Contact_Country,
+    Contact_STD_ISD_Code: row.Contact_STD_ISD_Code,
+    Contact_Location_Tier: row.Contact_Location_Tier,
+    Contact_Direct_Phone1: row.Contact_Direct_Phone1,
+    Contact_Direct_Phone2: row.Contact_Direct_Phone2,
+    Contact_Extn_No: row.Contact_Extn_No,
+    Mobile_No: row.Mobile_No,
+    Office_Email_1: row.Office_Email_1,
+    Office_Email_2: row.Office_Email_2,
+    Personal_Email1: row.Personal_Email1,
+    Personal_Email2: row.Personal_Email2,
+    Contact_LinkedIn_Profile: row.Contact_LinkedIn_Profile,
+    Unsubscribe_Flag: row.Unsubscribe_Flag,
+    Unsubscribe_Account_Tag: row.Unsubscribe_Account_Tag,
+    DND_Flag: row.DND_Flag,
+    DND_Account_Tag: row.DND_Account_Tag,
+    Last_Engagement: row.Last_Engagement,
+    Last_Engagement_Date: row.Last_Engagement_Date,
+    Last_Engagement_Campaign: row.Last_Engagement_Campaign,
+    Telecalling_Remarks: row.Telecalling_Remarks,
+    Company_ID: row.company_info?._id || null,
+    Company_Name: row.company_info?.Company_Name || "",
+    Company_ID_Kestone: row.company_info?.Company_ID_Kestone || "",
+    Affinity_ID_Dell: row.company_info?.Affinity_ID_Dell || "",
+    Company_ID_Google: row.company_info?.Company_ID_Google || "",
+    Company_Source: row.company_info?.Company_Source || "",
+    Year_Founded: row.company_info?.Year_Founded || "",
+    Turnover_Range: row.company_info?.Turnover_Range || "",
+    Employees_Range: row.company_info?.Employees_Range || "",
+    Industry: row.company_info?.Industry || "",
+    Sub_Industry: row.company_info?.Sub_Industry || "",
+    Company_Segment: row.company_info?.Company_Segment || "",
+    Website: row.company_info?.Website || "",
+    Company_LinkedIn_Profile: row.company_info?.Company_LinkedIn_Profile || "",
+    Company_Phone1: row.company_info?.Company_Phone1 || "",
+    Company_Phone2: row.company_info?.Company_Phone2 || "",
+    EngagementPoints: row.EngagementPoints,
+  };
+}
+
+/**
+ * Per-chunk dedup + insertMany.
+ * Querying CallingData in chunks avoids loading all Contact_IDs into memory.
+ */
+async function insertContactsChunk(entries, campaignId) {
+  if (!entries.length) return { inserted: 0, duplicates: 0 };
+
+  const contactIds = entries.map((e) => e.Contact_ID).filter(Boolean);
+  const existing = await CallingData.find(
+    { CampaignId: campaignId, Contact_ID: { $in: contactIds } },
+    { Contact_ID: 1 }
+  ).lean();
+
+  const existingSet = new Set(existing.map((e) => e.Contact_ID));
+  const unique = entries.filter((e) => !existingSet.has(e.Contact_ID));
+
+  if (!unique.length) return { inserted: 0, duplicates: entries.length };
+
+  try {
+    await CallingData.insertMany(unique, { ordered: false });
+    return { inserted: unique.length, duplicates: entries.length - unique.length };
+  } catch (err) {
+    console.error("[insertContactsChunk] insertMany error:", err.message);
+    return { inserted: 0, duplicates: entries.length };
+  }
+}
+
+/**
+ * Stream-process aggregation cursor in chunks of 1000.
+ * Never loads more than CHUNK_SIZE docs into Node.js heap at once.
+ * allowDiskUse: true lets MongoDB spill sorts/lookups to disk — no 32MB limit.
+ */
+async function streamInsertContacts(pipeline, opts) {
+  const CHUNK_SIZE = 1000;
+  const cursor = Contact.collection.aggregate(pipeline, { allowDiskUse: true });
+
+  let chunk = [];
+  let insertedCount = 0;
+  let duplicateCount = 0;
+  let totalProcessed = 0;
+
+  for await (const row of cursor) {
+    chunk.push(mapContactToEntry(row, opts));
+    if (chunk.length >= CHUNK_SIZE) {
+      const { inserted, duplicates } = await insertContactsChunk(chunk, opts.campaignId);
+      insertedCount += inserted;
+      duplicateCount += duplicates;
+      totalProcessed += chunk.length;
+      chunk = [];
+    }
+  }
+  if (chunk.length > 0) {
+    const { inserted, duplicates } = await insertContactsChunk(chunk, opts.campaignId);
+    insertedCount += inserted;
+    duplicateCount += duplicates;
+    totalProcessed += chunk.length;
+  }
+
+  return { totalProcessed, insertedCount, duplicateCount };
+}
+
 const callingDataFilterOld = asyncHandler(async (req, res, next) => {
   try {
     const { campaignId, filters = [], exclusions = [], datatype } = req.body;
@@ -415,7 +662,7 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
 
     // ================= EXECUTE =================
     const [statsResult, uniqueCompaniesCount] = await Promise.all([
-      Contact.aggregate(statsPipeline),
+      Contact.aggregate(statsPipeline, { allowDiskUse: true }),
 
       Contact.aggregate([
         {
@@ -441,7 +688,7 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
         },
         { $group: { _id: "$Company_ID" } },
         { $count: "uniqueCompanies" },
-      ]),
+      ], { allowDiskUse: true }),
     ]);
 
     const stats = statsResult[0] || { crossTabData: [], totalContacts: 0 };
@@ -849,11 +1096,6 @@ const companiesMatchedDataWithExcel = asyncHandler(async (req, res, next) => {
     }
 
     fs.unlinkSync(filePath);
-    await ClientCompanyList.create({
-      campaignId,
-      dataType,
-      companyNames,
-    });
 
     if (!Array.isArray(companyNames) || companyNames.length === 0) {
       return sendError(next, "No valid company names found in the file", 400);
@@ -923,9 +1165,22 @@ const companiesMatchedDataWithExcel = asyncHandler(async (req, res, next) => {
       }
     }
 
+    const matchedNames = new Set([
+      ...completelyMatched.map((c) => c.matchedWith.toLowerCase()),
+      ...partiallyMatched.map((p) => p.input.toLowerCase()),
+    ]);
+    const notMatched = companyNames.filter(
+      (name) => !matchedNames.has(name.toLowerCase())
+    );
+
+    // Save company names (replace any previous upload for this campaign)
+    await ClientCompanyList.deleteMany({ campaignId, dataType });
+    await ClientCompanyList.create({ campaignId, dataType, companyNames });
+
     return sendResponse(res, 200, "Company name match results", {
       completelyMatched,
       partiallyMatched,
+      notMatched,
     });
   } catch (err) {
     console.error("Error in companiesMatchedDataWithExcel:", err);
@@ -951,54 +1206,15 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
       return sendError(next, "Data Type is required", 400);
     }
 
-    // const fieldMapping = {
-    //   Contact_Country: "Contact_Country",
-    //   Contact_Region: "Contact_Region",
-    //   Job_Function: "Job_Function",
-    //   Job_Seniority: "Job_Seniority",
-    //   Industry: "company_info.Industry",
-    //   Employees_Range: "company_info.Employees_Range",
-    // };
-    const fieldMapping = {
-      Industry: "company_info.Industry",
-      Sub_Industry: "company_info.Sub_Industry",
-      Company_Segment: "company_info.Company_Segment",
-      Employees_Range: "company_info.Employees_Range",
-      Turnover_Range: "company_info.Turnover_Range",
-      Contact_Country: "Contact_Country",
-      Contact_State: "Contact_State",
-      Contact_Region: "Contact_Region",
-      Contact_City: "Contact_City",
-      Job_Function: "Job_Function",
-      Job_Seniority: "Job_Seniority",
-    };
-
-    const buildMongoQuery = (filtersArr, operator = "$in") => {
-      const q = {};
-      filtersArr.forEach(({ field, value }) => {
-        const mappedField = fieldMapping[field] || field;
-        if (Array.isArray(value) && value.length > 0) {
-          q[mappedField] = { [operator]: value };
-        }
-      });
-      return q;
-    };
-
-    const includeQuery = buildMongoQuery(filters, "$in");
-    const excludeQuery = buildMongoQuery(exclusions, "$nin");
-
-    const companyIdFilter =
-      Array.isArray(companyIds) && companyIds.length > 0
-        ? {
-            Company_ID: {
-              $in: companyIds.map((id) => new mongoose.Types.ObjectId(id)),
-            },
-          }
-        : {};
+    // Split filters into pre-lookup (contact fields + Company_ID) and post-lookup (company fields)
+    const preLookup  = buildPreLookupMatch(filters, exclusions, companyIds);
+    const postLookup = buildPostLookupMatch(filters, exclusions);
 
     req.setTimeout(300000);
 
     const statsPipeline = [
+      // Pre-lookup: filters contact-only fields + Company_ID before the expensive join
+      { $match: preLookup },
       {
         $lookup: {
           from: "companies",
@@ -1013,14 +1229,8 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
           preserveNullAndEmptyArrays: true,
         },
       },
-      {
-        $match: {
-          "discrepencyInData.status": { $ne: true },
-          ...includeQuery,
-          ...excludeQuery,
-          ...companyIdFilter,
-        },
-      },
+      // Post-lookup: filters on joined company fields (Industry, Employees_Range, etc.)
+      ...(Object.keys(postLookup).length > 0 ? [{ $match: postLookup }] : []),
       {
         $addFields: {
           normalizedIndustry: {
@@ -1065,8 +1275,9 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
 
     // Parallel query for unique companies
     const [statsResult, uniqueCompaniesCount] = await Promise.all([
-      Contact.aggregate(statsPipeline),
+      Contact.aggregate(statsPipeline, { allowDiskUse: true }),
       Contact.aggregate([
+        { $match: preLookup },
         {
           $lookup: {
             from: "companies",
@@ -1078,17 +1289,10 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
         {
           $unwind: { path: "$company_info", preserveNullAndEmptyArrays: true },
         },
-        {
-          $match: {
-            "discrepencyInData.status": { $ne: true },
-            ...includeQuery,
-            ...excludeQuery,
-            ...companyIdFilter,
-          },
-        },
+        ...(Object.keys(postLookup).length > 0 ? [{ $match: postLookup }] : []),
         { $group: { _id: "$Company_ID" } },
         { $count: "uniqueCompanies" },
-      ]),
+      ], { allowDiskUse: true }),
     ]);
 
     const stats = statsResult[0] || { crossTabData: [], totalContacts: 0 };
@@ -1158,6 +1362,16 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
       listName = `List${revisionNo}`;
     }
 
+    // Resolve company names for the IDs used in this filter
+    let companyNamesUsed = [];
+    if (companyIds.length > 0) {
+      const companiesUsed = await Company.find(
+        { _id: { $in: companyIds.map((id) => new mongoose.Types.ObjectId(id)) } },
+        { Company_Name: 1 }
+      ).lean();
+      companyNamesUsed = companiesUsed.map((c) => c.Company_Name).filter(Boolean);
+    }
+
     const campaignFilter = await CampaignFilter.create({
       campaignId,
       filters,
@@ -1168,7 +1382,7 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
       dataType: datatype,
       contactCount: stats.totalContacts,
       status: "Pending",
-      misc: { companyIdsUsed: companyIds },
+      misc: { companyIdsUsed: companyIds, companyNamesUsed },
     });
 
     return sendResponse(
@@ -1195,809 +1409,243 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
 //assign  calling data filtration(kestone masterdatabase)
 const assignCallingDataToCampaign = asyncHandler(async (req, res, next) => {
   try {
-    const { campaignId, uploadedBy, batch, dataSourceType } = req.body;
+    const { campaignId, uploadedBy, dataSourceType } = req.body;
     if (!campaignId || !uploadedBy) {
       return sendError(next, "Required fields missing", 400);
     }
 
-    // Fetch last filter for this campaign
     const lastFilter = await CampaignFilter.findOne({ campaignId })
       .sort({ revisionNo: -1, createdAt: -1 })
       .lean();
-
     if (!lastFilter) {
       return sendError(next, "No campaign filter found for this campaign", 404);
     }
 
-    // Fetch campaign
     const campaign = await Campaign.findById(campaignId).lean();
-    if (!campaign) {
-      return sendError(next, "Campaign not found", 404);
-    }
+    if (!campaign) return sendError(next, "Campaign not found", 404);
 
-    // Batch label
-    const existingBatchCount = campaign.filterBatches?.length || 0;
-    const batchNumber = existingBatchCount + 1;
+    const batchNumber = (campaign.filterBatches?.length || 0) + 1;
     const batchLabel = `Batch-${batchNumber}`;
 
-    const fieldMapping = {
-      Industry: "company_info.Industry",
-      Sub_Industry: "company_info.Sub_Industry",
-      Company_Segment: "company_info.Company_Segment",
-      Employees_Range: "company_info.Employees_Range",
-      Turnover_Range: "company_info.Turnover_Range",
-      Contact_Country: "Contact_Country",
-      Contact_State: "Contact_State",
-      Contact_Region: "Contact_Region",
-      Contact_City: "Contact_City",
-      Job_Function: "Job_Function",
-      Job_Seniority: "Job_Seniority",
-    };
+    const preLookup = buildPreLookupMatch(lastFilter.filters || [], lastFilter.exclusions || []);
+    const postLookup = buildPostLookupMatch(lastFilter.filters || [], lastFilter.exclusions || []);
+    const pipeline = buildAssignPipeline(preLookup, postLookup);
 
-    const buildMongoQuery = (filtersArr, operator = "$in") => {
-      const q = {};
-      filtersArr.forEach(({ field, value }) => {
-        const mappedField = fieldMapping[field] || field;
-        if (Array.isArray(value) && value.length > 0) {
-          q[mappedField] = { [operator]: value };
-        }
-      });
-      return q;
-    };
+    const { totalProcessed, insertedCount, duplicateCount } = await streamInsertContacts(pipeline, {
+      campaignId,
+      uploadedBy,
+      batchLabel,
+      dataSourceType: dataSourceType || "Kestone",
+      source: "MasterDB",
+    });
 
-    const includeQuery = buildMongoQuery(lastFilter.filters || [], "$in");
-    const excludeQuery = buildMongoQuery(lastFilter.exclusions || [], "$nin");
-
-    // Get contacts from Master DB
-    const contacts = await Contact.aggregate([
-      {
-        $lookup: {
-          from: "companies",
-          localField: "Company_ID",
-          foreignField: "_id",
-          as: "company_info",
-        },
-      },
-      {
-        $unwind: {
-          path: "$company_info",
-          preserveNullAndEmptyArrays: true,
-        },
-      },
-      {
-        $match: {
-          "discrepencyInData.status": { $ne: true },
-          ...includeQuery,
-          ...excludeQuery,
-        },
-      },
-      {
-        $sort: {
-          EngagementPoints: -1, // Higher points first
-          Last_Engagement_Date: -1, // Latest engagement first (tie breaker)
-        },
-      },
-    ]);
-
-    if (!contacts.length) {
+    if (totalProcessed === 0) {
       return sendError(next, "No contacts found for this filter", 404);
     }
 
-    // Prepare CallingData entries
-    const callingDataEntries = contacts.map((row) => ({
-      CampaignId: new mongoose.Types.ObjectId(campaignId),
-      UploadedBy: new mongoose.Types.ObjectId(uploadedBy),
-      source: "MasterDB",
-      batch: batchLabel,
-      dataSourceType: dataSourceType || "Kestone",
-
-      // Contact Details
-      Contact_ID: row.Contact_ID,
-      Contact_Source: row.Contact_Source,
-      Contact_Create_Date: row.Contact_Create_Date,
-      Salutation: row.Salutation,
-      First_Name: row.First_Name,
-      Last_Name: row.Last_Name,
-      Full_Name: row.Full_Name,
-      Gender: row.Gender,
-      Job_Title: row.Job_Title,
-      Job_Seniority: row.Job_Seniority,
-      Job_Function: row.Job_Function,
-      Contact_Address_1: row.Contact_Address_1,
-      Contact_Address_2: row.Contact_Address_2,
-      Contact_Address_3: row.Contact_Address_3,
-      Contact_City: row.Contact_City,
-      Contact_Pin: row.Contact_Pin,
-      Contact_State: row.Contact_State,
-      Contact_Region: row.Contact_Region,
-      Contact_Country: row.Contact_Country,
-      Contact_STD_ISD_Code: row.Contact_STD_ISD_Code,
-      Contact_Location_Tier: row.Contact_Location_Tier,
-      Contact_Direct_Phone1: row.Contact_Direct_Phone1,
-      Contact_Direct_Phone2: row.Contact_Direct_Phone2,
-      Contact_Extn_No: row.Contact_Extn_No,
-      Mobile_No: row.Mobile_No,
-      Office_Email_1: row.Office_Email_1,
-      Office_Email_2: row.Office_Email_2,
-      Personal_Email1: row.Personal_Email1,
-      Personal_Email2: row.Personal_Email2,
-      Contact_LinkedIn_Profile: row.Contact_LinkedIn_Profile,
-      Unsubscribe_Flag: row.Unsubscribe_Flag,
-      Unsubscribe_Account_Tag: row.Unsubscribe_Account_Tag,
-      DND_Flag: row.DND_Flag,
-      DND_Account_Tag: row.DND_Account_Tag,
-      Last_Engagement: row.Last_Engagement,
-      Last_Engagement_Date: row.Last_Engagement_Date,
-      Last_Engagement_Campaign: row.Last_Engagement_Campaign,
-      Telecalling_Remarks: row.Telecalling_Remarks,
-
-      // Company
-      Company_ID: row.company_info?._id || null,
-      Company_Name: row.company_info?.Company_Name || "",
-      Company_ID_Kestone: row.company_info?.Company_ID_Kestone || "",
-      Affinity_ID_Dell: row.company_info?.Affinity_ID_Dell || "",
-      Company_ID_Google: row.company_info?.Company_ID_Google || "",
-      Company_Source: row.company_info?.Company_Source || "",
-      Year_Founded: row.company_info?.Year_Founded || "",
-      Turnover_Range: row.company_info?.Turnover_Range || "",
-      Employees_Range: row.company_info?.Employees_Range || "",
-      Industry: row.company_info?.Industry || "",
-      Sub_Industry: row.company_info?.Sub_Industry || "",
-      Company_Segment: row.company_info?.Company_Segment || "",
-      Website: row.company_info?.Website || "",
-      Company_LinkedIn_Profile:
-        row.company_info?.Company_LinkedIn_Profile || "",
-      Company_Phone1: row.company_info?.Company_Phone1 || "",
-      Company_Phone2: row.company_info?.Company_Phone2 || "",
-      Last_Engagement_Date: row.Last_Engagement_Date || "",
-      EngagementPoints: row.EngagementPoints,
-    }));
-
-    // Detect duplicates
-    const existingContactIds = await CallingData.find(
-      {
-        CampaignId: campaignId,
-        Contact_ID: { $in: callingDataEntries.map((e) => e.Contact_ID) },
-      },
-      { Contact_ID: 1 }
-    ).lean();
-
-    const existingIds = new Set(existingContactIds.map((e) => e.Contact_ID));
-
-    const uniqueCallingDataEntries = callingDataEntries.filter(
-      (entry) => !existingIds.has(entry.Contact_ID)
-    );
-
-    const duplicateCount =
-      callingDataEntries.length - uniqueCallingDataEntries.length;
-
-    // If all contacts are duplicates → still success
-    if (uniqueCallingDataEntries.length === 0) {
-      return sendResponse(
-        res,
-        200,
-        "All contacts already exist in this campaign. No new data added.",
-        {
-          contacts: contacts.length,
-          campaignId,
-          insertedCount: 0,
-          duplicateCount,
-          uniqueCount: 0,
-          batchNumber,
-          batchLabel,
-        }
-      );
+    if (insertedCount === 0) {
+      return sendResponse(res, 200, "All contacts already exist in this campaign. No new data added.", {
+        contacts: totalProcessed,
+        campaignId,
+        insertedCount: 0,
+        duplicateCount,
+        uniqueCount: 0,
+        batchNumber,
+        batchLabel,
+      });
     }
 
-    // Insert unique entries
-    const batchSize = 1000;
-    let insertedCount = 0;
-
-    for (let i = 0; i < uniqueCallingDataEntries.length; i += batchSize) {
-      const batch = uniqueCallingDataEntries.slice(i, i + batchSize);
-
-      try {
-        await CallingData.insertMany(batch, { ordered: false });
-        insertedCount += batch.length;
-      } catch (err) {
-        console.error("InsertMany error:", err);
-      }
-    }
-
-    // Update campaign
     await Campaign.findByIdAndUpdate(
       { _id: campaignId },
       {
         isCallingDataAssigned: true,
-        $push: {
-          filterBatches: {
-            filterBatchId: new mongoose.Types.ObjectId(lastFilter._id),
-          },
-        },
+        $push: { filterBatches: { filterBatchId: new mongoose.Types.ObjectId(lastFilter._id) } },
       },
       { new: true }
     );
 
     return sendResponse(res, 200, "Calling data processed successfully", {
-      contacts: contacts.length,
+      contacts: totalProcessed,
       campaignId,
       insertedCount,
       duplicateCount,
-      uniqueCount: uniqueCallingDataEntries.length,
+      uniqueCount: insertedCount,
       batchNumber,
       batchLabel,
-      message:
-        duplicateCount > 0
-          ? `${duplicateCount} duplicate contacts skipped. ${insertedCount} new contacts added.`
-          : "All new contacts inserted successfully.",
+      message: duplicateCount > 0
+        ? `${duplicateCount} duplicate contacts skipped. ${insertedCount} new contacts added.`
+        : "All new contacts inserted successfully.",
     });
   } catch (err) {
     console.error("Error assigning calling data to campaign:", err);
-    return sendError(
-      next,
-      err.message || "Failed to assign calling data to campaign",
-      500
-    );
+    return sendError(next, err.message || "Failed to assign calling data to campaign", 500);
   }
 });
 
 //assign  calling data filtration(Client masterdatabase)
-const assignCallingDataToCampaignClientSuggested = asyncHandler(
-  async (req, res, next) => {
-    try {
-      const { campaignId, uploadedBy, dataSourceType = "Client" } = req.body;
-
-      if (!campaignId || !uploadedBy) {
-        return sendError(next, "Required fields missing", 400);
-      }
-
-      // 1. Fetch last client filter
-      const lastFilter = await CampaignFilter.findOne({
-        campaignId,
-        dataType: "Client",
-      })
-        .sort({ revisionNo: -1, createdAt: -1 })
-        .lean();
-
-      if (!lastFilter) {
-        return sendError(next, "No client filter found for this campaign", 404);
-      }
-
-      // 2. Fetch campaign for batch calculation
-      const campaign = await Campaign.findById(campaignId).lean();
-      if (!campaign) {
-        return sendError(next, "Campaign not found", 404);
-      }
-
-      const existingBatchCount = campaign.filterBatches?.length || 0;
-      const batchNumber = existingBatchCount + 1;
-      const batchLabel = `Batch-${batchNumber}`;
-
-      // 3. Field mapping
-      const fieldMapping = {
-        Industry: "company_info.Industry",
-        Sub_Industry: "company_info.Sub_Industry",
-        Company_Segment: "company_info.Company_Segment",
-        Employees_Range: "company_info.Employees_Range",
-        Turnover_Range: "company_info.Turnover_Range",
-        Contact_Country: "Contact_Country",
-        Contact_State: "Contact_State",
-        Contact_Region: "Contact_Region",
-        Contact_City: "Contact_City",
-        Job_Function: "Job_Function",
-        Job_Seniority: "Job_Seniority",
-      };
-
-      const buildMongoQuery = (filtersArr, operator = "$in") => {
-        const q = {};
-        if (!Array.isArray(filtersArr)) return q;
-
-        filtersArr.forEach(({ field, value }) => {
-          const mappedField = fieldMapping[field] || field;
-          if (Array.isArray(value) && value.length > 0) {
-            q[mappedField] = { [operator]: value };
-          }
-        });
-
-        return q;
-      };
-
-      const includeQuery = buildMongoQuery(lastFilter.filters || [], "$in");
-      const excludeQuery = buildMongoQuery(lastFilter.exclusions || [], "$nin");
-
-      // 4. Aggregation: Fetch contacts from Master DB
-      const contacts = await Contact.aggregate([
-        {
-          $lookup: {
-            from: "companies",
-            localField: "Company_ID",
-            foreignField: "_id",
-            as: "company_info",
-          },
-        },
-        {
-          $unwind: {
-            path: "$company_info",
-            preserveNullAndEmptyArrays: true,
-          },
-        },
-        {
-          $match: {
-            "discrepencyInData.status": { $ne: true },
-            ...(lastFilter.misc?.companyIdsUsed?.length
-              ? {
-                  Company_ID: {
-                    $in: lastFilter.misc.companyIdsUsed.map(
-                      (id) => new mongoose.Types.ObjectId(id)
-                    ),
-                  },
-                }
-              : {}),
-            ...includeQuery,
-            ...excludeQuery,
-          },
-        },
-        {
-          $sort: {
-            EngagementPoints: -1, // Higher points first
-            Last_Engagement_Date: -1, // Latest engagement first (tie breaker)
-          },
-        },
-      ]);
-
-      if (!contacts.length) {
-        return sendError(next, "No contacts found for this filter", 404);
-      }
-
-      // 5. Prepare entries for CallingData
-      const callingDataEntries = contacts.map((row) => ({
-        CampaignId: new mongoose.Types.ObjectId(campaignId),
-        UploadedBy: new mongoose.Types.ObjectId(uploadedBy),
-        source: "ClientSuggested",
-        batch: batchLabel,
-        dataSourceType,
-
-        Contact_ID: row.Contact_ID,
-        Contact_Source: row.Contact_Source,
-        Contact_Create_Date: row.Contact_Create_Date,
-        Salutation: row.Salutation,
-        First_Name: row.First_Name,
-        Last_Name: row.Last_Name,
-        Full_Name: row.Full_Name,
-        Gender: row.Gender,
-        Job_Title: row.Job_Title,
-        Job_Seniority: row.Job_Seniority,
-        Job_Function: row.Job_Function,
-        Contact_Address_1: row.Contact_Address_1,
-        Contact_Address_2: row.Contact_Address_2,
-        Contact_Address_3: row.Contact_Address_3,
-        Contact_City: row.Contact_City,
-        Contact_Pin: row.Contact_Pin,
-        Contact_State: row.Contact_State,
-        Contact_Region: row.Contact_Region,
-        Contact_Country: row.Contact_Country,
-        Contact_STD_ISD_Code: row.Contact_STD_ISD_Code,
-        Contact_Location_Tier: row.Contact_Location_Tier,
-        Contact_Direct_Phone1: row.Contact_Direct_Phone1,
-        Contact_Direct_Phone2: row.Contact_Direct_Phone2,
-        Contact_Extn_No: row.Contact_Extn_No,
-        Mobile_No: row.Mobile_No,
-        Office_Email_1: row.Office_Email_1,
-        Office_Email_2: row.Office_Email_2,
-        Personal_Email1: row.Personal_Email1,
-        Personal_Email2: row.Personal_Email2,
-        Contact_LinkedIn_Profile: row.Contact_LinkedIn_Profile,
-        Unsubscribe_Flag: row.Unsubscribe_Flag,
-        Unsubscribe_Account_Tag: row.Unsubscribe_Account_Tag,
-        DND_Flag: row.DND_Flag,
-        DND_Account_Tag: row.DND_Account_Tag,
-        Last_Engagement: row.Last_Engagement,
-        Last_Engagement_Date: row.Last_Engagement_Date,
-        Last_Engagement_Campaign: row.Last_Engagement_Campaign,
-        Telecalling_Remarks: row.Telecalling_Remarks,
-        Company_ID: row.company_info?._id || null,
-        Company_Name: row.company_info?.Company_Name || "",
-        Last_Engagement_Date: row.Last_Engagement_Date || "",
-        EngagementPoints: row.EngagementPoints,
-      }));
-
-      // 6. Duplicate detection
-      const existingContactIds = await CallingData.find(
-        {
-          CampaignId: campaignId,
-          Contact_ID: { $in: callingDataEntries.map((e) => e.Contact_ID) },
-        },
-        { Contact_ID: 1 }
-      ).lean();
-
-      const existingIds = new Set(existingContactIds.map((e) => e.Contact_ID));
-
-      const uniqueCallingDataEntries = callingDataEntries.filter(
-        (entry) => !existingIds.has(entry.Contact_ID)
-      );
-
-      const duplicateCount =
-        callingDataEntries.length - uniqueCallingDataEntries.length;
-
-      // 7. If all duplicates → SUCCESS
-      if (uniqueCallingDataEntries.length === 0) {
-        return sendResponse(
-          res,
-          200,
-          "All contacts already exist in this campaign. No new data added.",
-          {
-            contacts: contacts.length,
-            campaignId,
-            insertedCount: 0,
-            duplicateCount,
-            uniqueCount: 0,
-            batchNumber,
-            batchLabel,
-          }
-        );
-      }
-
-      // 8. Insert unique entries in batches
-      const batchSize = 1000;
-      let insertedCount = 0;
-
-      for (let i = 0; i < uniqueCallingDataEntries.length; i += batchSize) {
-        const batch = uniqueCallingDataEntries.slice(i, i + batchSize);
-        try {
-          await CallingData.insertMany(batch, { ordered: false });
-          insertedCount += batch.length;
-        } catch (err) {
-          console.error("InsertMany error:", err);
-        }
-      }
-
-      // 9. Update campaign (push filterBatchId)
-      await Campaign.findByIdAndUpdate(
-        { _id: campaignId },
-        {
-          isCallingDataAssigned: true,
-          $push: {
-            filterBatches: {
-              filterBatchId: new mongoose.Types.ObjectId(lastFilter._id),
-            },
-          },
-        },
-        { new: true }
-      );
-
-      return sendResponse(
-        res,
-        200,
-        "Client-suggested calling data processed successfully",
-        {
-          contacts: contacts.length,
-          campaignId,
-          insertedCount,
-          duplicateCount,
-          uniqueCount: uniqueCallingDataEntries.length,
-          batchNumber,
-          batchLabel,
-          message:
-            duplicateCount > 0
-              ? `${duplicateCount} duplicate contacts skipped. ${insertedCount} new contacts added.`
-              : "All new contacts inserted successfully.",
-        }
-      );
-    } catch (err) {
-      return sendError(
-        next,
-        err.message || "Failed to assign client-suggested calling data",
-        500
-      );
+const assignCallingDataToCampaignClientSuggested = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId, uploadedBy, dataSourceType = "Client" } = req.body;
+    if (!campaignId || !uploadedBy) {
+      return sendError(next, "Required fields missing", 400);
     }
+
+    const lastFilter = await CampaignFilter.findOne({ campaignId, dataType: "Client" })
+      .sort({ revisionNo: -1, createdAt: -1 })
+      .lean();
+    if (!lastFilter) {
+      return sendError(next, "No client filter found for this campaign", 404);
+    }
+
+    const campaign = await Campaign.findById(campaignId).lean();
+    if (!campaign) return sendError(next, "Campaign not found", 404);
+
+    const batchNumber = (campaign.filterBatches?.length || 0) + 1;
+    const batchLabel = `Batch-${batchNumber}`;
+
+    const companyIds = lastFilter.misc?.companyIdsUsed || [];
+    const preLookup = buildPreLookupMatch(lastFilter.filters || [], lastFilter.exclusions || [], companyIds);
+    const postLookup = buildPostLookupMatch(lastFilter.filters || [], lastFilter.exclusions || []);
+    const pipeline = buildAssignPipeline(preLookup, postLookup);
+
+    const { totalProcessed, insertedCount, duplicateCount } = await streamInsertContacts(pipeline, {
+      campaignId,
+      uploadedBy,
+      batchLabel,
+      dataSourceType,
+      source: "ClientSuggested",
+    });
+
+    if (totalProcessed === 0) {
+      return sendError(next, "No contacts found for this filter", 404);
+    }
+
+    if (insertedCount === 0) {
+      return sendResponse(res, 200, "All contacts already exist in this campaign. No new data added.", {
+        contacts: totalProcessed,
+        campaignId,
+        insertedCount: 0,
+        duplicateCount,
+        uniqueCount: 0,
+        batchNumber,
+        batchLabel,
+      });
+    }
+
+    await Campaign.findByIdAndUpdate(
+      { _id: campaignId },
+      {
+        isCallingDataAssigned: true,
+        $push: { filterBatches: { filterBatchId: new mongoose.Types.ObjectId(lastFilter._id) } },
+      },
+      { new: true }
+    );
+
+    return sendResponse(res, 200, "Client-suggested calling data processed successfully", {
+      contacts: totalProcessed,
+      campaignId,
+      insertedCount,
+      duplicateCount,
+      uniqueCount: insertedCount,
+      batchNumber,
+      batchLabel,
+      message: duplicateCount > 0
+        ? `${duplicateCount} duplicate contacts skipped. ${insertedCount} new contacts added.`
+        : "All new contacts inserted successfully.",
+    });
+  } catch (err) {
+    return sendError(next, err.message || "Failed to assign client-suggested calling data", 500);
   }
-);
+});
 //assign calling data for both filter (client + kestone)
 const assignCallingDataToCampaignBoth = asyncHandler(async (req, res, next) => {
   try {
     const { campaignId, uploadedBy } = req.body;
-
     if (!campaignId || !uploadedBy) {
       return sendError(next, "Campaign Id / UploadedBy missing", 400);
     }
 
-    // 1. Fetch Both filter
-    const bothFilter = await CampaignFilter.findOne({
-      campaignId,
-      dataType: "Both",
-    }).lean();
+    const bothFilter = await CampaignFilter.findOne({ campaignId, dataType: "Both" }).lean();
+    if (!bothFilter) return sendError(next, "Both filter not found for this campaign", 404);
 
-    if (!bothFilter) {
-      return sendError(next, "Both filter not found for this campaign", 404);
-    }
-
-    // 2. Fetch latest Kestone filter
-    const kestoneFilter = await CampaignFilter.findOne({
-      campaignId,
-      dataType: "Kestone",
-    })
+    const kestoneFilter = await CampaignFilter.findOne({ campaignId, dataType: "Kestone" })
       .sort({ revisionNo: -1, createdAt: -1 })
       .lean();
+    if (!kestoneFilter) return sendError(next, "No Kestone filter found for this campaign", 404);
 
-    if (!kestoneFilter) {
-      return sendError(next, "No Kestone filter found for this campaign", 404);
-    }
-
-    // 3. Fetch campaign for batch calc
     const campaign = await Campaign.findById(campaignId).lean();
-    if (!campaign) {
-      return sendError(next, "Campaign not found", 404);
-    }
+    if (!campaign) return sendError(next, "Campaign not found", 404);
 
-    const existingBatchCount = campaign.filterBatches?.length || 0;
-    const batchNumber = existingBatchCount + 1;
+    const batchNumber = (campaign.filterBatches?.length || 0) + 1;
     const batchLabel = `Batch-${batchNumber}`;
 
-    const fieldMapping = {
-      Industry: "company_info.Industry",
-      Sub_Industry: "company_info.Sub_Industry",
-      Company_Segment: "company_info.Company_Segment",
-      Employees_Range: "company_info.Employees_Range",
-      Turnover_Range: "company_info.Turnover_Range",
-      Contact_Country: "Contact_Country",
-      Contact_State: "Contact_State",
-      Contact_Region: "Contact_Region",
-      Contact_City: "Contact_City",
-      Job_Function: "Job_Function",
-      Job_Seniority: "Job_Seniority",
-    };
-
-    const buildMongoQuery = (filtersArr, operator = "$in") => {
-      const q = {};
-      if (!Array.isArray(filtersArr)) return q;
-
-      filtersArr.forEach(({ field, value }) => {
-        const mappedField = fieldMapping[field] || field;
-        if (Array.isArray(value) && value.length > 0) {
-          q[mappedField] = { [operator]: value };
-        }
-      });
-
-      return q;
-    };
-
-    // 4. Build queries
-    const kestoneInclude = buildMongoQuery(kestoneFilter.filters, "$in");
-    const kestoneExclude = buildMongoQuery(kestoneFilter.exclusions, "$nin");
-
-    const kestonePipeline = [
-      {
-        $lookup: {
-          from: "companies",
-          localField: "Company_ID",
-          foreignField: "_id",
-          as: "company_info",
-        },
-      },
-      {
-        $unwind: { path: "$company_info", preserveNullAndEmptyArrays: true },
-      },
-      {
-        $match: {
-          "discrepencyInData.status": { $ne: true },
-          ...kestoneInclude,
-          ...kestoneExclude,
-        },
-      },
-      { $addFields: { sourceType: "Kestone" } },
-    ];
-
-    // Client filters from "Both"
+    // ── Extract client filters from bothFilter ──
     const clientFilters = bothFilter.filterSources
       ? bothFilter.filters
           .map((f) => {
-            const src = bothFilter.filterSources.find(
-              (s) => s.field === f.field
-            );
+            const src = bothFilter.filterSources.find((s) => s.field === f.field);
             if (!src) return null;
-
-            const vals = src.sources
-              .filter((s) => s.source === "Client")
-              .map((s) => s.value);
-
+            const vals = src.sources.filter((s) => s.source === "Client").map((s) => s.value);
             return vals.length ? { field: f.field, value: vals } : null;
           })
           .filter(Boolean)
       : bothFilter.filters;
 
-    const clientInclude = buildMongoQuery(clientFilters, "$in");
+    // ── Build pipelines ──
+    const kestonePipeline = buildAssignPipeline(
+      buildPreLookupMatch(kestoneFilter.filters || [], kestoneFilter.exclusions || []),
+      buildPostLookupMatch(kestoneFilter.filters || [], kestoneFilter.exclusions || [])
+    );
+    const clientPipeline = buildAssignPipeline(
+      buildPreLookupMatch(clientFilters, []),
+      buildPostLookupMatch(clientFilters, [])
+    );
 
-    const clientPipeline = [
-      {
-        $lookup: {
-          from: "companies",
-          localField: "Company_ID",
-          foreignField: "_id",
-          as: "company_info",
-        },
-      },
-      {
-        $unwind: { path: "$company_info", preserveNullAndEmptyArrays: true },
-      },
-      {
-        $match: { "discrepencyInData.status": { $ne: true }, ...clientInclude },
-      },
-      {
-        $sort: {
-          EngagementPoints: -1, // Higher points first
-          Last_Engagement_Date: -1, // Latest engagement first (tie breaker)
-        },
-      },
-      { $addFields: { sourceType: "Client" } },
-    ];
+    // ── Client contacts inserted first → they take precedence over Kestone ──
+    // When Kestone streams, per-chunk dedup will skip contacts already inserted by Client.
+    const clientResult = await streamInsertContacts(clientPipeline, {
+      campaignId, uploadedBy, batchLabel, dataSourceType: "Client", source: "Both",
+    });
 
-    const kestoneContacts = await Contact.aggregate(kestonePipeline);
-    const clientContacts = await Contact.aggregate(clientPipeline);
+    const kestoneResult = await streamInsertContacts(kestonePipeline, {
+      campaignId, uploadedBy, batchLabel, dataSourceType: "Kestone", source: "Both",
+    });
 
-    if (!kestoneContacts.length && !clientContacts.length) {
+    const totalProcessed = clientResult.totalProcessed + kestoneResult.totalProcessed;
+    const insertedCount = clientResult.insertedCount + kestoneResult.insertedCount;
+    const duplicateCount = clientResult.duplicateCount + kestoneResult.duplicateCount;
+
+    if (totalProcessed === 0) {
       return sendError(next, "No contacts found for Both filter", 404);
     }
 
-    // 5. Unique Map by Contact_ID
-    const uniqueMap = new Map();
-
-    const addToMap = (c, type) => {
-      if (!c.Contact_ID) return;
-      uniqueMap.set(c.Contact_ID, {
-        contact: c,
-        batch: type,
-        dataSourceType: type,
+    if (insertedCount === 0) {
+      return sendResponse(res, 200, "All contacts already exist. No new data added.", {
+        campaignId, insertedCount: 0, duplicateCount, uniqueCount: 0, batchNumber, batchLabel,
       });
-    };
-
-    // Add Kestone first
-    kestoneContacts.forEach((c) => addToMap(c, "Kestone"));
-
-    // Client overrides
-    clientContacts.forEach((c) => addToMap(c, "Client"));
-
-    const mergedContacts = Array.from(uniqueMap.values());
-
-    // 6. Prepare final calling data entries
-    const callingDataEntries = mergedContacts.map(
-      ({ contact, batch, dataSourceType }) => ({
-        CampaignId: new mongoose.Types.ObjectId(campaignId),
-        UploadedBy: new mongoose.Types.ObjectId(uploadedBy),
-        source: "Both",
-        batch: batchLabel,
-        dataSourceType,
-
-        Contact_ID: contact.Contact_ID,
-        Contact_Source: contact.Contact_Source,
-        Contact_Create_Date: contact.Contact_Create_Date,
-        Salutation: contact.Salutation,
-        First_Name: contact.First_Name,
-        Last_Name: contact.Last_Name,
-        Full_Name: contact.Full_Name,
-        Gender: contact.Gender,
-        Job_Title: contact.Job_Title,
-        Job_Seniority: contact.Job_Seniority,
-        Job_Function: contact.Job_Function,
-        Contact_Address_1: contact.Contact_Address_1,
-        Contact_Address_2: contact.Contact_Address_2,
-        Contact_Address_3: contact.Contact_Address_3,
-        Contact_City: contact.Contact_City,
-        Contact_Pin: contact.Contact_Pin,
-        Contact_State: contact.Contact_State,
-        Contact_Region: contact.Contact_Region,
-        Contact_Country: contact.Contact_Country,
-        Contact_STD_ISD_Code: contact.Contact_STD_ISD_Code,
-        Contact_Location_Tier: contact.Contact_Location_Tier,
-        Contact_Direct_Phone1: contact.Contact_Direct_Phone1,
-        Contact_Direct_Phone2: contact.Contact_Direct_Phone2,
-        Contact_Extn_No: contact.Contact_Extn_No,
-        Mobile_No: contact.Mobile_No,
-        Office_Email_1: contact.Office_Email_1,
-        Office_Email_2: contact.Office_Email_2,
-        Personal_Email1: contact.Personal_Email1,
-        Personal_Email2: contact.Personal_Email2,
-        Contact_LinkedIn_Profile: contact.Contact_LinkedIn_Profile,
-        Unsubscribe_Flag: contact.Unsubscribe_Flag,
-        Unsubscribe_Account_Tag: contact.Unsubscribe_Account_Tag,
-        DND_Flag: contact.DND_Flag,
-        DND_Account_Tag: contact.DND_Account_Tag,
-        Last_Engagement: contact.Last_Engagement,
-        Last_Engagement_Date: contact.Last_Engagement_Date,
-        Last_Engagement_Campaign: contact.Last_Engagement_Campaign,
-        Telecalling_Remarks: contact.Telecalling_Remarks,
-
-        Company_ID: contact.company_info?._id || null,
-        Company_Name: contact.company_info?.Company_Name || "",
-        Last_Engagement_Date: contact.Last_Engagement_Date || "",
-        EngagementPoints: contact.EngagementPoints,
-      })
-    );
-
-    // 7. Duplicate check by Contact_ID
-    const existingContactIds = await CallingData.find(
-      {
-        CampaignId: campaignId,
-        Contact_ID: { $in: callingDataEntries.map((e) => e.Contact_ID) },
-      },
-      { Contact_ID: 1 }
-    ).lean();
-
-    const existingIds = new Set(existingContactIds.map((e) => e.Contact_ID));
-
-    const uniqueEntries = callingDataEntries.filter(
-      (entry) => !existingIds.has(entry.Contact_ID)
-    );
-
-    const duplicateCount = callingDataEntries.length - uniqueEntries.length;
-
-    // All duplicates → success
-    if (uniqueEntries.length === 0) {
-      return sendResponse(
-        res,
-        200,
-        "All contacts already exist. No new data added.",
-        {
-          campaignId,
-          insertedCount: 0,
-          duplicateCount,
-          uniqueCount: 0,
-          batchNumber,
-          batchLabel,
-        }
-      );
     }
 
-    // 8. Insert in batches
-    const batchSize = 1000;
-    let insertedCount = 0;
-
-    for (let i = 0; i < uniqueEntries.length; i += batchSize) {
-      const batchSlice = uniqueEntries.slice(i, i + batchSize);
-
-      try {
-        await CallingData.insertMany(batchSlice, { ordered: false });
-        insertedCount += batchSlice.length;
-      } catch (err) {
-        console.error("InsertMany error:", err);
-      }
-    }
-
-    // 9. Update campaign with filterBatchId
     await Campaign.findByIdAndUpdate(
       { _id: campaignId },
       {
         isCallingDataAssigned: true,
-        $push: {
-          filterBatches: {
-            filterBatchId: new mongoose.Types.ObjectId(bothFilter._id),
-          },
-        },
+        $push: { filterBatches: { filterBatchId: new mongoose.Types.ObjectId(bothFilter._id) } },
       }
     );
 
-    return sendResponse(
-      res,
-      200,
-      "Both-filter calling data processed successfully",
-      {
-        campaignId,
-        insertedCount,
-        duplicateCount,
-        uniqueCount: uniqueEntries.length,
-        batchNumber,
-        batchLabel,
-        message:
-          duplicateCount > 0
-            ? `${duplicateCount} duplicate contacts skipped. ${insertedCount} new contacts added.`
-            : "All new contacts inserted successfully.",
-      }
-    );
+    return sendResponse(res, 200, "Both-filter calling data processed successfully", {
+      campaignId,
+      insertedCount,
+      duplicateCount,
+      uniqueCount: insertedCount,
+      batchNumber,
+      batchLabel,
+      message: duplicateCount > 0
+        ? `${duplicateCount} duplicate contacts skipped. ${insertedCount} new contacts added.`
+        : "All new contacts inserted successfully.",
+    });
   } catch (err) {
-    return sendError(
-      next,
-      err.message || "Failed to assign calling data with Both filter",
-      500
-    );
+    return sendError(next, err.message || "Failed to assign calling data with Both filter", 500);
   }
 });
 
@@ -2196,6 +1844,156 @@ const extendLinkExpiry = asyncHandler(async (req, res, next) => {
   }
 });
 
+// GET: fetch saved company names for campaign and re-run matching
+const getClientMatchData = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    if (!campaignId) return sendError(next, "Campaign ID is required", 400);
+
+    const doc = await ClientCompanyList.findOne({
+      campaignId,
+      dataType: "Client",
+    })
+      .sort({ updatedAt: -1 })
+      .lean();
+
+    if (!doc || !doc.companyNames?.length) {
+      return sendResponse(res, 200, "No match data found", null);
+    }
+
+    const { companyNames } = doc;
+
+    const regexArr = companyNames.map((name) => ({
+      Company_Name: {
+        $regex: name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        $options: "i",
+      },
+    }));
+
+    const allMatches = await Company.find({ $or: regexArr }).lean();
+
+    function similarity(a, b) {
+      if (!a || !b) return 0;
+      a = a.toLowerCase();
+      b = b.toLowerCase();
+      if (a === b) return 1;
+      const aWords = new Set(a.split(/\s+/));
+      const bWords = new Set(b.split(/\s+/));
+      const intersection = new Set([...aWords].filter((x) => bWords.has(x)));
+      const union = new Set([...aWords, ...bWords]);
+      return intersection.size / union.size;
+    }
+
+    const completelyMatched = [];
+    const partiallyMatched = [];
+
+    for (const inputName of companyNames) {
+      const matches = allMatches.filter(
+        (c) =>
+          c.Company_Name &&
+          c.Company_Name.toLowerCase().includes(inputName.toLowerCase())
+      );
+
+      const exact = matches.find(
+        (c) =>
+          c.Company_Name &&
+          c.Company_Name.trim().toLowerCase() === inputName.trim().toLowerCase()
+      );
+
+      if (exact) {
+        completelyMatched.push({
+          _id: exact._id,
+          Company_Name: exact.Company_Name,
+          matchedWith: inputName,
+        });
+        continue;
+      }
+
+      const partials = matches
+        .map((c) => ({
+          _id: c._id,
+          Company_Name: c.Company_Name,
+          matchedWith: inputName,
+          matchPercent: Math.round(similarity(inputName, c.Company_Name) * 100),
+        }))
+        .filter((obj) => obj.matchPercent > 0);
+
+      if (partials.length > 0) {
+        partials.sort((a, b) => b.matchPercent - a.matchPercent);
+        partiallyMatched.push({ input: inputName, suggestions: partials });
+      }
+    }
+
+    const matchedNames = new Set([
+      ...completelyMatched.map((c) => c.matchedWith.toLowerCase()),
+      ...partiallyMatched.map((p) => p.input.toLowerCase()),
+    ]);
+    const notMatched = companyNames.filter(
+      (name) => !matchedNames.has(name.toLowerCase())
+    );
+
+    return sendResponse(res, 200, "Client match data fetched", {
+      completelyMatched,
+      partiallyMatched,
+      notMatched,
+      // Return as { _id, Company_Name } so the frontend can display names
+      approvedIds: (doc.approvedIds || []).map((e) => ({
+        _id: String(e.companyId),
+        Company_Name: e.Company_Name,
+      })),
+      rejectedIds: (doc.rejectedIds || []).map((e) => ({
+        _id: String(e.companyId),
+        Company_Name: e.Company_Name,
+      })),
+    });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+// PATCH: persist approve/reject action — stores { companyId, Company_Name }
+const updateClientMatchAction = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    const { companyId, companyName, type, action } = req.body;
+    // type: "approved" | "rejected"
+    // action: "add" | "remove"
+
+    if (!campaignId || !companyId || !type || !action) {
+      return sendError(next, "campaignId, companyId, type and action are required", 400);
+    }
+
+    const field = type === "approved" ? "approvedIds" : "rejectedIds";
+    const filter = { campaignId, dataType: "Client" };
+    const sortOpt = { sort: { updatedAt: -1 } };
+
+    if (action === "add") {
+      // Remove any existing entry for this companyId first (prevents duplicates),
+      // then push the new entry with the company name included.
+      await ClientCompanyList.findOneAndUpdate(
+        filter,
+        { $pull: { [field]: { companyId } } },
+        sortOpt
+      );
+      await ClientCompanyList.findOneAndUpdate(
+        filter,
+        { $push: { [field]: { companyId, Company_Name: companyName } } },
+        sortOpt
+      );
+    } else {
+      await ClientCompanyList.findOneAndUpdate(
+        filter,
+        { $pull: { [field]: { companyId } } },
+        sortOpt
+      );
+    }
+
+    return sendResponse(res, 200, "Action saved", null);
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
 export {
   callingDataFilter,
   callingDataFilterLightweight,
@@ -2210,4 +2008,6 @@ export {
   getSharedFilterStats,
   deactivateSharedLink,
   extendLinkExpiry,
+  getClientMatchData,
+  updateClientMatchAction,
 };

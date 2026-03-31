@@ -3,6 +3,7 @@ import fs from "fs";
 import errorHandler from "../../utils/index.js";
 import Company from "../../models/MasterDBModel/companyModel.js";
 import Contact from "../../models/MasterDBModel/contactModel.js";
+import CampaignFilter from "../../models/CallingDataFiltrationModel.js";
 import CompanyHistory from "../../models/MasterDBModel/companyHistory.js";
 import ContactHistory from "../../models/MasterDBModel/contactHistory.js";
 import CallHistory from "../../models/callHistoryModel.js";
@@ -800,26 +801,8 @@ const getAllData = asyncHandler(async (req, res, next) => {
 
     let searchFilter = {};
     if (search && search.trim()) {
-      const regex = new RegExp(search.trim(), "i");
-      searchFilter = {
-        $or: [
-          { First_Name: regex },
-          { Last_Name: regex },
-          { Full_Name: regex },
-
-          { Job_Title: regex },
-          { Office_Email_1: regex },
-          { Office_Email_2: regex },
-          { Personal_Email1: regex },
-          { Personal_Email2: regex },
-          { Contact_Direct_Phone1: regex },
-          { Contact_Direct_Phone2: regex },
-          { Mobile_No: regex },
-          { Contact_City: regex },
-          { Contact_State: regex },
-          { Contact_Country: regex },
-        ],
-      };
+      // Use MongoDB text index for fast full-text search (replaces slow $or regex scan)
+      searchFilter = { $text: { $search: search.trim() } };
     }
 
     const finalFilter = Object.keys(searchFilter).length
@@ -905,10 +888,17 @@ const getAllCompanyData = asyncHandler(async (req, res, next) => {
 
 const getAllCompanyName = asyncHandler(async (req, res, next) => {
   try {
-    const companies = await Company.find(
-      {},
-      { _id: 1, Company_Name: 1 }
-    ).lean();
+    const search = req.query.search?.trim();
+    const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+
+    const filter = {};
+    if (search) {
+      filter.Company_Name = new RegExp(search, "i");
+    }
+
+    const companies = await Company.find(filter, { _id: 1, Company_Name: 1 })
+      .limit(limit)
+      .lean();
 
     return sendResponse(res, 200, "Companies fetched successfully", {
       total: companies.length,
@@ -1260,8 +1250,10 @@ const updateCompany = asyncHandler(async (req, res, next) => {
   }
 });
 
-const getDropdownFilters = asyncHandler(async (req, res, next) => {
+const getDropdownFiltersOld = asyncHandler(async (req, res, next) => {
   try {
+    const { campaignId } = req.query;
+
     const [companyFilters, contactFilters] = await Promise.all([
       Company.aggregate([
         {
@@ -1493,12 +1485,213 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
     contactData.jobSeniorities = contactData.jobSeniorities.sort();
     contactData.jobFunctions = contactData.jobFunctions.sort();
 
+    // Fetch applied filters for the campaign if campaignId is provided
+    let appliedFilters = [];
+    let appliedExclusions = [];
+    if (campaignId) {
+      const latestFilter = await CampaignFilter.findOne(
+        { campaignId, dataType: "Client" },
+        { filters: 1, exclusions: 1 }
+      )
+        .sort({ revisionNo: -1 })
+        .lean();
+
+      if (latestFilter) {
+        appliedFilters = latestFilter.filters || [];
+        appliedExclusions = latestFilter.exclusions || [];
+      }
+    }
+
     return sendResponse(res, 200, "Unique filters fetched successfully", {
       ...companyData,
       ...contactData,
+      appliedFilters,
+      appliedExclusions,
     });
   } catch (err) {
     return sendError(next, err.message || "Failed to fetch filters", 500);
+  }
+});
+
+// ─── Dynamic Dropdown Filters ────────────────────────────────────────────────
+// Hierarchies:
+//   Country → Region → State → City
+//   Industry → Sub Industry
+//   Job Function → Job Seniority
+//
+// Query params (all optional, accept comma-separated or repeated array keys):
+//   campaignId, country, region, state, industry, jobFunction
+const getDropdownFilters = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.query;
+
+    // Normalise a query param to an array (handles string, array, undefined)
+    const toArray = (val) => {
+      if (!val) return null;
+      const arr = Array.isArray(val) ? val : val.split(",").map((s) => s.trim());
+      return arr.filter(Boolean).length ? arr.filter(Boolean) : null;
+    };
+
+    const selectedCountries    = toArray(req.query.country);
+    const selectedRegions      = toArray(req.query.region);
+    const selectedStates       = toArray(req.query.state);
+    const selectedIndustries   = toArray(req.query.industry);
+    const selectedJobFunctions = toArray(req.query.jobFunction);
+
+    const BLANK_FILTER = { $nin: [null, "", "Blank"] };
+
+    // Helper: distinct values from the Contact collection with a given match
+    const distinctContactValues = async (matchStage, field) => {
+      const results = await Contact.aggregate([
+        { $match: matchStage },
+        { $group: { _id: `$${field}` } },
+        { $match: { _id: { $nin: [null, "", "Blank"] } } },
+        { $sort: { _id: 1 } },
+        { $project: { _id: 0, value: "$_id" } },
+      ]);
+      return results.map((r) => r.value);
+    };
+
+    // Helper: distinct values from the Company collection with a given match
+    const distinctCompanyValues = async (matchStage, field) => {
+      const results = await Company.aggregate([
+        { $match: matchStage },
+        { $group: { _id: `$${field}` } },
+        { $match: { _id: { $nin: [null, "", "Blank"] } } },
+        { $sort: { _id: 1 } },
+        { $project: { _id: 0, value: "$_id" } },
+      ]);
+      return results.map((r) => r.value);
+    };
+
+    // ── Geo match stages ─────────────────────────────────────────────────────
+    const countryMatchStage = { Contact_Country: BLANK_FILTER };
+    const regionMatchStage  = {
+      Contact_Region: BLANK_FILTER,
+      ...(selectedCountries ? { Contact_Country: { $in: selectedCountries } } : {}),
+    };
+    const stateMatchStage   = {
+      Contact_State: BLANK_FILTER,
+      ...(selectedCountries ? { Contact_Country: { $in: selectedCountries } } : {}),
+      ...(selectedRegions   ? { Contact_Region:  { $in: selectedRegions   } } : {}),
+    };
+    const cityMatchStage    = {
+      Contact_City: BLANK_FILTER,
+      ...(selectedCountries ? { Contact_Country: { $in: selectedCountries } } : {}),
+      ...(selectedRegions   ? { Contact_Region:  { $in: selectedRegions   } } : {}),
+      ...(selectedStates    ? { Contact_State:   { $in: selectedStates    } } : {}),
+    };
+
+    // ── Industry / Sub Industry match stages ─────────────────────────────────
+    // Industries are always unfiltered (parent selector)
+    const industryMatchStage    = { Industry: BLANK_FILTER };
+    // Sub industries filtered by selected industries
+    const subIndustryMatchStage = {
+      Sub_Industry: BLANK_FILTER,
+      ...(selectedIndustries ? { Industry: { $in: selectedIndustries } } : {}),
+    };
+
+    // ── Job Function / Job Seniority match stages ────────────────────────────
+    // Job functions are always unfiltered (parent selector)
+    const jobFunctionMatchStage  = { Job_Function: BLANK_FILTER };
+    // Job seniorities filtered by selected job functions
+    const jobSeniorityMatchStage = {
+      Job_Seniority: BLANK_FILTER,
+      ...(selectedJobFunctions ? { Job_Function: { $in: selectedJobFunctions } } : {}),
+    };
+
+    const parseRange = (str) => {
+      if (!str) return Infinity;
+      const plusMatch = str.match(/^(\d+)[\s&+A-Za-z]*/);
+      if (plusMatch) return parseInt(plusMatch[1], 10);
+      if (str.includes("B")) return 10_000_000;
+      const rangeMatch = str.match(/(\d+)\s*to\s*(\d+)/);
+      if (rangeMatch) return parseInt(rangeMatch[1], 10);
+      return Infinity;
+    };
+
+    // ── Run all queries in parallel ──────────────────────────────────────────
+    const [
+      staticCompanyFilters,
+      countries,
+      regions,
+      states,
+      cities,
+      industries,
+      subIndustries,
+      jobFunctions,
+      jobSeniorities,
+    ] = await Promise.all([
+      // Static company fields (segments, employeeRanges, turnovers — no parent filter)
+      Company.aggregate([
+        {
+          $group: {
+            _id: null,
+            segments:       { $addToSet: "$Company_Segment" },
+            employeeRanges: { $addToSet: "$Employees_Range" },
+            turnovers:      { $addToSet: "$Turnover_Range" },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            segments:       { $filter: { input: "$segments",       as: "v", cond: { $and: [{ $ne: ["$$v", null] }, { $ne: ["$$v", ""] }, { $ne: ["$$v", "Blank"] }] } } },
+            employeeRanges: { $filter: { input: "$employeeRanges", as: "v", cond: { $and: [{ $ne: ["$$v", null] }, { $ne: ["$$v", ""] }, { $ne: ["$$v", "Blank"] }] } } },
+            turnovers:      { $filter: { input: "$turnovers",      as: "v", cond: { $and: [{ $ne: ["$$v", null] }, { $ne: ["$$v", ""] }, { $ne: ["$$v", "Blank"] }] } } },
+          },
+        },
+      ]),
+      // Geo
+      distinctContactValues(countryMatchStage,   "Contact_Country"),
+      distinctContactValues(regionMatchStage,    "Contact_Region"),
+      distinctContactValues(stateMatchStage,     "Contact_State"),
+      distinctContactValues(cityMatchStage,      "Contact_City"),
+      // Industry hierarchy
+      distinctCompanyValues(industryMatchStage,    "Industry"),
+      distinctCompanyValues(subIndustryMatchStage, "Sub_Industry"),
+      // Job hierarchy
+      distinctContactValues(jobFunctionMatchStage,  "Job_Function"),
+      distinctContactValues(jobSeniorityMatchStage, "Job_Seniority"),
+    ]);
+
+    const staticData = staticCompanyFilters[0] || { segments: [], employeeRanges: [], turnovers: [] };
+
+    staticData.turnovers      = staticData.turnovers.sort((a, b) => parseRange(a) - parseRange(b));
+    staticData.employeeRanges = staticData.employeeRanges.sort((a, b) => parseRange(a) - parseRange(b));
+    staticData.segments       = staticData.segments.sort();
+
+    // Fetch applied filters for the campaign if campaignId is provided
+    let appliedFilters = [];
+    let appliedExclusions = [];
+    if (campaignId) {
+      const latestFilter = await CampaignFilter.findOne(
+        { campaignId, dataType: "Client" },
+        { filters: 1, exclusions: 1 }
+      )
+        .sort({ revisionNo: -1 })
+        .lean();
+
+      if (latestFilter) {
+        appliedFilters    = latestFilter.filters    || [];
+        appliedExclusions = latestFilter.exclusions || [];
+      }
+    }
+
+    return sendResponse(res, 200, "Dynamic filters fetched successfully", {
+      ...staticData,
+      industries,
+      subIndustries,
+      jobFunctions,
+      jobSeniorities,
+      countries,
+      regions,
+      states,
+      cities,
+      appliedFilters,
+      appliedExclusions,
+    });
+  } catch (err) {
+    return sendError(next, err.message || "Failed to fetch dynamic filters", 500);
   }
 });
 
@@ -2717,6 +2910,7 @@ export {
   updateData,
   createANewCompany,
   getAllCompanyName,
+  getDropdownFiltersOld,
   getDropdownFilters,
   getFiltersStats,
   updateCompany,

@@ -7,6 +7,7 @@ import {
 
 import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
+
 const { ADMIN, PROGRAM_MANAGER, PRESALES_MANAGER, AGENT, RESOURCE_MANAGER } =
   UserRoleEnum;
 
