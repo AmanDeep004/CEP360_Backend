@@ -1041,16 +1041,21 @@ const updateData = asyncHandler(async (req, res, next) => {
 
     if (existingContact) {
       // Create history: compare changed fields
-      const changedFields = Object.keys(payload).filter(
+      const changedFieldNames = Object.keys(payload).filter(
         (key) =>
           String(existingContact[key] ?? "") !== String(payload[key] ?? "")
       );
 
-      if (changedFields.length > 0) {
+      if (changedFieldNames.length > 0) {
         await ContactHistory.create({
           contact_id: existingContact._id,
           snapshot: existingContact.toObject(),
-          updatedFields: changedFields,
+          updatedFields: changedFieldNames,
+          changedFields: changedFieldNames.map((field) => ({
+            field,
+            oldValue: existingContact[field] ?? "",
+            newValue: payload[field] ?? "",
+          })),
           updatedBy: {
             id: user._id,
             name: user.employeeName,
@@ -1083,16 +1088,21 @@ const updateData = asyncHandler(async (req, res, next) => {
 
     if (existingCompany) {
       // Create history: compare changed fields
-      const changedFields = Object.keys(payload).filter(
+      const changedFieldNames = Object.keys(payload).filter(
         (key) =>
           String(existingCompany[key] ?? "") !== String(payload[key] ?? "")
       );
 
-      if (changedFields.length > 0) {
+      if (changedFieldNames.length > 0) {
         await CompanyHistory.create({
           company_id: existingCompany._id,
           snapshot: existingCompany.toObject(),
-          updatedFields: changedFields,
+          updatedFields: changedFieldNames,
+          changedFields: changedFieldNames.map((field) => ({
+            field,
+            oldValue: existingCompany[field] ?? "",
+            newValue: payload[field] ?? "",
+          })),
           updatedBy: {
             id: user._id,
             name: user.employeeName,

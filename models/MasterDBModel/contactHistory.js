@@ -10,6 +10,13 @@ const ContactHistorySchema = new mongoose.Schema(
     },
     snapshot: { type: Object },
     updatedFields: { type: [String] },
+    changedFields: [
+      {
+        field: { type: String },
+        oldValue: { type: mongoose.Schema.Types.Mixed },
+        newValue: { type: mongoose.Schema.Types.Mixed },
+      },
+    ],
     updatedBy: {
       id: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
       name: { type: String },
