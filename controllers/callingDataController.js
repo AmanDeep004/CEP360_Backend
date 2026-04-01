@@ -204,6 +204,13 @@ const editcallingData = asyncHandler(async (req, res, next) => {
       requestedAt: new Date(),
     });
 
+    // Immediately apply changes to CallingData without waiting for approval
+    const immediateUpdate = {};
+    changedFields.forEach(({ field, newValue }) => {
+      immediateUpdate[field] = newValue;
+    });
+    await CallingData.findByIdAndUpdate(_id, { $set: immediateUpdate });
+
     return sendResponse(res, 200, "Edit request submitted for approval", {
       callingDataId: _id,
       changedFields,
