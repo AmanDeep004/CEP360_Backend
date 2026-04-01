@@ -159,8 +159,8 @@ const startServer = async () => {
 
     // Schedule: At 23:00 on day-of-month 25 for expected salary generation
     cron.schedule(
-      "30 23 25 * *", // 11:00 PM on 25th of every month
-      // "56 11 6 * *", // 11:30 AM on 6th of every month
+      "0 07 26 * *", // 7:00 AM on 26th of every month (IST) — runs after 6 PM salary generation
+      // "30 23 25 * *", // 11:00 PM on 25th of every month
       async () => {
         const now = new Date().toLocaleString("en-IN", {
           timeZone: "Asia/Kolkata",
