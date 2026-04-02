@@ -5,13 +5,17 @@ import CallingData from "../models/callingDataModal.js";
 import CallHistory from "../models/callHistoryModel.js";
 import CallRecording from "../models/callRecordingModel.js";
 import AgentAssigned from "../models/agentAssigned.js";
+import Contact from "../models/MasterDBModel/contactModel.js";
+import Company from "../models/MasterDBModel/companyModel.js";
+import CallingDataEditApproval from "../models/callingDataEditApprovalModel.js";
+import Template from "../models/Webhook/templateModel.js";
 import { UserRoleEnum } from "../utils/enum.js";
 import mongoose from "mongoose";
 import XLSX from "xlsx";
 import path from "path";
 import os from "os";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
-const { ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT } =
+const { ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT, DATABASE_MANAGER } =
   UserRoleEnum;
 
 // Set time to end of day (23:59:59.999) so today's records are always included
@@ -311,10 +315,163 @@ const dashboardData = asyncHandler(async (req, res, next) => {
         totalCallingData: callingDataList.length,
         dataForwhichAgentAssigned: agentAssignmentCount,
       };
-    } else if (user.role === PRESALES_MANAGER) {
-      parentData.Name = "PreSales Manager";
     } else if (user.role === RESOURCE_MANAGER) {
       parentData.Name = "Resource Manager";
+
+      try {
+        const incompleteCondition = {
+          $or: [
+            { mobile: null },
+            { pan: { $in: [null, ""] } },
+            { ctc: null },
+          ],
+        };
+
+        const [
+          totalResources,
+          activeResources,
+          inactiveResources,
+          pendingResources,
+          incompleteProfiles,
+          roleWise,
+          activeCampaignIds,
+        ] = await Promise.all([
+          User.countDocuments(),
+          User.countDocuments({ status: "active" }),
+          User.countDocuments({ status: "inactive" }),
+          User.countDocuments({ status: "pending" }),
+          User.countDocuments(incompleteCondition),
+          User.aggregate([
+            { $group: { _id: "$role", count: { $sum: 1 } } },
+            { $sort: { count: -1 } },
+          ]),
+          Campaign.distinct("_id", { status: "active" }).exec(),
+        ]);
+
+        const [inCampaignsIds, incompleteUsers] = await Promise.all([
+          AgentAssigned.distinct("agent_id", {
+            isAssigned: true,
+            campaign_id: { $in: activeCampaignIds },
+          }).exec(),
+          User.find(incompleteCondition)
+            .select("employeeName employeeCode role mobile telecmiId pan ctc status")
+            .lean(),
+        ]);
+
+        parentData.totalResources = totalResources;
+        parentData.activeResources = activeResources;
+        parentData.inactiveResources = inactiveResources;
+        parentData.pendingResources = pendingResources;
+        parentData.incompleteProfiles = incompleteProfiles;
+        parentData.inCampaigns = inCampaignsIds.length;
+        parentData.roleWise = roleWise.map((r) => ({ role: r._id, count: r.count }));
+        parentData.incompleteProfilesList = incompleteUsers.map((u) => ({
+          name: u.employeeName,
+          code: u.employeeCode,
+          role: u.role,
+          status: u.status,
+          missingFields: [
+            !u.mobile ? "Mobile" : null,
+            !u.pan || u.pan === "" ? "PAN" : null,
+            !u.ctc ? "CTC" : null,
+          ].filter(Boolean),
+        }));
+      } catch (rmErr) {
+        console.error("[RM Dashboard] Error:", rmErr.message, rmErr.stack);
+        parentData.totalResources = 0;
+        parentData.activeResources = 0;
+        parentData.inactiveResources = 0;
+        parentData.pendingResources = 0;
+        parentData.incompleteProfiles = 0;
+        parentData.inCampaigns = 0;
+        parentData.roleWise = [];
+      }
+
+    } else if (user.role === PRESALES_MANAGER) {
+      parentData.Name = "Presales Manager";
+
+      const now = new Date();
+      const next30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+      const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+
+      const [
+        totalCampaigns, activeCampaigns, completedCampaigns, totalTemplates,
+        statusRaw, stageRaw, categoryRaw, monthlyRaw, durationRaw, upcomingRaw,
+      ] = await Promise.all([
+        Campaign.countDocuments(),
+        Campaign.countDocuments({ status: "active" }),
+        Campaign.countDocuments({ status: "completed" }),
+        Template.countDocuments(),
+        Campaign.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }]),
+        Campaign.aggregate([
+          { $group: { _id: "$stage", count: { $sum: 1 } } },
+          { $sort: { count: -1 } },
+        ]),
+        Campaign.aggregate([
+          { $match: { category: { $exists: true, $ne: null } } },
+          { $group: { _id: "$category", count: { $sum: 1 } } },
+          { $sort: { count: -1 } },
+        ]),
+        Campaign.aggregate([
+          { $match: { createdAt: { $gte: sixMonthsAgo } } },
+          { $group: { _id: { year: { $year: "$createdAt" }, month: { $month: "$createdAt" } }, count: { $sum: 1 } } },
+          { $sort: { "_id.year": 1, "_id.month": 1 } },
+        ]),
+        Campaign.aggregate([
+          { $match: { startDate: { $exists: true }, endDate: { $exists: true } } },
+          { $project: { durationDays: { $ceil: { $divide: [{ $subtract: ["$endDate", "$startDate"] }, 86400000] } } } },
+          { $group: { _id: null, avg: { $avg: "$durationDays" }, min: { $min: "$durationDays" }, max: { $max: "$durationDays" } } },
+        ]),
+        Campaign.find({ startDate: { $gte: now, $lte: next30Days } })
+          .select("name startDate endDate category status")
+          .sort({ startDate: 1 })
+          .limit(8)
+          .lean(),
+      ]);
+
+      parentData.totalCampaigns = totalCampaigns;
+      parentData.activeCampaigns = activeCampaigns;
+      parentData.completedCampaigns = completedCampaigns;
+      parentData.totalTemplates = totalTemplates;
+      parentData.campaignStatusBreakdown = statusRaw.map((s) => ({ status: s._id, count: s.count }));
+      parentData.campaignStageBreakdown = stageRaw.map((s) => ({ stage: s._id, count: s.count }));
+      parentData.campaignCategoryBreakdown = categoryRaw.map((c) => ({ category: c._id, count: c.count }));
+      parentData.campaignMonthlyTrend = monthlyRaw.map((m) => ({ year: m._id.year, month: m._id.month, count: m.count }));
+      parentData.campaignDuration = durationRaw.length ? {
+        avg: Math.round(durationRaw[0].avg),
+        min: Math.round(durationRaw[0].min),
+        max: Math.round(durationRaw[0].max),
+      } : null;
+      parentData.upcomingCampaigns = upcomingRaw;
+
+    } else if (user.role === DATABASE_MANAGER) {
+      parentData.Name = "Database Manager";
+
+      const now = new Date();
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+      const [totalContacts, totalCompanies, pendingApprovals, contactsThisMonth, companiesThisMonth, industryRaw] =
+        await Promise.all([
+          Contact.countDocuments(),
+          Company.countDocuments(),
+          CallingDataEditApproval.countDocuments({ status: "Pending" }),
+          Contact.countDocuments({ createdAt: { $gte: startOfMonth } }),
+          Company.countDocuments({ createdAt: { $gte: startOfMonth } }),
+          Company.aggregate([
+            { $match: { Industry: { $exists: true, $ne: "" } } },
+            { $group: { _id: "$Industry", count: { $sum: 1 } } },
+            { $sort: { count: -1 } },
+            { $limit: 10 },
+          ]),
+        ]);
+
+      parentData.totalContacts = totalContacts;
+      parentData.totalCompanies = totalCompanies;
+      parentData.pendingApprovals = pendingApprovals;
+      parentData.contactsThisMonth = contactsThisMonth;
+      parentData.companiesThisMonth = companiesThisMonth;
+      parentData.industryBreakdown = industryRaw.map((i) => ({ industry: i._id, count: i.count }));
+
     } else if (user.role === ADMIN) {
       parentData.Name = "Admin";
     }
