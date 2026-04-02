@@ -453,6 +453,7 @@ const getBatchJobStatus = asyncHandler(async (req, res, next) => {
       companyNotFound: progress.failReasons?.companyNotFound ?? 0,
     },
     error: job.error || null,
+    reportUrl: job.reportUrl || null,
   });
 });
 
