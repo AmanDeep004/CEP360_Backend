@@ -518,6 +518,37 @@ const bulkCreateAgents = asyncHandler(async (req, res, next) => {
   }
 });
 
+const changeOwnPassword = asyncHandler(async (req, res, next) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return sendError(next, "Current password and new password are required", 400);
+    }
+
+    if (newPassword.length < 6) {
+      return sendError(next, "New password must be at least 6 characters", 400);
+    }
+
+    const user = await User.findById(req.user._id).select("+password");
+    if (!user) {
+      return sendError(next, "User not found", 404);
+    }
+
+    const isMatch = await user.matchPassword(currentPassword);
+    if (!isMatch) {
+      return sendError(next, "Current password is incorrect", 401);
+    }
+
+    user.password = newPassword;
+    await user.save();
+
+    return sendResponse(res, 200, "Password changed successfully", null);
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
 export {
   resetUserPassword,
   registerUser,
@@ -529,4 +560,5 @@ export {
   bulkCreateAgents,
   logout,
   getAllUsers,
+  changeOwnPassword,
 };
