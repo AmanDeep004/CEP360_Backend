@@ -4,6 +4,7 @@ import Attendence from "../models/attendenceModel.js";
 import errorHandler from "../utils/index.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 import { UserRoleEnum } from "../utils/enum.js";
+import XLSX from "xlsx";
 
 const { ADMIN, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT, DATABASE_MANAGER } =
   UserRoleEnum;
@@ -276,8 +277,7 @@ const getAllUsers = asyncHandler(async (req, res, next) => {
         .select("-password")
         .sort({ createdAt: -1 })
         .skip(skip)
-        .limit(limit)
-        .lean(),
+        .limit(limit),
     ]);
 
     return sendResponse(res, 200, "Users retrieved successfully", {
@@ -399,6 +399,125 @@ const logout = asyncHandler(async (req, res, next) => {
   }
 });
 
+const VALID_TYPES = ["KSTN", "KI", "TEMP", "CEP"];
+const VALID_STATUSES = ["active", "inactive", "pending"];
+
+const COLUMN_MAP = {
+  "employee name": "employeeName",
+  "employee code": "employeeCode",
+  "email": "email",
+  "password": "password",
+  "type": "type",
+  "employee base": "employeeBase",
+  "location": "location",
+  "date of joining": "doj",
+  "mobile": "mobile",
+  "pan": "pan",
+  "ctc": "ctc",
+  "telecmi id": "telecmiId",
+  "program name": "programName",
+  "program type": "programType",
+  "program manager": "programManager",
+  "status": "status",
+};
+
+const normalizeHeader = (h) =>
+  String(h || "").replace(/\*/g, "").trim().toLowerCase();
+
+const bulkCreateAgents = asyncHandler(async (req, res, next) => {
+  try {
+    if (!req.file) return sendError(next, "No file uploaded", 400);
+
+    const workbook = XLSX.read(req.file.buffer, { type: "buffer", cellDates: true });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+
+    if (rows.length < 2) return sendError(next, "File is empty or has no data rows", 400);
+
+    // Build header map from row 0
+    const headers = rows[0].map(normalizeHeader);
+    const dataRows = rows.slice(1).filter((r) => r.some((c) => String(c).trim() !== ""));
+
+    if (dataRows.length === 0) return sendError(next, "No data rows found in file", 400);
+
+    const created = [];
+    const failed = [];
+
+    for (let i = 0; i < dataRows.length; i++) {
+      const raw = {};
+      headers.forEach((h, idx) => {
+        const key = COLUMN_MAP[h];
+        if (key) raw[key] = String(dataRows[i][idx] ?? "").trim();
+      });
+
+      const rowNum = i + 2; // Excel row number (1-indexed + header)
+
+      // Validate mandatory fields
+      const missing = [];
+      if (!raw.employeeName) missing.push("Employee Name");
+      if (!raw.employeeCode) missing.push("Employee Code");
+      if (!raw.email) missing.push("Email");
+      if (!raw.password || raw.password.length < 6) missing.push("Password (min 6 chars)");
+      if (!raw.type || !VALID_TYPES.includes(raw.type.toUpperCase()))
+        missing.push(`Type (must be one of: ${VALID_TYPES.join(", ")})`);
+      if (!raw.employeeBase) missing.push("Employee Base");
+      if (!raw.location) missing.push("Location");
+      if (!raw.doj) missing.push("Date of Joining");
+
+      if (missing.length > 0) {
+        failed.push({ row: rowNum, employeeCode: raw.employeeCode || "-", email: raw.email || "-", reason: `Missing/invalid: ${missing.join(", ")}` });
+        continue;
+      }
+
+      // Check duplicate email/code
+      const exists = await User.findOne({
+        $or: [{ email: raw.email.toLowerCase() }, { employeeCode: raw.employeeCode }],
+      });
+      if (exists) {
+        failed.push({ row: rowNum, employeeCode: raw.employeeCode, email: raw.email, reason: "Email or Employee Code already exists" });
+        continue;
+      }
+
+      try {
+        const user = await User.create({
+          employeeName: raw.employeeName,
+          employeeCode: raw.employeeCode,
+          email: raw.email.toLowerCase(),
+          password: raw.password,
+          role: "agent", // always forced
+          type: raw.type.toUpperCase(),
+          employeeBase: raw.employeeBase,
+          location: raw.location,
+          doj: new Date(raw.doj),
+          mobile: raw.mobile ? Number(raw.mobile) : undefined,
+          pan: raw.pan || undefined,
+          ctc: raw.ctc ? Number(raw.ctc) : undefined,
+          telecmiId: raw.telecmiId || undefined,
+          programName: raw.programName || undefined,
+          programType: raw.programType || undefined,
+          programManager: raw.programManager || undefined,
+          status: raw.status && VALID_STATUSES.includes(raw.status.toLowerCase())
+            ? raw.status.toLowerCase()
+            : "active",
+        });
+        created.push({ row: rowNum, employeeCode: user.employeeCode, name: user.employeeName, email: user.email });
+      } catch (err) {
+        failed.push({ row: rowNum, employeeCode: raw.employeeCode, email: raw.email, reason: err.message });
+      }
+    }
+
+    return sendResponse(res, 200, "Bulk agent creation complete", {
+      total: dataRows.length,
+      created: created.length,
+      failed: failed.length,
+      createdList: created,
+      failedList: failed,
+    });
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
 export {
   resetUserPassword,
   registerUser,
@@ -407,6 +526,7 @@ export {
   getUserProfile,
   getUsersByRole,
   deleteUser,
+  bulkCreateAgents,
   logout,
   getAllUsers,
 };
