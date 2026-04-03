@@ -1031,11 +1031,35 @@ const getCompanyDataById = asyncHandler(async (req, res, next) => {
 //     return sendError(next, err.message || "Update failed", 500);
 //   }
 // });
+// Fields that must never be overwritten via the update API
+const CONTACT_READONLY_FIELDS = [
+  "Contact_ID", // unique identifier — must never change
+  "EngagementPoints",
+  "DND_Flag",
+  "DND_Account_Tag",
+  "Last_Engagement",
+  "Last_Engagement_Date",
+  "Last_Engagement_Campaign",
+  "Telecalling_Remarks",
+  "Unsubscribe_Account_Tag",
+  "Unsubscribe_Flag",
+  "discrepencyInData",
+  "isRegisteredInAnyCampaign",
+  "totalTelecallingRemarks",
+  "totalWhatsappMessages",
+  "totalEmailSent",
+  "totalEngagements",
+  "hasEngagements",
+];
+
 const updateData = asyncHandler(async (req, res, next) => {
   try {
     const { id } = req.params;
-    const payload = req.body;
     const user = req.user;
+
+    // Strip system-managed / read-only fields before any update
+    const payload = { ...req.body };
+    CONTACT_READONLY_FIELDS.forEach((field) => delete payload[field]);
 
     // 1️⃣ Try to find in Contact Collection
     let existingContact = await Contact.findById(id);

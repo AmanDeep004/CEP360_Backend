@@ -1,4 +1,5 @@
 const UserRoleEnum = Object.freeze({
+  SUPERADMIN: "superadmin",
   ADMIN: "admin",
   PROGRAM_MANAGER: "program_manager",
   RESOURCE_MANAGER: "resource_manager",
@@ -6,6 +7,7 @@ const UserRoleEnum = Object.freeze({
   DATABASE_MANAGER: "database_manager",
   PRESALES_MANAGER: "presales_manager",
   ALL: [
+    "superadmin",
     "admin",
     "program_manager",
     "resource_manager",

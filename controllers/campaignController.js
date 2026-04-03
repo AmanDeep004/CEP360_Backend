@@ -6,6 +6,7 @@ import AgentAssigned from "../models/agentAssigned.js";
 import { UserRoleEnum } from "../utils/enum.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 const {
+  SUPERADMIN,
   ADMIN,
   PRESALES_MANAGER,
   PROGRAM_MANAGER,
@@ -265,6 +266,7 @@ const getCampaignsByUserId = asyncHandler(async (req, res, next) => {
       case RESOURCE_MANAGER:
       case DATABASE_MANAGER:
       case ADMIN:
+      case SUPERADMIN:
         // These roles can see all campaigns
         campaigns = await Campaign.find({})
           .populate({

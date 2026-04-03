@@ -6,7 +6,7 @@ const { asyncHandler, sendError, sendResponse } = errorHandler;
 import { UserRoleEnum } from "../utils/enum.js";
 import XLSX from "xlsx";
 
-const { ADMIN, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT, DATABASE_MANAGER } =
+const { SUPERADMIN, ADMIN, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT, DATABASE_MANAGER } =
   UserRoleEnum;
 
 /**
@@ -37,6 +37,13 @@ const registerUser = asyncHandler(async (req, res, next) => {
       ctc,
       telecmiId,
     } = req.body;
+
+    // Role assignment restrictions
+    const requestingRole = req.user?.role;
+    const privilegedRoles = [SUPERADMIN, ADMIN];
+    if (role && privilegedRoles.includes(role) && requestingRole !== SUPERADMIN) {
+      return sendError(next, `You are not authorized to create a user with role '${role}'`, 403);
+    }
 
     // Check if user exists
     const userExists = await User.findOne({
@@ -218,7 +225,7 @@ const updateUserProfile = asyncHandler(async (req, res, next) => {
       "mobile",
     ];
 
-    if (req.user.role === ADMIN || req.user.role === RESOURCE_MANAGER) {
+    if (req.user.role === SUPERADMIN || req.user.role === ADMIN || req.user.role === RESOURCE_MANAGER) {
       updateFields.push("ctc");
     }
 
@@ -252,7 +259,7 @@ const getAllUsers = asyncHandler(async (req, res, next) => {
     const limit = Math.min(parseInt(req.query.limit) || 20, 200);
     const search = req.query.search?.trim();
 
-    const filter = { role: { $ne: "admin" } };
+    const filter = { role: { $nin: ["admin", "superadmin"] } };
     if (search) {
       const regex = new RegExp(search, "i");
       filter.$or = [

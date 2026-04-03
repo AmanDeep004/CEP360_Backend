@@ -15,7 +15,7 @@ import XLSX from "xlsx";
 import path from "path";
 import os from "os";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
-const { ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT, DATABASE_MANAGER } =
+const { SUPERADMIN, ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT, DATABASE_MANAGER } =
   UserRoleEnum;
 
 // Set time to end of day (23:59:59.999) so today's records are always included
@@ -474,6 +474,49 @@ const dashboardData = asyncHandler(async (req, res, next) => {
 
     } else if (user.role === ADMIN) {
       parentData.Name = "Admin";
+    } else if (user.role === SUPERADMIN) {
+      parentData.Name = "Super Admin";
+
+      const now = new Date();
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+      const [
+        totalResources,
+        activeResources,
+        inactiveResources,
+        pendingResources,
+        roleWise,
+        totalCampaigns,
+        activeCampaigns,
+        totalContacts,
+        totalCompanies,
+        contactsThisMonth,
+      ] = await Promise.all([
+        User.countDocuments(),
+        User.countDocuments({ status: "active" }),
+        User.countDocuments({ status: "inactive" }),
+        User.countDocuments({ status: "pending" }),
+        User.aggregate([
+          { $group: { _id: "$role", count: { $sum: 1 } } },
+          { $sort: { count: -1 } },
+        ]),
+        Campaign.countDocuments(),
+        Campaign.countDocuments({ status: "active" }),
+        Contact.countDocuments(),
+        Company.countDocuments(),
+        Contact.countDocuments({ createdAt: { $gte: startOfMonth } }),
+      ]);
+
+      parentData.totalResources = totalResources;
+      parentData.activeResources = activeResources;
+      parentData.inactiveResources = inactiveResources;
+      parentData.pendingResources = pendingResources;
+      parentData.roleWise = roleWise.map((r) => ({ role: r._id, count: r.count }));
+      parentData.totalCampaigns = totalCampaigns;
+      parentData.activeCampaigns = activeCampaigns;
+      parentData.totalContacts = totalContacts;
+      parentData.totalCompanies = totalCompanies;
+      parentData.contactsThisMonth = contactsThisMonth;
     }
 
     return sendResponse(res, 200, "All campaigns retrieved", parentData);

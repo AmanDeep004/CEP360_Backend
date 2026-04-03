@@ -28,6 +28,7 @@ const decryptPAN = (encrypted) => {
 };
 
 const {
+  SUPERADMIN,
   ADMIN,
   PROGRAM_MANAGER,
   RESOURCE_MANAGER,
@@ -76,6 +77,7 @@ const userSchema = new Schema(
       type: String,
       enum: {
         values: [
+          SUPERADMIN,
           // ADMIN,
           RESOURCE_MANAGER,
           PROGRAM_MANAGER,
