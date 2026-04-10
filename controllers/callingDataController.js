@@ -307,11 +307,10 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
 
     const filter = { CampaignId, "discrepencyInData.status": { $ne: true } };
 
-    // search on multiple fields
+    // text search across name / contact / company fields
     if (req.query.search && req.query.search.trim() !== "") {
       const search = req.query.search.trim();
       const regex = new RegExp(escapeStringRegexp(search), "i");
-
       filter.$or = [
         { Full_Name: regex },
         { First_Name: regex },
@@ -325,6 +324,16 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
         { Contact_Direct_Phone2: regex },
         { Company_Name: regex },
       ];
+    }
+
+    // dedicated Source Type filter — exact match
+    if (req.query.dataSourceType && req.query.dataSourceType.trim()) {
+      filter.dataSourceType = req.query.dataSourceType.trim();
+    }
+
+    // dedicated Batch filter — case-insensitive contains
+    if (req.query.batch && req.query.batch.trim()) {
+      filter.batch = new RegExp(escapeStringRegexp(req.query.batch.trim()), "i");
     }
 
     // filter registered
