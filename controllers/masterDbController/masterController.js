@@ -11,6 +11,7 @@ import CallingData from "../../models/callingDataModal.js";
 import Campaign from "../../models/campaignModel.js";
 import dumpHistoryData from "../../models/MasterDBModel/dumpHistoryDataModel.js";
 import EngagementHistory from "../../models/MasterDBModel/enagagementHistoryModel.js";
+import CompanyMerge from "../../models/MasterDBModel/companyMergeModel.js";
 import {
   jobStore,
   processExcelInBackground,
@@ -890,19 +891,29 @@ const getAllCompanyData = asyncHandler(async (req, res, next) => {
 const getAllCompanyName = asyncHandler(async (req, res, next) => {
   try {
     const search = req.query.search?.trim();
-    const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
+    const skip = (page - 1) * limit;
 
     const filter = {};
     if (search) {
       filter.Company_Name = new RegExp(search, "i");
     }
 
-    const companies = await Company.find(filter, { _id: 1, Company_Name: 1 })
-      .limit(limit)
-      .lean();
+    const [total, companies] = await Promise.all([
+      Company.countDocuments(filter),
+      Company.find(filter, { _id: 1, Company_Name: 1 })
+        .sort({ Company_Name: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
 
     return sendResponse(res, 200, "Companies fetched successfully", {
-      total: companies.length,
+      total,
+      page,
+      limit,
+      hasMore: skip + companies.length < total,
       data: companies,
     });
   } catch (err) {
@@ -2937,6 +2948,83 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
   }
 });
 
+const mergeCompanies = asyncHandler(async (req, res, next) => {
+  try {
+    const { parentCompanyId, companyIdsToMerge } = req.body;
+
+    if (!parentCompanyId)
+      return sendError(next, "Parent company ID is required", 400);
+    if (!Array.isArray(companyIdsToMerge) || companyIdsToMerge.length === 0)
+      return sendError(next, "Select at least one company to merge", 400);
+
+    // Prevent merging a company into itself
+    const filteredIds = companyIdsToMerge.filter(
+      (id) => id.toString() !== parentCompanyId.toString()
+    );
+    if (filteredIds.length === 0)
+      return sendError(next, "Cannot merge a company into itself", 400);
+
+    const parentCompany = await Company.findById(parentCompanyId).lean();
+    if (!parentCompany) return sendError(next, "Parent company not found", 404);
+
+    // Fetch full company data (snapshot) before deletion for revert capability
+    const mergedCompaniesSnapshot = await Company.find({
+      _id: { $in: filteredIds },
+    }).lean();
+
+    if (!mergedCompaniesSnapshot.length)
+      return sendError(next, "No valid companies found to merge", 404);
+
+    const mergedIds = mergedCompaniesSnapshot.map((c) => c._id);
+    const mergedCompanies = mergedCompaniesSnapshot.map((c) => ({
+      id: c._id,
+      name: c.Company_Name,
+    }));
+
+    // Capture contact IDs before relinking (needed for revert)
+    const contactsToRelink = await Contact.find(
+      { Company_ID: { $in: mergedIds } },
+      { _id: 1 }
+    ).lean();
+    const relinkedContactIds = contactsToRelink.map((c) => c._id);
+
+    // Re-link all contacts from merged companies → parent company
+    const updateResult = await Contact.updateMany(
+      { Company_ID: { $in: mergedIds } },
+      { $set: { Company_ID: parentCompanyId } }
+    );
+
+    // Delete the merged (duplicate) companies
+    await Company.deleteMany({ _id: { $in: mergedIds } });
+
+    // Save merge record with full backup for future revert
+    const user = req.user;
+    await CompanyMerge.create({
+      parentCompany: { id: parentCompanyId, name: parentCompany.Company_Name },
+      mergedCompanies,
+      mergedCompaniesSnapshot,
+      relinkedContactIds,
+      contactsRelinked: updateResult.modifiedCount,
+      mergedBy: user
+        ? {
+            id: user._id,
+            name: user.name,
+            employeeName: user.employeeName,
+            email: user.email,
+            role: user.role,
+          }
+        : undefined,
+    });
+
+    return sendResponse(res, 200, "Companies merged successfully", {
+      contactsRelinked: updateResult.modifiedCount,
+      companiesMerged: mergedCompanies.length,
+    });
+  } catch (err) {
+    return sendError(next, err.message || "Merge failed", 500);
+  }
+});
+
 export {
   batchCreateFromExcel,
   getBatchJobStatus,
@@ -2953,4 +3041,5 @@ export {
   dumpAllHistoryData,
   migrateToEngagementHistory,
   getContactsWithEngagements,
+  mergeCompanies,
 };

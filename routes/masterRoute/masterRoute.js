@@ -16,6 +16,7 @@ import {
   dumpAllHistoryData,
   migrateToEngagementHistory,
   getContactsWithEngagements,
+  mergeCompanies,
 } from "../../controllers/masterDbController/masterController.js";
 import { UserRoleEnum } from "../../utils/enum.js";
 const router = Router();
@@ -60,6 +61,7 @@ router.get("/getAllDumpHistoryData", dumpAllHistoryData);
 router.get("/batchJobStatus/:jobId", protect, getBatchJobStatus);
 
 router.get("/getContactsWithEngagements", protect, getContactsWithEngagements);
+router.post("/mergeCompanies", protect, mergeCompanies);
 router.post(
   "/migrateToEngagementHistory/:campaignId",
   protect,
