@@ -528,6 +528,7 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
       remark,
       source,
       range,
+      batch,
       page = 1,
       limit = 20,
     } = req.query;
@@ -545,6 +546,10 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
 
     if (source) {
       filter.source = { $regex: new RegExp(escapeStringRegexp(source), "i") };
+    }
+
+    if (batch) {
+      filter.batch = { $regex: new RegExp(escapeStringRegexp(batch), "i") };
     }
 
     const applyMask = (row) => ({
