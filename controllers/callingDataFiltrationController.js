@@ -10,6 +10,14 @@ import XLSX from "xlsx";
 import csv from "csvtojson";
 import fs from "fs";
 import mongoose from "mongoose";
+import {
+  createMatchJob,
+  updateMatchJob,
+  completeMatchJob,
+  failMatchJob,
+  subscribeMatchJob,
+  unsubscribeMatchJob,
+} from "../utils/matchJobStore.js";
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
@@ -1111,6 +1119,345 @@ const getPrevCampFiltersByCampaignId = asyncHandler(async (req, res, next) => {
   }
 });
 
+// ── Company matching helpers ──────────────────────────────────────────────────
+
+/** Yield to the event loop between batches so SSE events can flush */
+const yieldControl = () => new Promise((resolve) => setImmediate(resolve));
+
+// ── In-memory caches ──────────────────────────────────────────────────────────
+
+/**
+ * DB company index cache (shared across all requests).
+ * Loading + indexing 3.7 lakh companies takes ~3s; we rebuild at most every 30 min.
+ */
+let _dbIndexCache = null;
+let _dbIndexCacheTime = 0;
+const DB_INDEX_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+const getOrBuildDbIndex = async () => {
+  const now = Date.now();
+  if (_dbIndexCache && now - _dbIndexCacheTime < DB_INDEX_TTL_MS) {
+    return _dbIndexCache;
+  }
+  const allDbCompanies = await Company.find(
+    {},
+    { _id: 1, Company_Name: 1 }
+  ).lean();
+  const dbNormMap = new Map();
+  const invertedIndex = new Map();
+  for (const c of allDbCompanies) {
+    const norm = normalizeCompanyName(c.Company_Name || "");
+    if (!norm) continue;
+    if (!dbNormMap.has(norm)) {
+      dbNormMap.set(norm, {
+        _id: c._id,
+        Company_Name: c.Company_Name,
+        simpleName: simplifyName(c.Company_Name),
+      });
+    }
+    for (const word of norm.split(/\s+/).filter((w) => w.length > 2)) {
+      if (!invertedIndex.has(word)) invertedIndex.set(word, new Set());
+      invertedIndex.get(word).add(norm);
+    }
+  }
+  _dbIndexCache = { dbNormMap, invertedIndex };
+  _dbIndexCacheTime = now;
+  return _dbIndexCache;
+};
+
+/**
+ * Match result cache (per campaignId).
+ * Populated by runCompanyMatchJob so getClientMatchData returns instantly.
+ * Invalidated when a new upload starts for the same campaignId.
+ * TTL: 2 hours.
+ */
+const _matchResultCache = new Map(); // campaignId (string) → { result, approvedIds, rejectedIds, cachedAt }
+const RESULT_CACHE_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+const getCachedMatchResult = (campaignId) => {
+  const entry = _matchResultCache.get(String(campaignId));
+  if (!entry) return null;
+  if (Date.now() - entry.cachedAt > RESULT_CACHE_TTL_MS) {
+    _matchResultCache.delete(String(campaignId));
+    return null;
+  }
+  return entry;
+};
+
+const setCachedMatchResult = (campaignId, result) => {
+  _matchResultCache.set(String(campaignId), {
+    ...result,
+    cachedAt: Date.now(),
+  });
+};
+
+const invalidateMatchResultCache = (campaignId) => {
+  _matchResultCache.delete(String(campaignId));
+};
+
+/**
+ * Normalize a company name for matching:
+ * - lowercase, strip punctuation, remove common corporate suffixes,
+ *   collapse whitespace.
+ */
+const normalizeCompanyName = (str) => {
+  if (str == null || str === "") return "";
+  return String(str)
+    .toLowerCase()
+    .replace(/[.,/#!$%^&*;:{}=\-_`~()'"""]/g, " ")
+    .replace(
+      /\b(pvt|ltd|limited|inc|corp|llc|co|private|public|enterprises|enterprise|solutions|services|technologies|technology|india|group|holdings|global|worldwide|international|industries|industry|systems|system|consulting|consultancy)\b/gi,
+      ""
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+};
+
+/**
+ * Lightweight alternative to normalizeCompanyName.
+ * Only lowercases and strips punctuation — no stopword removal.
+ * Preserves meaningful words like "co-operative", "bank", "india" so that
+ * simple substring containment works correctly regardless of case.
+ */
+const simplifyName = (str) => {
+  if (str == null || str === "") return "";
+  return String(str)
+    .toLowerCase()
+    .replace(/[.,/#!$%^&*;:{}=\-_`~()'"""]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+};
+
+/**
+ * Background worker: load DB companies, build inverted index, match in batches.
+ * Pushes SSE progress events via matchJobStore.
+ */
+// Max candidates checked per input — prevents O(n²) for common words like "india/tech"
+const MAX_CANDIDATES = 300;
+
+async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
+  // Invalidate any stale cached results for this campaign
+  invalidateMatchResultCache(campaignId);
+
+  // Stage 1 — parse the uploaded file (inside job so HTTP response is instant)
+  updateMatchJob(jobId, "Parsing uploaded file...", 3);
+  await yieldControl();
+
+  let companyNames = [];
+  try {
+    const pickName = (row) => {
+      const val =
+        row.CompanyName ??
+        row.Company_Name ??
+        row.company_name ??
+        row.company ??
+        row.companyNames ??
+        null;
+      return val != null ? String(val).trim() : null;
+    };
+
+    if (ext.endsWith(".xlsx") || ext.endsWith(".xls")) {
+      const workbook = XLSX.readFile(filePath, {
+        cellText: true,
+        cellDates: false,
+      });
+      const sheet = XLSX.utils.sheet_to_json(
+        workbook.Sheets[workbook.SheetNames[0]]
+      );
+      companyNames = sheet.map(pickName).filter(Boolean);
+    } else {
+      const rows = await csv().fromFile(filePath);
+      companyNames = rows.map(pickName).filter(Boolean);
+    }
+  } finally {
+    // Always clean up the temp file
+    try {
+      fs.unlinkSync(filePath);
+    } catch {
+      /* already gone */
+    }
+  }
+
+  if (!companyNames.length) {
+    failMatchJob(jobId, "No valid company names found in the file");
+    return;
+  }
+
+  updateMatchJob(
+    jobId,
+    `Parsed ${companyNames.length.toLocaleString()} companies. Scanning database...`,
+    8
+  );
+  await yieldControl();
+
+  // Stage 2 — load DB index (shared cache, rebuilt every 30 min)
+  const { dbNormMap, invertedIndex } = await getOrBuildDbIndex();
+
+  updateMatchJob(
+    jobId,
+    `Index ready. Matching ${companyNames.length.toLocaleString()} companies...`,
+    20
+  );
+  await yieldControl();
+
+  // Stage 3 — batch match with inverted index + bidirectional containment
+  const BATCH_SIZE = 500;
+  const totalBatches = Math.ceil(companyNames.length / BATCH_SIZE);
+  const completelyMatched = [];
+  const partiallyMatched = [];
+  const matchedInputSet = new Set();    // tracks matched input names (lowercase)
+  const matchedCompanyIdSet = new Set(); // deduplicates by DB company _id so the
+                                          // same company isn't added twice when
+                                          // multiple Excel rows map to the same DB entry
+
+  for (let b = 0; b < totalBatches; b++) {
+    const batch = companyNames.slice(b * BATCH_SIZE, (b + 1) * BATCH_SIZE);
+    const done = Math.min((b + 1) * BATCH_SIZE, companyNames.length);
+    const percent = 20 + Math.round((b / totalBatches) * 70);
+    updateMatchJob(
+      jobId,
+      `Matching companies... ${done.toLocaleString()} / ${companyNames.length.toLocaleString()}`,
+      percent
+    );
+    await yieldControl();
+
+    for (const inputName of batch) {
+      const normInput = normalizeCompanyName(inputName);
+      if (!normInput) continue;
+      const inputKey = inputName.toLowerCase();
+
+      // 1. Direct normalized exact match
+      if (dbNormMap.has(normInput)) {
+        const c = dbNormMap.get(normInput);
+        const cIdStr = String(c._id);
+        if (!matchedCompanyIdSet.has(cIdStr)) {
+          matchedCompanyIdSet.add(cIdStr);
+          completelyMatched.push({
+            _id: c._id,
+            Company_Name: c.Company_Name,
+            matchedWith: inputName,
+          });
+        }
+        matchedInputSet.add(inputKey);
+        continue;
+      }
+
+      // 2. Get candidate DB companies sharing at least one word with the input
+      //    Sort by ascending index frequency so rare/specific words (e.g. "assam")
+      //    are processed before common words (e.g. "the", "bank") — ensures the
+      //    MAX_CANDIDATES cap doesn't cut off the correct DB entry prematurely.
+      const inputWords = normInput.split(/\s+/).filter((w) => w.length > 2);
+      inputWords.sort(
+        (a, b) =>
+          (invertedIndex.get(a)?.size || 0) - (invertedIndex.get(b)?.size || 0)
+      );
+      const candidateNorms = new Set();
+      outer: for (const w of inputWords) {
+        for (const cn of invertedIndex.get(w) || []) {
+          candidateNorms.add(cn);
+          if (candidateNorms.size >= MAX_CANDIDATES) break outer;
+        }
+      }
+
+      // 3. Score all candidates — containment and Jaccard both go to partiallyMatched
+      const simpleInput = simplifyName(inputName);
+      const scored = [];
+
+      for (const cNorm of candidateNorms) {
+        const c = dbNormMap.get(cNorm);
+        if (!c) continue;
+
+        let score = 0;
+
+        // Check A: normalized containment (stopwords stripped from both sides)
+        if (normInput.includes(cNorm) || cNorm.includes(normInput)) {
+          const aLen = inputWords.length;
+          const bLen =
+            cNorm.split(/\s+/).filter((w) => w.length > 2).length || 1;
+          score = Math.min(aLen, bLen) / Math.max(aLen, bLen, 1);
+        } else {
+          // Check B: Jaccard word-overlap on normalized tokens
+          const aWords = new Set(inputWords);
+          const bWords = new Set(
+            cNorm.split(/\s+/).filter((w) => w.length > 2)
+          );
+          const inter = [...aWords].filter((w) => bWords.has(w)).length;
+          const unionSize = new Set([...aWords, ...bWords]).size;
+          score = unionSize > 0 ? inter / unionSize : 0;
+        }
+
+        // Check C: simple toLower containment (no stopword stripping).
+        // Catches cases where stopword removal hides meaningful words
+        // e.g. "co" stripped from "co-operative" breaks normalized containment.
+        if (score < 0.3) {
+          const simpleDb = c.simpleName;
+          if (
+            simpleDb.includes(simpleInput) ||
+            simpleInput.includes(simpleDb)
+          ) {
+            const aLen = simpleInput.split(/\s+/).length;
+            const bLen = simpleDb.split(/\s+/).length || 1;
+            score = Math.max(
+              score,
+              Math.min(aLen, bLen) / Math.max(aLen, bLen, 1)
+            );
+          }
+        }
+
+        if (score >= 0.3) {
+          scored.push({
+            _id: c._id,
+            Company_Name: c.Company_Name,
+            matchPercent: Math.round(score * 100),
+          });
+        }
+      }
+
+      if (scored.length > 0) {
+        scored.sort((a, b) => b.matchPercent - a.matchPercent);
+        partiallyMatched.push({ input: inputName, suggestions: scored });
+        matchedInputSet.add(inputKey);
+      }
+    }
+  }
+
+  const notMatched = companyNames.filter(
+    (name) => !matchedInputSet.has(name.toLowerCase())
+  );
+
+  // Stage 4 — save in chunks to stay within MongoDB's 16MB document limit
+  // insertMany sends all chunks in one round-trip instead of 50 sequential creates
+  updateMatchJob(jobId, "Saving results...", 93);
+  await yieldControl();
+
+  const SAVE_CHUNK = 10_000;
+  const chunks = [];
+  for (let i = 0; i < companyNames.length; i += SAVE_CHUNK) {
+    chunks.push({
+      campaignId,
+      dataType,
+      companyNames: companyNames.slice(i, i + SAVE_CHUNK),
+    });
+  }
+  await ClientCompanyList.deleteMany({ campaignId, dataType });
+  await ClientCompanyList.insertMany(chunks, { ordered: false });
+
+  // Cache results so getClientMatchData returns instantly on next call
+  // (avoids re-running the full match on every page load)
+  setCachedMatchResult(campaignId, {
+    completelyMatched,
+    partiallyMatched,
+    notMatched,
+  });
+
+  // Send only a signal — NOT the full result data.
+  // Large arrays (3 lakh notMatched entries) would exceed SSE buffer limits.
+  // The frontend re-fetches via getClientMatchData which hits the cache above.
+  completeMatchJob(jobId);
+}
+
+// ── Controller: start match job ───────────────────────────────────────────────
+
 //for client suggestion apis
 const companiesMatchedDataWithExcel = asyncHandler(async (req, res, next) => {
   try {
@@ -1118,40 +1465,14 @@ const companiesMatchedDataWithExcel = asyncHandler(async (req, res, next) => {
       return sendError(next, "Please upload an Excel or CSV file", 400);
     }
     const { campaignId, dataType } = req.body;
-
     const filePath = req.file.path;
-    let companyNames = [];
-
     const ext = (req.file.originalname || filePath).toLowerCase();
-    if (ext.endsWith(".xlsx") || ext.endsWith(".xls")) {
-      const workbook = XLSX.readFile(filePath);
-      const sheetName = workbook.SheetNames[0];
-      const sheet = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
-      companyNames = sheet
-        .map(
-          (row) =>
-            row.CompanyName ||
-            row.Company_Name ||
-            row.company_name ||
-            row.company ||
-            row.companyNames ||
-            null
-        )
-        .filter(Boolean);
-    } else if (ext.endsWith(".csv")) {
-      const rows = await csv().fromFile(filePath);
-      companyNames = rows
-        .map(
-          (row) =>
-            row.CompanyName ||
-            row.Company_Name ||
-            row.company_name ||
-            row.company ||
-            row.companyNames ||
-            null
-        )
-        .filter(Boolean);
-    } else {
+
+    if (
+      !ext.endsWith(".xlsx") &&
+      !ext.endsWith(".xls") &&
+      !ext.endsWith(".csv")
+    ) {
       fs.unlinkSync(filePath);
       return sendError(
         next,
@@ -1160,98 +1481,67 @@ const companiesMatchedDataWithExcel = asyncHandler(async (req, res, next) => {
       );
     }
 
-    fs.unlinkSync(filePath);
-
-    if (!Array.isArray(companyNames) || companyNames.length === 0) {
-      return sendError(next, "No valid company names found in the file", 400);
-    }
-
-    const regexArr = companyNames.map((name) => ({
-      Company_Name: {
-        $regex: name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-        $options: "i",
-      },
-    }));
-
-    const allMatches = await Company.find({ $or: regexArr }).lean();
-
-    function similarity(a, b) {
-      if (!a || !b) return 0;
-      a = a.toLowerCase();
-      b = b.toLowerCase();
-      if (a === b) return 1;
-      const aWords = new Set(a.split(/\s+/));
-      const bWords = new Set(b.split(/\s+/));
-      const intersection = new Set([...aWords].filter((x) => bWords.has(x)));
-      const union = new Set([...aWords, ...bWords]);
-      return intersection.size / union.size;
-    }
-
-    const completelyMatched = [];
-    const partiallyMatched = [];
-
-    for (const inputName of companyNames) {
-      const matches = allMatches.filter(
-        (c) =>
-          c.Company_Name &&
-          c.Company_Name.toLowerCase().includes(inputName.toLowerCase())
-      );
-
-      const exact = matches.find(
-        (c) =>
-          c.Company_Name &&
-          c.Company_Name.trim().toLowerCase() === inputName.trim().toLowerCase()
-      );
-
-      if (exact) {
-        completelyMatched.push({
-          _id: exact._id,
-          Company_Name: exact.Company_Name,
-          matchedWith: inputName,
-        });
-        continue;
-      }
-
-      const partials = matches
-        .map((c) => ({
-          _id: c._id,
-          Company_Name: c.Company_Name,
-          matchedWith: inputName,
-          matchPercent: Math.round(similarity(inputName, c.Company_Name) * 100),
-        }))
-        .filter((obj) => obj.matchPercent > 0);
-
-      if (partials.length > 0) {
-        partials.sort((a, b) => b.matchPercent - a.matchPercent);
-        partiallyMatched.push({
-          input: inputName,
-          suggestions: partials,
-        });
-      }
-    }
-
-    const matchedNames = new Set([
-      ...completelyMatched.map((c) => c.matchedWith.toLowerCase()),
-      ...partiallyMatched.map((p) => p.input.toLowerCase()),
-    ]);
-    const notMatched = companyNames.filter(
-      (name) => !matchedNames.has(name.toLowerCase())
-    );
-
-    // Save company names (replace any previous upload for this campaign)
-    await ClientCompanyList.deleteMany({ campaignId, dataType });
-    await ClientCompanyList.create({ campaignId, dataType, companyNames });
-
-    return sendResponse(res, 200, "Company name match results", {
-      completelyMatched,
-      partiallyMatched,
-      notMatched,
+    // Respond immediately — file parsing + matching runs in background
+    // (parsing 5 lakh rows can take 30-60s; we must not block the HTTP response)
+    const jobId = createMatchJob();
+    res.status(202).json({
+      success: true,
+      message: "Matching started",
+      data: { jobId },
     });
+
+    // Fire-and-forget
+    runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType).catch(
+      (err) => {
+        console.error("[matchJob] Background error:", err.message);
+        failMatchJob(jobId, err.message || "Matching failed");
+      }
+    );
   } catch (err) {
     console.error("Error in companiesMatchedDataWithExcel:", err);
     return sendError(next, err.message || "Failed to match companies", 500);
   }
 });
+
+// ── Controller: SSE stream for job progress ───────────────────────────────────
+
+const getMatchJobStatus = (req, res) => {
+  const { jobId } = req.params;
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no"); // disable nginx buffering
+  res.flushHeaders();
+
+  const send = (event) => {
+    try {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    } catch {
+      // client already disconnected
+    }
+  };
+
+  const listener = (event) => {
+    send(event);
+    if (event.type === "complete" || event.type === "error") {
+      unsubscribeMatchJob(jobId, listener);
+      res.end();
+    }
+  };
+
+  const found = subscribeMatchJob(jobId, listener);
+  if (!found) {
+    send({ type: "error", error: "Job not found or expired" });
+    res.end();
+    return;
+  }
+
+  // Clean up if client disconnects early
+  req.on("close", () => {
+    unsubscribeMatchJob(jobId, listener);
+  });
+};
 
 //filter for client calling data
 const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
@@ -2033,101 +2323,175 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
     const { campaignId } = req.params;
     if (!campaignId) return sendError(next, "Campaign ID is required", 400);
 
-    const doc = await ClientCompanyList.findOne({
+    // Always fetch the latest doc for approvedIds/rejectedIds (updated independently)
+    const latestDoc = await ClientCompanyList.findOne({
       campaignId,
       dataType: "Client",
     })
       .sort({ updatedAt: -1 })
+      .select("approvedIds rejectedIds")
       .lean();
 
-    if (!doc || !doc.companyNames?.length) {
+    const approvedIds = (latestDoc?.approvedIds || []).map((e) => ({
+      _id: String(e.companyId),
+      Company_Name: e.Company_Name,
+    }));
+    const rejectedIds = (latestDoc?.rejectedIds || []).map((e) => ({
+      _id: String(e.companyId),
+      Company_Name: e.Company_Name,
+    }));
+
+    // ── Fast path: return from in-memory cache ────────────────────────────────
+    const cached = getCachedMatchResult(campaignId);
+    if (cached) {
+      return sendResponse(res, 200, "Client match data fetched", {
+        completelyMatched: cached.completelyMatched,
+        partiallyMatched: cached.partiallyMatched,
+        notMatched: cached.notMatched,
+        approvedIds,
+        rejectedIds,
+      });
+    }
+
+    // ── Slow path: cache miss — read saved names and re-run matching ──────────
+    const docs = await ClientCompanyList.find({
+      campaignId,
+      dataType: "Client",
+    })
+      .sort({ updatedAt: -1 })
+      .select("companyNames")
+      .lean();
+
+    if (!docs.length || !docs.some((d) => d.companyNames?.length)) {
       return sendResponse(res, 200, "No match data found", null);
     }
 
-    const { companyNames } = doc;
+    const companyNames = docs.flatMap((d) => d.companyNames || []);
 
-    const regexArr = companyNames.map((name) => ({
-      Company_Name: {
-        $regex: name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-        $options: "i",
-      },
-    }));
-
-    const allMatches = await Company.find({ $or: regexArr }).lean();
-
-    function similarity(a, b) {
-      if (!a || !b) return 0;
-      a = a.toLowerCase();
-      b = b.toLowerCase();
-      if (a === b) return 1;
-      const aWords = new Set(a.split(/\s+/));
-      const bWords = new Set(b.split(/\s+/));
-      const intersection = new Set([...aWords].filter((x) => bWords.has(x)));
-      const union = new Set([...aWords, ...bWords]);
-      return intersection.size / union.size;
-    }
+    // Use shared DB index cache — avoids reloading 3.7 lakh companies every time
+    const { dbNormMap, invertedIndex } = await getOrBuildDbIndex();
 
     const completelyMatched = [];
     const partiallyMatched = [];
+    const matchedInputSet = new Set();
+    const matchedCompanyIdSet = new Set(); // prevents same DB company appearing twice
 
-    for (const inputName of companyNames) {
-      const matches = allMatches.filter(
-        (c) =>
-          c.Company_Name &&
-          c.Company_Name.toLowerCase().includes(inputName.toLowerCase())
-      );
+    // Process in batches with yieldControl so the event loop isn't blocked
+    // during large cache-miss re-matches
+    const REMATCH_BATCH = 500;
+    for (let batchStart = 0; batchStart < companyNames.length; batchStart += REMATCH_BATCH) {
+      await yieldControl();
+    const batch = companyNames.slice(batchStart, batchStart + REMATCH_BATCH);
+    for (const inputName of batch) {
+      const normInput = normalizeCompanyName(inputName);
+      if (!normInput) continue;
+      const inputKey = inputName.toLowerCase();
 
-      const exact = matches.find(
-        (c) =>
-          c.Company_Name &&
-          c.Company_Name.trim().toLowerCase() === inputName.trim().toLowerCase()
-      );
-
-      if (exact) {
-        completelyMatched.push({
-          _id: exact._id,
-          Company_Name: exact.Company_Name,
-          matchedWith: inputName,
-        });
+      if (dbNormMap.has(normInput)) {
+        const c = dbNormMap.get(normInput);
+        const cIdStr = String(c._id);
+        if (!matchedCompanyIdSet.has(cIdStr)) {
+          matchedCompanyIdSet.add(cIdStr);
+          completelyMatched.push({
+            _id: c._id,
+            Company_Name: c.Company_Name,
+            matchedWith: inputName,
+          });
+        }
+        matchedInputSet.add(inputKey);
         continue;
       }
 
-      const partials = matches
-        .map((c) => ({
-          _id: c._id,
-          Company_Name: c.Company_Name,
-          matchedWith: inputName,
-          matchPercent: Math.round(similarity(inputName, c.Company_Name) * 100),
-        }))
-        .filter((obj) => obj.matchPercent > 0);
-
-      if (partials.length > 0) {
-        partials.sort((a, b) => b.matchPercent - a.matchPercent);
-        partiallyMatched.push({ input: inputName, suggestions: partials });
+      const inputWords = normInput.split(/\s+/).filter((w) => w.length > 2);
+      // Sort rarest words first so specific words are processed before common
+      // ones hit the MAX_CANDIDATES cap
+      inputWords.sort(
+        (a, b) =>
+          (invertedIndex.get(a)?.size || 0) - (invertedIndex.get(b)?.size || 0)
+      );
+      const candidateNorms = new Set();
+      outer2: for (const w of inputWords) {
+        for (const cn of invertedIndex.get(w) || []) {
+          candidateNorms.add(cn);
+          if (candidateNorms.size >= MAX_CANDIDATES) break outer2;
+        }
       }
-    }
 
-    const matchedNames = new Set([
-      ...completelyMatched.map((c) => c.matchedWith.toLowerCase()),
-      ...partiallyMatched.map((p) => p.input.toLowerCase()),
-    ]);
+      const simpleInput = simplifyName(inputName);
+      const scored = [];
+      for (const cNorm of candidateNorms) {
+        const c = dbNormMap.get(cNorm);
+        if (!c) continue;
+
+        let score = 0;
+
+        // Check A: normalized containment
+        if (normInput.includes(cNorm) || cNorm.includes(normInput)) {
+          const aLen = inputWords.length;
+          const bLen =
+            cNorm.split(/\s+/).filter((w) => w.length > 2).length || 1;
+          score = Math.min(aLen, bLen) / Math.max(aLen, bLen, 1);
+        } else {
+          // Check B: Jaccard on normalized tokens
+          const aWords = new Set(inputWords);
+          const bWords = new Set(
+            cNorm.split(/\s+/).filter((w) => w.length > 2)
+          );
+          const inter = [...aWords].filter((w) => bWords.has(w)).length;
+          const unionSize = new Set([...aWords, ...bWords]).size;
+          score = unionSize > 0 ? inter / unionSize : 0;
+        }
+
+        // Check C: simple toLower containment — preserves words stripped by normalization
+        if (score < 0.3) {
+          const simpleDb = c.simpleName;
+          if (
+            simpleDb.includes(simpleInput) ||
+            simpleInput.includes(simpleDb)
+          ) {
+            const aLen = simpleInput.split(/\s+/).length;
+            const bLen = simpleDb.split(/\s+/).length || 1;
+            score = Math.max(
+              score,
+              Math.min(aLen, bLen) / Math.max(aLen, bLen, 1)
+            );
+          }
+        }
+
+        if (score >= 0.3) {
+          scored.push({
+            _id: c._id,
+            Company_Name: c.Company_Name,
+            matchPercent: Math.round(score * 100),
+          });
+        }
+      }
+
+      if (scored.length > 0) {
+        scored.sort((a, b) => b.matchPercent - a.matchPercent);
+        partiallyMatched.push({ input: inputName, suggestions: scored });
+        matchedInputSet.add(inputKey);
+      }
+    } // end inner batch loop
+    } // end outer batch loop
+
     const notMatched = companyNames.filter(
-      (name) => !matchedNames.has(name.toLowerCase())
+      (name) => !matchedInputSet.has(name.toLowerCase())
     );
+
+    // Populate cache so next call is instant
+    setCachedMatchResult(campaignId, {
+      completelyMatched,
+      partiallyMatched,
+      notMatched,
+    });
 
     return sendResponse(res, 200, "Client match data fetched", {
       completelyMatched,
       partiallyMatched,
       notMatched,
-      // Return as { _id, Company_Name } so the frontend can display names
-      approvedIds: (doc.approvedIds || []).map((e) => ({
-        _id: String(e.companyId),
-        Company_Name: e.Company_Name,
-      })),
-      rejectedIds: (doc.rejectedIds || []).map((e) => ({
-        _id: String(e.companyId),
-        Company_Name: e.Company_Name,
-      })),
+      approvedIds,
+      rejectedIds,
     });
   } catch (err) {
     return sendError(next, err.message, 500);
@@ -2188,6 +2552,7 @@ export {
   getPrevCampFiltersByCampaignId,
   assignCallingDataToCampaign,
   companiesMatchedDataWithExcel,
+  getMatchJobStatus,
   clientCallingDataFilter,
   assignCallingDataToCampaignClientSuggested,
   assignCallingDataToCampaignBoth,

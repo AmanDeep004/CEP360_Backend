@@ -6,6 +6,7 @@ import {
   getPrevCampFiltersByCampaignId,
   assignCallingDataToCampaign,
   companiesMatchedDataWithExcel,
+  getMatchJobStatus,
   clientCallingDataFilter,
   assignCallingDataToCampaignClientSuggested,
   assignCallingDataToCampaignBoth,
@@ -63,6 +64,9 @@ router.post(
   protect,
   companiesMatchedDataWithExcel
 );
+
+// SSE endpoint — streams matching progress until complete/error
+router.get("/matchJobStatus/:jobId", protect, getMatchJobStatus);
 
 router.post(
   "/assignCallingDataToCampaignClientSuggested",
