@@ -169,6 +169,22 @@ const userSchema = new Schema(
       type: String,
       trim: true,
     },
+    tataSmartFlowId: {
+      type: String,
+      trim: true,
+    },
+    tataSmartFlowPassword: {
+      type: String,
+      trim: true,
+    },
+    tataDIDNo: {
+      type: String,
+      trim: true,
+    },
+    tataTeleLoginId: {
+      type: String,
+      trim: true,
+    },
     tokenVersion: {
       type: Number,
       default: 0,

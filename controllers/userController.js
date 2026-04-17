@@ -36,6 +36,10 @@ const registerUser = asyncHandler(async (req, res, next) => {
       pan,
       ctc,
       telecmiId,
+      tataSmartFlowId,
+      tataSmartFlowPassword,
+      tataDIDNo,
+      tataTeleLoginId,
     } = req.body;
 
     // Role assignment restrictions
@@ -79,6 +83,10 @@ const registerUser = asyncHandler(async (req, res, next) => {
       pan,
       ctc,
       telecmiId,
+      tataSmartFlowId,
+      tataSmartFlowPassword,
+      tataDIDNo,
+      tataTeleLoginId,
     });
 
     return sendResponse(res, 200, "User Created Successfully", {
@@ -223,6 +231,10 @@ const updateUserProfile = asyncHandler(async (req, res, next) => {
       "pan",
       "telecmiId",
       "mobile",
+      "tataSmartFlowId",
+      "tataSmartFlowPassword",
+      "tataDIDNo",
+      "tataTeleLoginId",
     ];
 
     if (req.user.role === SUPERADMIN || req.user.role === ADMIN || req.user.role === RESOURCE_MANAGER) {
