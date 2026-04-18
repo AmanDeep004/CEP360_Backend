@@ -51,9 +51,8 @@ const startServer = async () => {
     const whatsappRoute = (
       await import("./routes/whatsapp/doubleTickRoutes.js")
     ).default;
-    const tataCallingRoutes = (
-      await import("./routes/tataCallingRoutes.js")
-    ).default;
+    const tataCallingRoutes = (await import("./routes/tataCallingRoutes.js"))
+      .default;
     const checkEndedCampaigns = await import("./utils/endedCampaign.js");
 
     const app = express();

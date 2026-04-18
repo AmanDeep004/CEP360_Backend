@@ -5,6 +5,7 @@ import Campaign from "../models/campaignModel.js";
 import errorHandler from "../utils/index.js";
 import CallingData from "../models/callingDataModal.js";
 import ClientCompanyList from "../models/clientCompanyList.js";
+import ClientMatchResult from "../models/clientMatchResultModel.js";
 import SharedFilter from "../models/sharedFilter.js";
 import XLSX from "xlsx";
 import csv from "csvtojson";
@@ -1193,6 +1194,65 @@ const setCachedMatchResult = (campaignId, result) => {
 
 const invalidateMatchResultCache = (campaignId) => {
   _matchResultCache.delete(String(campaignId));
+  // Also wipe the DB so stale persisted results don't outlive a new upload
+  ClientMatchResult.deleteMany({ campaignId, dataType: "Client" }).catch((e) =>
+    console.warn("[MatchResult] Failed to invalidate DB cache:", e.message)
+  );
+};
+
+// ── Persistent DB helpers (survive server restarts) ───────────────────────────
+
+// Chunk sizes chosen to stay comfortably under MongoDB's 16 MB document limit.
+const COMPLETE_CHUNK   = 2000; // ~100 bytes each → ~200 KB per chunk
+const PARTIAL_CHUNK    =  300; // ~200–500 bytes each (suggestions) → ~150 KB per chunk
+const NOT_MATCHED_CHUNK = 5000; // plain strings → ~150 KB per chunk
+
+/**
+ * Persist match results to MongoDB in chunks.
+ * Runs fire-and-forget so it never delays the HTTP response.
+ */
+const persistMatchResultToDb = async (campaignId, { completelyMatched, partiallyMatched, notMatched }) => {
+  try {
+    // Wipe stale results for this campaign first
+    await ClientMatchResult.deleteMany({ campaignId, dataType: "Client" });
+
+    const chunks = [];
+
+    for (let i = 0; i < completelyMatched.length; i += COMPLETE_CHUNK) {
+      chunks.push({ campaignId, dataType: "Client", chunkType: "complete", chunkIndex: Math.floor(i / COMPLETE_CHUNK), data: completelyMatched.slice(i, i + COMPLETE_CHUNK) });
+    }
+    for (let i = 0; i < partiallyMatched.length; i += PARTIAL_CHUNK) {
+      chunks.push({ campaignId, dataType: "Client", chunkType: "partial", chunkIndex: Math.floor(i / PARTIAL_CHUNK), data: partiallyMatched.slice(i, i + PARTIAL_CHUNK) });
+    }
+    for (let i = 0; i < notMatched.length; i += NOT_MATCHED_CHUNK) {
+      chunks.push({ campaignId, dataType: "Client", chunkType: "notMatched", chunkIndex: Math.floor(i / NOT_MATCHED_CHUNK), data: notMatched.slice(i, i + NOT_MATCHED_CHUNK) });
+    }
+
+    if (chunks.length > 0) {
+      await ClientMatchResult.insertMany(chunks, { ordered: false });
+    }
+    console.log(`[MatchResult] Persisted ${chunks.length} chunks for campaign ${campaignId}`);
+  } catch (err) {
+    console.error("[MatchResult] Failed to persist to DB:", err.message);
+  }
+};
+
+/**
+ * Load match results from MongoDB (used when in-memory cache is cold).
+ * Returns null if nothing is persisted yet.
+ */
+const loadMatchResultFromDb = async (campaignId) => {
+  const docs = await ClientMatchResult.find({ campaignId, dataType: "Client" })
+    .sort({ chunkType: 1, chunkIndex: 1 })
+    .lean();
+
+  if (!docs.length) return null;
+
+  const completelyMatched = docs.filter((d) => d.chunkType === "complete").flatMap((d) => d.data);
+  const partiallyMatched  = docs.filter((d) => d.chunkType === "partial").flatMap((d) => d.data);
+  const notMatched        = docs.filter((d) => d.chunkType === "notMatched").flatMap((d) => d.data);
+
+  return { completelyMatched, partiallyMatched, notMatched };
 };
 
 /**
@@ -1234,6 +1294,12 @@ const simplifyName = (str) => {
  */
 // Max candidates checked per input — prevents O(n²) for common words like "india/tech"
 const MAX_CANDIDATES = 300;
+// Returns the max suggestions to include per partial-match entry.
+// Scales inversely with dataset size to keep total response under ~25MB.
+// Budget formula: assumes worst-case 50% partial matches, ~100 bytes/suggestion.
+// suggestionsLimit = 500_000 / totalNames  (min 10, max MAX_CANDIDATES)
+const getSuggestionsLimit = (totalNames) =>
+  Math.min(MAX_CANDIDATES, Math.max(10, Math.floor(500_000 / totalNames)));
 
 async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
   // Invalidate any stale cached results for this campaign
@@ -1415,7 +1481,7 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
 
       if (scored.length > 0) {
         scored.sort((a, b) => b.matchPercent - a.matchPercent);
-        partiallyMatched.push({ input: inputName, suggestions: scored });
+        partiallyMatched.push({ input: inputName, suggestions: scored.slice(0, getSuggestionsLimit(companyNames.length)) });
         matchedInputSet.add(inputKey);
       }
     }
@@ -1442,13 +1508,12 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
   await ClientCompanyList.deleteMany({ campaignId, dataType });
   await ClientCompanyList.insertMany(chunks, { ordered: false });
 
-  // Cache results so getClientMatchData returns instantly on next call
-  // (avoids re-running the full match on every page load)
-  setCachedMatchResult(campaignId, {
-    completelyMatched,
-    partiallyMatched,
-    notMatched,
-  });
+  // Cache results in memory so getClientMatchData returns instantly on next call
+  setCachedMatchResult(campaignId, { completelyMatched, partiallyMatched, notMatched });
+
+  // Persist to DB in the background — survives server restarts so cache misses
+  // load from DB instead of re-running the full algorithm (which can take minutes).
+  persistMatchResultToDb(campaignId, { completelyMatched, partiallyMatched, notMatched });
 
   // Send only a signal — NOT the full result data.
   // Large arrays (3 lakh notMatched entries) would exceed SSE buffer limits.
@@ -2344,16 +2409,60 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
     // ── Fast path: return from in-memory cache ────────────────────────────────
     const cached = getCachedMatchResult(campaignId);
     if (cached) {
-      return sendResponse(res, 200, "Client match data fetched", {
-        completelyMatched: cached.completelyMatched,
-        partiallyMatched: cached.partiallyMatched,
-        notMatched: cached.notMatched,
-        approvedIds,
-        rejectedIds,
-      });
+      try {
+        return sendResponse(res, 200, "Client match data fetched", {
+          completelyMatched: cached.completelyMatched,
+          partiallyMatched: cached.partiallyMatched,
+          notMatched: cached.notMatched,
+          approvedIds,
+          rejectedIds,
+        });
+      } catch (serializeErr) {
+        console.error("[getClientMatchData] Cache response serialization failed:", serializeErr.message);
+        return res.status(200).json({
+          success: false,
+          message: "Match data is too large to send in one response. Please re-upload a smaller file or contact support.",
+          data: {
+            completelyMatchedCount: cached.completelyMatched.length,
+            partiallyMatchedCount:  cached.partiallyMatched.length,
+            notMatchedCount:        cached.notMatched.length,
+            approvedIds,
+            rejectedIds,
+            tooLarge: true,
+          },
+        });
+      }
     }
 
-    // ── Slow path: cache miss — read saved names and re-run matching ──────────
+    // ── DB path: cache miss — try loading persisted results before re-matching ──
+    const dbResult = await loadMatchResultFromDb(campaignId);
+    if (dbResult) {
+      console.log(`[getClientMatchData] Loaded from DB for campaign ${campaignId}`);
+      setCachedMatchResult(campaignId, dbResult); // warm the memory cache
+      try {
+        return sendResponse(res, 200, "Client match data fetched", {
+          ...dbResult,
+          approvedIds,
+          rejectedIds,
+        });
+      } catch (serializeErr) {
+        console.error("[getClientMatchData] DB response serialization failed:", serializeErr.message);
+        return res.status(200).json({
+          success: false,
+          message: "Match data is too large to send in one response. Please re-upload a smaller file or contact support.",
+          data: {
+            completelyMatchedCount: dbResult.completelyMatched.length,
+            partiallyMatchedCount:  dbResult.partiallyMatched.length,
+            notMatchedCount:        dbResult.notMatched.length,
+            approvedIds,
+            rejectedIds,
+            tooLarge: true,
+          },
+        });
+      }
+    }
+
+    // ── Slow path: nothing persisted — read saved names and re-run matching ───
     const docs = await ClientCompanyList.find({
       campaignId,
       dataType: "Client",
@@ -2469,7 +2578,7 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
 
       if (scored.length > 0) {
         scored.sort((a, b) => b.matchPercent - a.matchPercent);
-        partiallyMatched.push({ input: inputName, suggestions: scored });
+        partiallyMatched.push({ input: inputName, suggestions: scored.slice(0, getSuggestionsLimit(companyNames.length)) });
         matchedInputSet.add(inputKey);
       }
     } // end inner batch loop
@@ -2479,20 +2588,35 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
       (name) => !matchedInputSet.has(name.toLowerCase())
     );
 
-    // Populate cache so next call is instant
-    setCachedMatchResult(campaignId, {
-      completelyMatched,
-      partiallyMatched,
-      notMatched,
-    });
+    // Populate in-memory cache and persist to DB so future cold starts skip re-matching
+    setCachedMatchResult(campaignId, { completelyMatched, partiallyMatched, notMatched });
+    persistMatchResultToDb(campaignId, { completelyMatched, partiallyMatched, notMatched });
 
-    return sendResponse(res, 200, "Client match data fetched", {
-      completelyMatched,
-      partiallyMatched,
-      notMatched,
-      approvedIds,
-      rejectedIds,
-    });
+    try {
+      return sendResponse(res, 200, "Client match data fetched", {
+        completelyMatched,
+        partiallyMatched,
+        notMatched,
+        approvedIds,
+        rejectedIds,
+      });
+    } catch (serializeErr) {
+      // Response payload too large to serialize (e.g. "Invalid string length").
+      // Return summary counts so the frontend can still show progress.
+      console.error("[getClientMatchData] Response serialization failed:", serializeErr.message);
+      return res.status(200).json({
+        success: false,
+        message: "Match data is too large to send in one response. Please re-upload a smaller file or contact support.",
+        data: {
+          completelyMatchedCount: completelyMatched.length,
+          partiallyMatchedCount:  partiallyMatched.length,
+          notMatchedCount:        notMatched.length,
+          approvedIds,
+          rejectedIds,
+          tooLarge: true,
+        },
+      });
+    }
   } catch (err) {
     return sendError(next, err.message, 500);
   }
