@@ -2,6 +2,7 @@ import Campaign from "../models/campaignModel.js";
 import errorHandler from "../utils/index.js";
 import User from "../models/userModel.js";
 import CallingData from "../models/callingDataModal.js";
+import CallHistory from "../models/callHistoryModel.js";
 import CallingDataEditApproval from "../models/callingDataEditApprovalModel.js";
 import { UserRoleEnum } from "../utils/enum.js";
 import XLSX from "xlsx";
@@ -143,23 +144,24 @@ const uploadcallingData = asyncHandler(async (req, res, next) => {
 const getCallingDataById = asyncHandler(async (req, res, next) => {
   try {
     const { id } = req.params;
-    const data = await CallingData.findById(id)
-      .populate({ path: "CampaignId" })
-      .populate({
-        path: "agentId",
-        select: "employeeName email",
-      })
-      .populate({
-        path: "callHistory",
-        populate: {
-          path: "chatHistory",
-          model: "CallHistory",
-        },
-      })
-      .lean();
-    if (!data) {
-      return sendError(next, "Entry not found", 404);
-    }
+
+    const [data, allHistories] = await Promise.all([
+      CallingData.findById(id)
+        .populate({ path: "CampaignId" })
+        .populate({ path: "agentId", select: "employeeName email" })
+        .lean(),
+      CallHistory.find({ callingData_id: id }).lean(),
+    ]);
+
+    if (!data) return sendError(next, "Entry not found", 404);
+
+    // Merge chatHistory from ALL CallHistory docs (across all campaigns), newest first
+    const combinedChatHistory = allHistories
+      .flatMap((h) => h.chatHistory || [])
+      .sort((a, b) => new Date(b.callingDate) - new Date(a.callingDate));
+
+    data.callHistory = { chatHistory: combinedChatHistory };
+
     return sendResponse(res, 200, "Data fetched successfully", data);
   } catch (err) {
     return sendError(next, err.message, 500);
