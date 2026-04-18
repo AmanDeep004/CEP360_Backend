@@ -8,7 +8,7 @@ const chatEntrySchema = new mongoose.Schema(
       type: String,
       required: true,
     },
-    reason: { type: String, required: true },
+    reason: { type: String },
     callingDate: { type: Date, default: Date.now },
     isRegistered: { type: Boolean, default: false },
     agent_id: {
@@ -29,11 +29,11 @@ const callHistorySchema = new mongoose.Schema(
       ref: "CallingData",
       required: true,
     },
-    campaign_id: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Campaign",
-      required: true,
-    },
+    // campaign_id: {
+    //   type: mongoose.Schema.Types.ObjectId,
+    //   ref: "Campaign",
+    //   required: true,
+    // },
     isRegistered: { type: Boolean, default: false },
     registrationDate: { type: Date },
     chatHistory: [chatEntrySchema],
