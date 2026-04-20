@@ -1245,17 +1245,22 @@ const persistMatchResultToDb = async (campaignId, { completelyMatched, partially
  * Returns null if nothing is persisted yet.
  */
 const loadMatchResultFromDb = async (campaignId) => {
-  const docs = await ClientMatchResult.find({ campaignId, dataType: "Client" })
-    .sort({ chunkType: 1, chunkIndex: 1 })
-    .lean();
+  const [completeDocs, partialDocs, notMatchedDocs] = await Promise.all([
+    ClientMatchResult.find({ campaignId, dataType: "Client", chunkType: "complete" })
+      .sort({ chunkIndex: 1 }).select("data").lean(),
+    ClientMatchResult.find({ campaignId, dataType: "Client", chunkType: "partial" })
+      .sort({ chunkIndex: 1 }).select("data").lean(),
+    ClientMatchResult.find({ campaignId, dataType: "Client", chunkType: "notMatched" })
+      .sort({ chunkIndex: 1 }).select("data").lean(),
+  ]);
 
-  if (!docs.length) return null;
+  if (!completeDocs.length && !partialDocs.length && !notMatchedDocs.length) return null;
 
-  const completelyMatched = docs.filter((d) => d.chunkType === "complete").flatMap((d) => d.data);
-  const partiallyMatched  = docs.filter((d) => d.chunkType === "partial").flatMap((d) => d.data);
-  const notMatched        = docs.filter((d) => d.chunkType === "notMatched").flatMap((d) => d.data);
-
-  return { completelyMatched, partiallyMatched, notMatched };
+  return {
+    completelyMatched: completeDocs.flatMap((d) => d.data),
+    partiallyMatched:  partialDocs.flatMap((d) => d.data),
+    notMatched:        notMatchedDocs.flatMap((d) => d.data),
+  };
 };
 
 /**
