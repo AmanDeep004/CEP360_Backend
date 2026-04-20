@@ -1733,6 +1733,7 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
       regions,
       states,
       cities,
+      genders: ["Male", "Female"],
       appliedFilters,
       appliedExclusions,
     });

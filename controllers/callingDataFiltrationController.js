@@ -92,6 +92,7 @@ const CONTACT_ONLY_FIELDS = new Set([
   "Job_Function",
   "Job_Seniority",
   "Job_Title",
+  "Gender",
 ]);
 
 /** Company fields that require $lookup — mapped to company_info.* */
@@ -416,6 +417,7 @@ const callingDataFilterOld = asyncHandler(async (req, res, next) => {
       Contact_City: "Contact_City",
       Job_Function: "Job_Function",
       Job_Seniority: "Job_Seniority",
+      Gender: "Gender",
     };
 
     const buildMongoQuery = (filtersArr, operator = "$in") => {
@@ -648,6 +650,7 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
       Job_Function: "Job_Function",
       Job_Seniority: "Job_Seniority",
       Job_Title: "Job_Title",
+      Gender: "Gender",
     };
 
     const buildMongoQuery = (filtersArr, operator = "$in") => {
