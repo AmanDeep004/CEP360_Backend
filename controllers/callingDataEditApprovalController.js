@@ -85,7 +85,7 @@ const approveOrRejectEditRequestCopy = asyncHandler(async (req, res, next) => {
 
 // Fields that belong to MasterDB Company schema
 const COMPANY_FIELDS = [
-  "Company_Name", "Company_ID_Kestone", "Affinity_ID_Dell", "Company_ID_Google",
+  "Company_Name", "Company_ID_Kestone", /* "Affinity_ID_Dell", "Company_ID_Google", */
   "Company_Source", "Year_Founded", "Turnover_Range", "Employees_Range",
   "Industry", "Sub_Industry", "Company_Segment",
   "Website", "Company_LinkedIn_Profile", "Company_Phone1", "Company_Phone2",

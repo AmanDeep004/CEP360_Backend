@@ -252,8 +252,8 @@ async function processChunk(rows, batchName, lastNumber, job) {
         update: {
           $set: {
             Company_ID_Kestone:      cr.Company_ID_Kestone      || "",
-            Affinity_ID_Dell:        cr.Affinity_ID_Dell        || "",
-            Company_ID_Google:       cr.Company_ID_Google       || "",
+            // Affinity_ID_Dell:        cr.Affinity_ID_Dell        || "",
+            // Company_ID_Google:       cr.Company_ID_Google       || "",
             Company_Source:          cr.Company_Source          || "",
             Company_Name:            cn,
             Year_Founded:            cr.Year_Founded            || "",

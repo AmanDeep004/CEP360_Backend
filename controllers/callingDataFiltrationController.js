@@ -204,8 +204,8 @@ const ASSIGN_PROJECT = {
   "company_info._id": 1,
   "company_info.Company_Name": 1,
   "company_info.Company_ID_Kestone": 1,
-  "company_info.Affinity_ID_Dell": 1,
-  "company_info.Company_ID_Google": 1,
+  // "company_info.Affinity_ID_Dell": 1,
+  // "company_info.Company_ID_Google": 1,
   "company_info.Company_Source": 1,
   "company_info.Year_Founded": 1,
   "company_info.Turnover_Range": 1,
@@ -252,8 +252,10 @@ function buildAssignPipeline(preLookupMatch, postLookupMatch) {
 /** Map one aggregation row → CallingData insert document */
 function mapContactToEntry(
   row,
-  { campaignId, uploadedBy, batchLabel, dataSourceType, source }
+  { campaignId, uploadedBy, batchLabel, dataSourceType, source, companyMetaMap = {} }
 ) {
+  const companyIdStr = row.company_info?._id ? String(row.company_info._id) : "";
+  const meta = companyMetaMap[companyIdStr] || {};
   return {
     CampaignId: new mongoose.Types.ObjectId(campaignId),
     UploadedBy: new mongoose.Types.ObjectId(uploadedBy),
@@ -301,8 +303,8 @@ function mapContactToEntry(
     Company_ID: row.company_info?._id || null,
     Company_Name: row.company_info?.Company_Name || "",
     Company_ID_Kestone: row.company_info?.Company_ID_Kestone || "",
-    Affinity_ID_Dell: row.company_info?.Affinity_ID_Dell || "",
-    Company_ID_Google: row.company_info?.Company_ID_Google || "",
+    // Affinity_ID_Dell: row.company_info?.Affinity_ID_Dell || "",
+    // Company_ID_Google: row.company_info?.Company_ID_Google || "",
     Company_Source: row.company_info?.Company_Source || "",
     Year_Founded: row.company_info?.Year_Founded || "",
     Turnover_Range: row.company_info?.Turnover_Range || "",
@@ -315,6 +317,10 @@ function mapContactToEntry(
     Company_Phone1: row.company_info?.Company_Phone1 || "",
     Company_Phone2: row.company_info?.Company_Phone2 || "",
     EngagementPoints: row.EngagementPoints,
+    clientInfo: {
+      companySpecificId: meta.companySpecificId || "",
+      segment:           meta.segment           || "",
+    },
   };
 }
 
@@ -1147,9 +1153,14 @@ const getOrBuildDbIndex = async () => {
     {},
     { _id: 1, Company_Name: 1 }
   ).lean();
-  const dbNormMap = new Map();
+  const dbExactMap = new Map(); // raw lowercase name → company (for complete match)
+  const dbNormMap  = new Map(); // normalized name → company (for partial match)
   const invertedIndex = new Map();
   for (const c of allDbCompanies) {
+    const raw = (c.Company_Name || "").trim().toLowerCase();
+    if (raw && !dbExactMap.has(raw)) {
+      dbExactMap.set(raw, { _id: c._id, Company_Name: c.Company_Name });
+    }
     const norm = normalizeCompanyName(c.Company_Name || "");
     if (!norm) continue;
     if (!dbNormMap.has(norm)) {
@@ -1164,7 +1175,7 @@ const getOrBuildDbIndex = async () => {
       invertedIndex.get(word).add(norm);
     }
   }
-  _dbIndexCache = { dbNormMap, invertedIndex };
+  _dbIndexCache = { dbExactMap, dbNormMap, invertedIndex };
   _dbIndexCacheTime = now;
   return _dbIndexCache;
 };
@@ -1214,7 +1225,7 @@ const NOT_MATCHED_CHUNK = 5000; // plain strings → ~150 KB per chunk
  * Persist match results to MongoDB in chunks.
  * Runs fire-and-forget so it never delays the HTTP response.
  */
-const persistMatchResultToDb = async (campaignId, { completelyMatched, partiallyMatched, notMatched }) => {
+const persistMatchResultToDb = async (campaignId, { completelyMatched, partiallyMatched, notMatched, duplicates = [] }) => {
   try {
     // Wipe stale results for this campaign first
     await ClientMatchResult.deleteMany({ campaignId, dataType: "Client" });
@@ -1229,6 +1240,9 @@ const persistMatchResultToDb = async (campaignId, { completelyMatched, partially
     }
     for (let i = 0; i < notMatched.length; i += NOT_MATCHED_CHUNK) {
       chunks.push({ campaignId, dataType: "Client", chunkType: "notMatched", chunkIndex: Math.floor(i / NOT_MATCHED_CHUNK), data: notMatched.slice(i, i + NOT_MATCHED_CHUNK) });
+    }
+    if (duplicates.length > 0) {
+      chunks.push({ campaignId, dataType: "Client", chunkType: "duplicates", chunkIndex: 0, data: duplicates });
     }
 
     if (chunks.length > 0) {
@@ -1245,12 +1259,14 @@ const persistMatchResultToDb = async (campaignId, { completelyMatched, partially
  * Returns null if nothing is persisted yet.
  */
 const loadMatchResultFromDb = async (campaignId) => {
-  const [completeDocs, partialDocs, notMatchedDocs] = await Promise.all([
+  const [completeDocs, partialDocs, notMatchedDocs, duplicateDocs] = await Promise.all([
     ClientMatchResult.find({ campaignId, dataType: "Client", chunkType: "complete" })
       .sort({ chunkIndex: 1 }).select("data").lean(),
     ClientMatchResult.find({ campaignId, dataType: "Client", chunkType: "partial" })
       .sort({ chunkIndex: 1 }).select("data").lean(),
     ClientMatchResult.find({ campaignId, dataType: "Client", chunkType: "notMatched" })
+      .sort({ chunkIndex: 1 }).select("data").lean(),
+    ClientMatchResult.find({ campaignId, dataType: "Client", chunkType: "duplicates" })
       .sort({ chunkIndex: 1 }).select("data").lean(),
   ]);
 
@@ -1260,6 +1276,7 @@ const loadMatchResultFromDb = async (campaignId) => {
     completelyMatched: completeDocs.flatMap((d) => d.data),
     partiallyMatched:  partialDocs.flatMap((d) => d.data),
     notMatched:        notMatchedDocs.flatMap((d) => d.data),
+    duplicates:        duplicateDocs.flatMap((d) => d.data),
   };
 };
 
@@ -1317,45 +1334,71 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
   updateMatchJob(jobId, "Parsing uploaded file...", 3);
   await yieldControl();
 
-  let companyNames = [];
+  // companyRows: { name, companySpecificId, segment }[]
+  let companyRows = [];
+  let invalidRowCount = 0;
   try {
-    const pickName = (row) => {
-      const val =
-        row.CompanyName ??
-        row.Company_Name ??
-        row.company_name ??
-        row.company ??
-        row.companyNames ??
-        null;
-      return val != null ? String(val).trim() : null;
+    const pickVal = (row, keys) => {
+      for (const k of keys) {
+        const v = row[k];
+        if (v != null && String(v).trim()) return String(v).trim();
+      }
+      return "";
+    };
+    const parseRow = (row) => {
+      const name = pickVal(row, ["CompanyName", "Company_Name", "company_name", "company", "companyNames"]);
+      if (!name) return null;
+      return {
+        name,
+        companySpecificId: pickVal(row, ["CompanySpecificId", "Company_Specific_Id", "company_specific_id", "companyspecificid", "SpecificId", "Specific_Id"]),
+        segment:           pickVal(row, ["Segment", "segment", "Segment_Name", "SegmentName", "segment_name"]),
+      };
+    };
+
+    const filterAndCount = (parsed) => {
+      const valid = [];
+      for (const r of parsed) {
+        if (r) valid.push(r);
+        else invalidRowCount++;
+      }
+      return valid;
     };
 
     if (ext.endsWith(".xlsx") || ext.endsWith(".xls")) {
-      const workbook = XLSX.readFile(filePath, {
-        cellText: true,
-        cellDates: false,
-      });
-      const sheet = XLSX.utils.sheet_to_json(
-        workbook.Sheets[workbook.SheetNames[0]]
-      );
-      companyNames = sheet.map(pickName).filter(Boolean);
+      const workbook = XLSX.readFile(filePath, { cellText: true, cellDates: false });
+      const sheet = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+      companyRows = filterAndCount(sheet.map(parseRow));
     } else {
       const rows = await csv().fromFile(filePath);
-      companyNames = rows.map(pickName).filter(Boolean);
+      companyRows = filterAndCount(rows.map(parseRow));
     }
   } finally {
-    // Always clean up the temp file
-    try {
-      fs.unlinkSync(filePath);
-    } catch {
-      /* already gone */
-    }
+    try { fs.unlinkSync(filePath); } catch { /* already gone */ }
   }
 
-  if (!companyNames.length) {
+  if (!companyRows.length) {
     failMatchJob(jobId, "No valid company names found in the file");
     return;
   }
+
+  // Flat names array (for backward-compat with ClientCompanyList + progress messages)
+  const companyNames = companyRows.map((r) => r.name);
+
+  // Deduplicate: first occurrence of each name → matchRows; extras → duplicates.
+  // e.g. "ABC Corp" × 3  →  1 in matchRows, 2 in duplicates.
+  const seenNameKeys = new Set();
+  const matchRows  = [];
+  const duplicates = []; // extra occurrences (strings) shown in Duplicates tab
+  for (const row of companyRows) {
+    const key = row.name.toLowerCase();
+    if (!seenNameKeys.has(key)) {
+      seenNameKeys.add(key);
+      matchRows.push(row);
+    } else {
+      duplicates.push(row.name);
+    }
+  }
+  const matchNames = matchRows.map((r) => r.name);
 
   updateMatchJob(
     jobId,
@@ -1365,7 +1408,7 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
   await yieldControl();
 
   // Stage 2 — load DB index (shared cache, rebuilt every 30 min)
-  const { dbNormMap, invertedIndex } = await getOrBuildDbIndex();
+  const { dbExactMap, dbNormMap, invertedIndex } = await getOrBuildDbIndex();
 
   updateMatchJob(
     jobId,
@@ -1376,45 +1419,43 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
 
   // Stage 3 — batch match with inverted index + bidirectional containment
   const BATCH_SIZE = 500;
-  const totalBatches = Math.ceil(companyNames.length / BATCH_SIZE);
+  const totalBatches = Math.ceil(matchRows.length / BATCH_SIZE);
   const completelyMatched = [];
   const partiallyMatched = [];
   const matchedInputSet = new Set();    // tracks matched input names (lowercase)
-  const matchedCompanyIdSet = new Set(); // deduplicates by DB company _id so the
-                                          // same company isn't added twice when
-                                          // multiple Excel rows map to the same DB entry
 
   for (let b = 0; b < totalBatches; b++) {
-    const batch = companyNames.slice(b * BATCH_SIZE, (b + 1) * BATCH_SIZE);
-    const done = Math.min((b + 1) * BATCH_SIZE, companyNames.length);
+    const batch = matchRows.slice(b * BATCH_SIZE, (b + 1) * BATCH_SIZE);
+    const done = Math.min((b + 1) * BATCH_SIZE, matchRows.length);
     const percent = 20 + Math.round((b / totalBatches) * 70);
     updateMatchJob(
       jobId,
-      `Matching companies... ${done.toLocaleString()} / ${companyNames.length.toLocaleString()}`,
+      `Matching companies... ${done.toLocaleString()} / ${companyRows.length.toLocaleString()}`,
       percent
     );
     await yieldControl();
 
-    for (const inputName of batch) {
-      const normInput = normalizeCompanyName(inputName);
-      if (!normInput) continue;
+    for (const { name: inputName, companySpecificId, segment } of batch) {
       const inputKey = inputName.toLowerCase();
 
-      // 1. Direct normalized exact match
-      if (dbNormMap.has(normInput)) {
-        const c = dbNormMap.get(normInput);
-        const cIdStr = String(c._id);
-        if (!matchedCompanyIdSet.has(cIdStr)) {
-          matchedCompanyIdSet.add(cIdStr);
-          completelyMatched.push({
-            _id: c._id,
-            Company_Name: c.Company_Name,
-            matchedWith: inputName,
-          });
-        }
+      // 1. Exact match — raw case-insensitive, no normalization (checked first,
+      //    before normInput so names like "Ltd & Co" still get an exact match)
+      if (dbExactMap.has(inputKey)) {
+        const c = dbExactMap.get(inputKey);
+        completelyMatched.push({
+          _id: c._id,
+          Company_Name: c.Company_Name,
+          matchedWith: inputName,
+          ...(companySpecificId ? { companySpecificId } : {}),
+          ...(segment          ? { segment }          : {}),
+        });
         matchedInputSet.add(inputKey);
         continue;
       }
+
+      // Partial match needs a normalized form — skip if normalization yields nothing
+      const normInput = normalizeCompanyName(inputName);
+      if (!normInput) continue;
 
       // 2. Get candidate DB companies sharing at least one word with the input
       //    Sort by ascending index frequency so rare/specific words (e.g. "assam")
@@ -1489,15 +1530,22 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
 
       if (scored.length > 0) {
         scored.sort((a, b) => b.matchPercent - a.matchPercent);
-        partiallyMatched.push({ input: inputName, suggestions: scored.slice(0, getSuggestionsLimit(companyNames.length)) });
+        partiallyMatched.push({
+          input: inputName,
+          suggestions: scored.slice(0, getSuggestionsLimit(matchRows.length)),
+          ...(companySpecificId ? { companySpecificId } : {}),
+          ...(segment          ? { segment }          : {}),
+        });
         matchedInputSet.add(inputKey);
       }
     }
   }
 
-  const notMatched = companyNames.filter(
-    (name) => !matchedInputSet.has(name.toLowerCase())
-  );
+  const notMatched = [
+    ...matchNames.filter((name) => !matchedInputSet.has(name.toLowerCase())),
+    // Rows that had no company name in the uploaded file — can't be matched
+    ...Array.from({ length: invalidRowCount }, () => "(No Company Name)"),
+  ];
 
   // Stage 4 — save in chunks to stay within MongoDB's 16MB document limit
   // insertMany sends all chunks in one round-trip instead of 50 sequential creates
@@ -1517,11 +1565,11 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
   await ClientCompanyList.insertMany(chunks, { ordered: false });
 
   // Cache results in memory so getClientMatchData returns instantly on next call
-  setCachedMatchResult(campaignId, { completelyMatched, partiallyMatched, notMatched });
+  setCachedMatchResult(campaignId, { completelyMatched, partiallyMatched, notMatched, duplicates });
 
   // Persist to DB in the background — survives server restarts so cache misses
   // load from DB instead of re-running the full algorithm (which can take minutes).
-  persistMatchResultToDb(campaignId, { completelyMatched, partiallyMatched, notMatched });
+  persistMatchResultToDb(campaignId, { completelyMatched, partiallyMatched, notMatched, duplicates });
 
   // Send only a signal — NOT the full result data.
   // Large arrays (3 lakh notMatched entries) would exceed SSE buffer limits.
@@ -1625,6 +1673,7 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
       exclusions = [],
       datatype = datatype || "Client",
       companyIds = [],
+      companyMetaMap = {},
     } = req.body;
 
     if (!campaignId) {
@@ -1822,7 +1871,7 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
       dataType: datatype,
       contactCount: stats.totalContacts,
       status: "Pending",
-      misc: { companyIdsUsed: companyIds, companyNamesUsed },
+      misc: { companyIdsUsed: companyIds, companyNamesUsed, companyMetaMap },
     });
 
     return sendResponse(
@@ -1969,6 +2018,7 @@ const assignCallingDataToCampaignClientSuggested = asyncHandler(
       const batchLabel = `Batch-${batchNumber}`;
 
       const companyIds = lastFilter.misc?.companyIdsUsed || [];
+      const companyMetaMap = lastFilter.misc?.companyMetaMap || {};
       const preLookup = buildPreLookupMatch(
         lastFilter.filters || [],
         lastFilter.exclusions || [],
@@ -1987,6 +2037,7 @@ const assignCallingDataToCampaignClientSuggested = asyncHandler(
           batchLabel,
           dataSourceType,
           source: "ClientSuggested",
+          companyMetaMap,
         });
 
       if (totalProcessed === 0) {
@@ -2422,6 +2473,7 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
           completelyMatched: cached.completelyMatched,
           partiallyMatched: cached.partiallyMatched,
           notMatched: cached.notMatched,
+          duplicates: cached.duplicates || [],
           approvedIds,
           rejectedIds,
         });
@@ -2450,6 +2502,7 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
       try {
         return sendResponse(res, 200, "Client match data fetched", {
           ...dbResult,
+          duplicates: dbResult.duplicates || [],
           approvedIds,
           rejectedIds,
         });

@@ -47,8 +47,8 @@ const CallingDataSchema = new mongoose.Schema(
     Company_ID: { type: mongoose.Schema.Types.ObjectId, ref: "Company" },
     Company_Name: { type: String, trim: true },
     Company_ID_Kestone: { type: String, trim: true },
-    Affinity_ID_Dell: { type: String, trim: true },
-    Company_ID_Google: { type: String, trim: true },
+    // Affinity_ID_Dell: { type: String, trim: true },
+    // Company_ID_Google: { type: String, trim: true },
     Company_Source: { type: String, trim: true },
     Year_Founded: { type: String, trim: true },
     Turnover_Range: { type: String, trim: true },
@@ -147,6 +147,10 @@ const CallingDataSchema = new mongoose.Schema(
       priorityDate: { type: Date, default: null },
       setAt: { type: Date, default: null },
       note: { type: String, trim: true, default: "" },
+    },
+    clientInfo: {
+      companySpecificId: { type: String, trim: true, default: "" },
+      segment:           { type: String, trim: true, default: "" },
     },
     discrepencyInData: {
       status: { type: Boolean, default: false },

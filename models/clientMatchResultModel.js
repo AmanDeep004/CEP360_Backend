@@ -14,7 +14,7 @@ const clientMatchResultSchema = new mongoose.Schema(
     dataType: { type: String, default: "Client" },
     chunkType: {
       type: String,
-      enum: ["complete", "partial", "notMatched"],
+      enum: ["complete", "partial", "notMatched", "duplicates"],
       required: true,
     },
     chunkIndex: { type: Number, required: true },
