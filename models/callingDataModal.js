@@ -150,7 +150,7 @@ const CallingDataSchema = new mongoose.Schema(
     },
     clientInfo: {
       companySpecificId: { type: String, trim: true, default: "" },
-      segment:           { type: String, trim: true, default: "" },
+      segment: { type: String, trim: true, default: "" },
     },
     discrepencyInData: {
       status: { type: Boolean, default: false },

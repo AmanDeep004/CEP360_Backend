@@ -2724,7 +2724,11 @@ const updateClientMatchAction = asyncHandler(async (req, res, next) => {
       );
     }
 
-    return sendResponse(res, 200, "Action saved", null);
+    const updated = await ClientCompanyList.findOne(filter, "approvedIds rejectedIds", sortOpt);
+    return sendResponse(res, 200, "Action saved", {
+      approvedCount: updated?.approvedIds?.length ?? 0,
+      rejectedCount: updated?.rejectedIds?.length ?? 0,
+    });
   } catch (err) {
     return sendError(next, err.message, 500);
   }
