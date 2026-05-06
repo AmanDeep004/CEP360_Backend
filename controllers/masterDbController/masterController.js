@@ -1,5 +1,6 @@
 import XLSX from "xlsx";
 import fs from "fs";
+import mongoose from "mongoose";
 import errorHandler from "../../utils/index.js";
 import Company from "../../models/MasterDBModel/companyModel.js";
 import Contact from "../../models/MasterDBModel/contactModel.js";
@@ -1574,14 +1575,16 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
     // Normalise a query param to an array (handles string, array, undefined)
     const toArray = (val) => {
       if (!val) return null;
-      const arr = Array.isArray(val) ? val : val.split(",").map((s) => s.trim());
+      const arr = Array.isArray(val)
+        ? val
+        : val.split(",").map((s) => s.trim());
       return arr.filter(Boolean).length ? arr.filter(Boolean) : null;
     };
 
-    const selectedCountries    = toArray(req.query.country);
-    const selectedRegions      = toArray(req.query.region);
-    const selectedStates       = toArray(req.query.state);
-    const selectedIndustries   = toArray(req.query.industry);
+    const selectedCountries = toArray(req.query.country);
+    const selectedRegions = toArray(req.query.region);
+    const selectedStates = toArray(req.query.state);
+    const selectedIndustries = toArray(req.query.industry);
     const selectedJobFunctions = toArray(req.query.jobFunction);
 
     const BLANK_FILTER = { $nin: [null, "", "Blank"] };
@@ -1612,25 +1615,31 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
 
     // ── Geo match stages ─────────────────────────────────────────────────────
     const countryMatchStage = { Contact_Country: BLANK_FILTER };
-    const regionMatchStage  = {
+    const regionMatchStage = {
       Contact_Region: BLANK_FILTER,
-      ...(selectedCountries ? { Contact_Country: { $in: selectedCountries } } : {}),
+      ...(selectedCountries
+        ? { Contact_Country: { $in: selectedCountries } }
+        : {}),
     };
-    const stateMatchStage   = {
+    const stateMatchStage = {
       Contact_State: BLANK_FILTER,
-      ...(selectedCountries ? { Contact_Country: { $in: selectedCountries } } : {}),
-      ...(selectedRegions   ? { Contact_Region:  { $in: selectedRegions   } } : {}),
+      ...(selectedCountries
+        ? { Contact_Country: { $in: selectedCountries } }
+        : {}),
+      ...(selectedRegions ? { Contact_Region: { $in: selectedRegions } } : {}),
     };
-    const cityMatchStage    = {
+    const cityMatchStage = {
       Contact_City: BLANK_FILTER,
-      ...(selectedCountries ? { Contact_Country: { $in: selectedCountries } } : {}),
-      ...(selectedRegions   ? { Contact_Region:  { $in: selectedRegions   } } : {}),
-      ...(selectedStates    ? { Contact_State:   { $in: selectedStates    } } : {}),
+      ...(selectedCountries
+        ? { Contact_Country: { $in: selectedCountries } }
+        : {}),
+      ...(selectedRegions ? { Contact_Region: { $in: selectedRegions } } : {}),
+      ...(selectedStates ? { Contact_State: { $in: selectedStates } } : {}),
     };
 
     // ── Industry / Sub Industry match stages ─────────────────────────────────
     // Industries are always unfiltered (parent selector)
-    const industryMatchStage    = { Industry: BLANK_FILTER };
+    const industryMatchStage = { Industry: BLANK_FILTER };
     // Sub industries filtered by selected industries
     const subIndustryMatchStage = {
       Sub_Industry: BLANK_FILTER,
@@ -1639,11 +1648,13 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
 
     // ── Job Function / Job Seniority match stages ────────────────────────────
     // Job functions are always unfiltered (parent selector)
-    const jobFunctionMatchStage  = { Job_Function: BLANK_FILTER };
+    const jobFunctionMatchStage = { Job_Function: BLANK_FILTER };
     // Job seniorities filtered by selected job functions
     const jobSeniorityMatchStage = {
       Job_Seniority: BLANK_FILTER,
-      ...(selectedJobFunctions ? { Job_Function: { $in: selectedJobFunctions } } : {}),
+      ...(selectedJobFunctions
+        ? { Job_Function: { $in: selectedJobFunctions } }
+        : {}),
     };
 
     const parseRange = (str) => {
@@ -1673,38 +1684,82 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
         {
           $group: {
             _id: null,
-            segments:       { $addToSet: "$Company_Segment" },
+            segments: { $addToSet: "$Company_Segment" },
             employeeRanges: { $addToSet: "$Employees_Range" },
-            turnovers:      { $addToSet: "$Turnover_Range" },
+            turnovers: { $addToSet: "$Turnover_Range" },
           },
         },
         {
           $project: {
             _id: 0,
-            segments:       { $filter: { input: "$segments",       as: "v", cond: { $and: [{ $ne: ["$$v", null] }, { $ne: ["$$v", ""] }, { $ne: ["$$v", "Blank"] }] } } },
-            employeeRanges: { $filter: { input: "$employeeRanges", as: "v", cond: { $and: [{ $ne: ["$$v", null] }, { $ne: ["$$v", ""] }, { $ne: ["$$v", "Blank"] }] } } },
-            turnovers:      { $filter: { input: "$turnovers",      as: "v", cond: { $and: [{ $ne: ["$$v", null] }, { $ne: ["$$v", ""] }, { $ne: ["$$v", "Blank"] }] } } },
+            segments: {
+              $filter: {
+                input: "$segments",
+                as: "v",
+                cond: {
+                  $and: [
+                    { $ne: ["$$v", null] },
+                    { $ne: ["$$v", ""] },
+                    { $ne: ["$$v", "Blank"] },
+                  ],
+                },
+              },
+            },
+            employeeRanges: {
+              $filter: {
+                input: "$employeeRanges",
+                as: "v",
+                cond: {
+                  $and: [
+                    { $ne: ["$$v", null] },
+                    { $ne: ["$$v", ""] },
+                    { $ne: ["$$v", "Blank"] },
+                  ],
+                },
+              },
+            },
+            turnovers: {
+              $filter: {
+                input: "$turnovers",
+                as: "v",
+                cond: {
+                  $and: [
+                    { $ne: ["$$v", null] },
+                    { $ne: ["$$v", ""] },
+                    { $ne: ["$$v", "Blank"] },
+                  ],
+                },
+              },
+            },
           },
         },
       ]),
       // Geo
-      distinctContactValues(countryMatchStage,   "Contact_Country"),
-      distinctContactValues(regionMatchStage,    "Contact_Region"),
-      distinctContactValues(stateMatchStage,     "Contact_State"),
-      distinctContactValues(cityMatchStage,      "Contact_City"),
+      distinctContactValues(countryMatchStage, "Contact_Country"),
+      distinctContactValues(regionMatchStage, "Contact_Region"),
+      distinctContactValues(stateMatchStage, "Contact_State"),
+      distinctContactValues(cityMatchStage, "Contact_City"),
       // Industry hierarchy
-      distinctCompanyValues(industryMatchStage,    "Industry"),
+      distinctCompanyValues(industryMatchStage, "Industry"),
       distinctCompanyValues(subIndustryMatchStage, "Sub_Industry"),
       // Job hierarchy
-      distinctContactValues(jobFunctionMatchStage,  "Job_Function"),
+      distinctContactValues(jobFunctionMatchStage, "Job_Function"),
       distinctContactValues(jobSeniorityMatchStage, "Job_Seniority"),
     ]);
 
-    const staticData = staticCompanyFilters[0] || { segments: [], employeeRanges: [], turnovers: [] };
+    const staticData = staticCompanyFilters[0] || {
+      segments: [],
+      employeeRanges: [],
+      turnovers: [],
+    };
 
-    staticData.turnovers      = staticData.turnovers.sort((a, b) => parseRange(a) - parseRange(b));
-    staticData.employeeRanges = staticData.employeeRanges.sort((a, b) => parseRange(a) - parseRange(b));
-    staticData.segments       = staticData.segments.sort();
+    staticData.turnovers = staticData.turnovers.sort(
+      (a, b) => parseRange(a) - parseRange(b)
+    );
+    staticData.employeeRanges = staticData.employeeRanges.sort(
+      (a, b) => parseRange(a) - parseRange(b)
+    );
+    staticData.segments = staticData.segments.sort();
 
     // Fetch applied filters for the campaign if campaignId is provided
     let appliedFilters = [];
@@ -1718,7 +1773,7 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
         .lean();
 
       if (latestFilter) {
-        appliedFilters    = latestFilter.filters    || [];
+        appliedFilters = latestFilter.filters || [];
         appliedExclusions = latestFilter.exclusions || [];
       }
     }
@@ -1738,7 +1793,11 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
       appliedExclusions,
     });
   } catch (err) {
-    return sendError(next, err.message || "Failed to fetch dynamic filters", 500);
+    return sendError(
+      next,
+      err.message || "Failed to fetch dynamic filters",
+      500
+    );
   }
 });
 
@@ -3026,6 +3085,302 @@ const mergeCompanies = asyncHandler(async (req, res, next) => {
   }
 });
 
+/**
+ * GET /api/masterdb/individualSearch
+ * Search Contact by name, designation (Job_Title), and/or company name.
+ * All provided fields are ANDed; each uses a case-insensitive regex.
+ */
+async function individualSearch(req, res, next) {
+  try {
+    const {
+      name,
+      designation,
+      company,
+      email,
+      page = 1,
+      limit = 20,
+    } = req.query;
+
+    if (!name && !designation && !company && !email) {
+      return sendError(next, "At least one search field is required", 400);
+    }
+
+    const andConditions = [];
+
+    if (name?.trim()) {
+      const r = new RegExp(name.trim(), "i");
+      andConditions.push({
+        $or: [{ Full_Name: r }, { First_Name: r }, { Last_Name: r }],
+      });
+    }
+
+    if (designation?.trim()) {
+      andConditions.push({ Job_Title: new RegExp(designation.trim(), "i") });
+    }
+
+    if (email?.trim()) {
+      const r = new RegExp(email.trim(), "i");
+      andConditions.push({
+        $or: [
+          { Office_Email_1: r },
+          { Office_Email_2: r },
+          { Personal_Email1: r },
+          { Personal_Email2: r },
+        ],
+      });
+    }
+
+    // Company is on the same secondary connection — resolve IDs first, then filter Contact
+    if (company?.trim()) {
+      const matchingCompanies = await Company.find(
+        { Company_Name: new RegExp(company.trim(), "i") },
+        { _id: 1 }
+      ).lean();
+      if (!matchingCompanies.length) {
+        return sendResponse(res, 200, "No contacts found", {
+          contacts: [],
+          total: 0,
+        });
+      }
+      andConditions.push({
+        Company_ID: { $in: matchingCompanies.map((c) => c._id) },
+      });
+    }
+
+    const query =
+      andConditions.length > 1 ? { $and: andConditions } : andConditions[0];
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const [rawContacts, total] = await Promise.all([
+      Contact.find(query)
+        .populate(
+          "Company_ID",
+          "Company_Name Industry Company_Segment Employees_Range Turnover_Range Website Company_ID_Kestone Company_Source Company_Phone1 Company_Phone2 Year_Founded Sub_Industry Company_LinkedIn_Profile"
+        )
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      Contact.countDocuments(query),
+    ]);
+
+    const maskEmail = (email) => {
+      if (!email) return "";
+      const [local, domain] = email.split("@");
+      if (!domain) return email;
+      return `${local.slice(0, 2)}${"*".repeat(
+        Math.max(4, local.length - 2)
+      )}@${domain}`;
+    };
+
+    const maskPhone = (phone) => {
+      if (!phone) return "";
+      const digits = phone.replace(/\D/g, "");
+      if (digits.length < 4) return phone;
+      return `${"*".repeat(digits.length - 4)}${digits.slice(-4)}`;
+    };
+
+    const contacts = rawContacts.map((c) => ({
+      ...c,
+      Office_Email_1: maskEmail(c.Office_Email_1),
+      Office_Email_2: maskEmail(c.Office_Email_2),
+      Personal_Email1: maskEmail(c.Personal_Email1),
+      Personal_Email2: maskEmail(c.Personal_Email2),
+      Mobile_No: maskPhone(c.Mobile_No),
+      Contact_Direct_Phone1: maskPhone(c.Contact_Direct_Phone1),
+      Contact_Direct_Phone2: maskPhone(c.Contact_Direct_Phone2),
+    }));
+
+    return sendResponse(res, 200, "Search results", {
+      contacts,
+      total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+    });
+  } catch (err) {
+    return sendError(next, err.message || "Search failed", 500);
+  }
+}
+
+/**
+ * POST /api/masterdb/assignIndividualSearch
+ * Assign selected contacts (by Contact._id) directly to a campaign as CallingData.
+ * Batch logic: reuse the batch if any record with dataSourceType "individualSearchKestone"
+ * was added to this campaign within the last 3 hours; otherwise create a new sequential batch.
+ */
+async function assignIndividualSearch(req, res, next) {
+  try {
+    const { contactIds, campaignId } = req.body;
+    if (!contactIds?.length || !campaignId) {
+      return sendError(next, "contactIds and campaignId are required", 400);
+    }
+
+    // 1. Validate campaign (primary DB)
+    const campaign = await Campaign.findById(campaignId).lean();
+    if (!campaign) return sendError(next, "Campaign not found", 404);
+
+    // 2. Determine batch label
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    const recentEntry = await CallingData.findOne({
+      CampaignId: new mongoose.Types.ObjectId(campaignId),
+      dataSourceType: "IndividualSearchKestone",
+      createdAt: { $gte: threeHoursAgo },
+    })
+      .sort({ createdAt: -1 })
+      .select("batch")
+      .lean();
+
+    let batchLabel;
+    if (recentEntry?.batch) {
+      batchLabel = recentEntry.batch;
+    } else {
+      // Pick next sequential batch number across all batches in this campaign
+      const existingBatches = await CallingData.distinct("batch", {
+        CampaignId: new mongoose.Types.ObjectId(campaignId),
+      });
+      let maxNum = 0;
+      for (const b of existingBatches) {
+        const m = String(b || "").match(/Batch-(\d+)/i);
+        if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
+      }
+      batchLabel = `Batch-${maxNum + 1}`;
+    }
+
+    // 3. Fetch contacts from secondary DB with company details
+    const validIds = contactIds
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+
+    const contacts = await Contact.find({ _id: { $in: validIds } })
+      .populate(
+        "Company_ID",
+        "Company_Name Company_ID_Kestone Company_Source Year_Founded Turnover_Range Employees_Range Industry Sub_Industry Company_Segment Website Company_LinkedIn_Profile Company_Phone1 Company_Phone2"
+      )
+      .lean();
+
+    // 4. Dedup — skip contacts already assigned to this campaign
+    const contactIdStrings = contacts.map((c) => c.Contact_ID).filter(Boolean);
+    const alreadyIn = new Set(
+      (
+        await CallingData.find(
+          {
+            CampaignId: new mongoose.Types.ObjectId(campaignId),
+            Contact_ID: { $in: contactIdStrings },
+          },
+          { Contact_ID: 1 }
+        ).lean()
+      ).map((c) => c.Contact_ID)
+    );
+
+    const newContacts = contacts.filter((c) => !alreadyIn.has(c.Contact_ID));
+    const duplicates = contacts.length - newContacts.length;
+
+    if (!newContacts.length) {
+      return sendResponse(
+        res,
+        200,
+        "All selected contacts are already assigned to this campaign",
+        {
+          inserted: 0,
+          duplicates,
+          batch: batchLabel,
+          isWarning: true,
+        }
+      );
+    }
+
+    // 5. Map Contact → CallingData
+    const entries = newContacts.map((c) => ({
+      CampaignId: new mongoose.Types.ObjectId(campaignId),
+      UploadedBy: req.user._id,
+      source: "Individual Search",
+      batch: batchLabel,
+      dataSourceType: "IndividualSearchKestone",
+      Contact_ID: c.Contact_ID,
+      Contact_Source: c.Contact_Source,
+      Contact_Create_Date: c.Contact_Create_Date,
+      Salutation: c.Salutation,
+      First_Name: c.First_Name,
+      Last_Name: c.Last_Name,
+      Full_Name: c.Full_Name,
+      Gender: c.Gender,
+      Job_Title: c.Job_Title,
+      Job_Seniority: c.Job_Seniority,
+      Job_Function: c.Job_Function,
+      Contact_Address_1: c.Contact_Address_1,
+      Contact_Address_2: c.Contact_Address_2,
+      Contact_Address_3: c.Contact_Address_3,
+      Contact_City: c.Contact_City,
+      Contact_Pin: c.Contact_Pin,
+      Contact_State: c.Contact_State,
+      Contact_Region: c.Contact_Region,
+      Contact_Country: c.Contact_Country,
+      Contact_STD_ISD_Code: c.Contact_STD_ISD_Code,
+      Contact_Location_Tier: c.Contact_Location_Tier,
+      Contact_Direct_Phone1: c.Contact_Direct_Phone1,
+      Contact_Direct_Phone2: c.Contact_Direct_Phone2,
+      Contact_Extn_No: c.Contact_Extn_No,
+      Mobile_No: c.Mobile_No,
+      Office_Email_1: c.Office_Email_1,
+      Office_Email_2: c.Office_Email_2,
+      Personal_Email1: c.Personal_Email1,
+      Personal_Email2: c.Personal_Email2,
+      Contact_LinkedIn_Profile: c.Contact_LinkedIn_Profile,
+      Unsubscribe_Flag: c.Unsubscribe_Flag,
+      Unsubscribe_Account_Tag: c.Unsubscribe_Account_Tag,
+      DND_Flag: c.DND_Flag,
+      DND_Account_Tag: c.DND_Account_Tag,
+      Last_Engagement: c.Last_Engagement,
+      Last_Engagement_Date: c.Last_Engagement_Date,
+      Last_Engagement_Campaign: c.Last_Engagement_Campaign,
+      Telecalling_Remarks: c.Telecalling_Remarks,
+      EngagementPoints: c.EngagementPoints,
+      Company_ID: c.Company_ID?._id || null,
+      Company_Name: c.Company_ID?.Company_Name || "",
+      Company_ID_Kestone: c.Company_ID?.Company_ID_Kestone || "",
+      Company_Source: c.Company_ID?.Company_Source || "",
+      Year_Founded: c.Company_ID?.Year_Founded || "",
+      Turnover_Range: c.Company_ID?.Turnover_Range || "",
+      Employees_Range: c.Company_ID?.Employees_Range || "",
+      Industry: c.Company_ID?.Industry || "",
+      Sub_Industry: c.Company_ID?.Sub_Industry || "",
+      Company_Segment: c.Company_ID?.Company_Segment || "",
+      Website: c.Company_ID?.Website || "",
+      Company_LinkedIn_Profile: c.Company_ID?.Company_LinkedIn_Profile || "",
+      Company_Phone1: c.Company_ID?.Company_Phone1 || "",
+      Company_Phone2: c.Company_ID?.Company_Phone2 || "",
+    }));
+
+    // 6. Insert in chunks of 500
+    const CHUNK = 500;
+    let inserted = 0;
+    for (let i = 0; i < entries.length; i += CHUNK) {
+      const result = await CallingData.insertMany(entries.slice(i, i + CHUNK), {
+        ordered: false,
+      });
+      inserted += result.length;
+    }
+
+    // 7. Mark campaign as having calling data assigned
+    await Campaign.findByIdAndUpdate(campaignId, {
+      isCallingDataAssigned: true,
+    });
+
+    return sendResponse(
+      res,
+      200,
+      "Contacts assigned to campaign successfully",
+      {
+        inserted,
+        duplicates,
+        batch: batchLabel,
+        campaignName: campaign.name,
+      }
+    );
+  } catch (err) {
+    return sendError(next, err.message || "Assignment failed", 500);
+  }
+}
+
 export {
   batchCreateFromExcel,
   getBatchJobStatus,
@@ -3043,4 +3398,6 @@ export {
   migrateToEngagementHistory,
   getContactsWithEngagements,
   mergeCompanies,
+  individualSearch,
+  assignIndividualSearch,
 };

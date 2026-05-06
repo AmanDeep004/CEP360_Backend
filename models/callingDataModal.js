@@ -100,7 +100,13 @@ const CallingDataSchema = new mongoose.Schema(
     callHistory: { type: mongoose.Schema.Types.ObjectId, ref: "CallHistory" },
     dataSourceType: {
       type: String,
-      enum: ["Kestone", "Client", "Both", "ThirdParty"],
+      enum: [
+        "Kestone",
+        "Client",
+        "Both",
+        "ThirdParty",
+        "IndividualSearchKestone",
+      ],
       required: false,
     },
     isDataSourceApproved: { type: Boolean, default: false },
