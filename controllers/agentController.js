@@ -6,6 +6,7 @@ import { UserRoleEnum } from "../utils/enum.js";
 import campaignModel from "../models/campaignModel.js";
 import callingDataModal from "../models/callingDataModal.js";
 import { maskEmail, maskPhone } from "../utils/mobileEmailMasking.js";
+import EngagementHistory from "../models/MasterDBModel/enagagementHistoryModel.js";
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
@@ -480,7 +481,8 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
   try {
     const { agentId } = req.params;
     const {
-      source,
+      dataSourceType,
+      batch,
       registered,
       callRemarks,
       lastDateOfTelecalling,
@@ -496,7 +498,8 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
     const filter = { agentId };
 
     // Basic filters
-    if (source) filter.source = { $regex: new RegExp(source, "i") };
+    if (dataSourceType) filter.dataSourceType = dataSourceType;
+    if (batch) filter.batch = { $regex: new RegExp(batch.trim(), "i") };
     if (registered !== undefined && registered !== "") filter.isRegistered = registered === "true";
 
     let searchFilter = {};
@@ -557,11 +560,10 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
     // ================================
     if (lastDateOfTelecalling) {
       const trimmedDate = lastDateOfTelecalling.trim();
-      const startOfDay = new Date(trimmedDate);
-      startOfDay.setUTCHours(0, 0, 0, 0);
-
-      const endOfDay = new Date(trimmedDate);
-      endOfDay.setUTCHours(23, 59, 59, 999);
+      // Use IST (UTC+5:30) day boundaries so the filter matches the date
+      // as seen by users in India, regardless of server timezone
+      const startOfDay = new Date(trimmedDate + "T00:00:00+05:30");
+      const endOfDay = new Date(trimmedDate + "T23:59:59.999+05:30");
 
       callingData = callingData.filter((data) => {
         const chatHist = data.callHistory?.chatHistory;
@@ -570,9 +572,9 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
           const lastEntry = chatHist.reduce(
             (latest, item) => {
               const callDate = new Date(item.callingDate || "1970-01-01");
-              return callDate > latest.callingDate ? item : latest;
+              return callDate > new Date(latest.callingDate || "1970-01-01") ? item : latest;
             },
-            { callingDate: new Date("1970-01-01") }
+            { callingDate: "1970-01-01" }
           );
 
           if (!lastEntry.callingDate) return false;
@@ -637,6 +639,21 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
   }
 });
 
+const getEngagementHistoryByContactId = asyncHandler(async (req, res, next) => {
+  try {
+    const { contactId } = req.params;
+    if (!contactId) return sendError(next, "contactId is required", 400);
+
+    const records = await EngagementHistory.find({ contact_id: contactId })
+      .sort({ last_engagement_date: -1, createdAt: -1 })
+      .lean();
+
+    return sendResponse(res, 200, "Engagement history fetched", { records });
+  } catch (err) {
+    return sendError(next, err.message || "Failed to fetch engagement history", 500);
+  }
+});
+
 export {
   assignAgentsToCampaign,
   getAllocAndUnalloclist,
@@ -646,4 +663,5 @@ export {
   getCallingDataByAgentAndCampaign,
   getAllAssignedAgents,
   getCallingDataByAgentData,
+  getEngagementHistoryByContactId,
 };

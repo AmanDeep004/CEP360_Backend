@@ -9,6 +9,7 @@ import XLSX from "xlsx";
 import mongoose from "mongoose";
 import escapeStringRegexp from "escape-string-regexp";
 import { maskPhone, maskEmail } from "../utils/mobileEmailMasking.js";
+import EngagementHistory from "../models/MasterDBModel/enagagementHistoryModel.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 const {
   ADMIN,
@@ -161,6 +162,15 @@ const getCallingDataById = asyncHandler(async (req, res, next) => {
       .sort((a, b) => new Date(b.callingDate) - new Date(a.callingDate));
 
     data.callHistory = { chatHistory: combinedChatHistory };
+
+    // Fetch previous campaign engagements from master DB by Contact_ID
+    if (data.Contact_ID) {
+      data.engagementHistory = await EngagementHistory.find({ contact_id: data.Contact_ID })
+        .sort({ last_engagement_date: -1, createdAt: -1 })
+        .lean();
+    } else {
+      data.engagementHistory = [];
+    }
 
     return sendResponse(res, 200, "Data fetched successfully", data);
   } catch (err) {
