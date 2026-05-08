@@ -54,6 +54,16 @@ const createCampaign = asyncHandler(async (req, res, next) => {
       clientDataType,
     } = req.body;
 
+    // Dates cannot be in the past at creation time
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (startDate && new Date(startDate) < today) {
+      return sendError(next, "Start date cannot be in the past", 400);
+    }
+    if (endDate && new Date(endDate) < today) {
+      return sendError(next, "End date cannot be in the past", 400);
+    }
+
     // Check for duplicate name
     const campaignExists = await Campaign.exists({ name: name.trim() });
 
