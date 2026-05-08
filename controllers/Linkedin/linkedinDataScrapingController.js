@@ -849,58 +849,61 @@ const downloadEnrichedProfiles = asyncHandler(async (req, res, next) => {
     const rows = profiles.map((p) => {
       const e = p.enrichedData || {};
       return {
-        "LinkedIn ID":               p.linkedinId || "",
-        "Batch Name":                p.batchName || "",
-        "Is Enriched":               p.isEnriched ? "Yes" : "No",
-        "Enriched At":               p.misc?.enrichedAt ? new Date(p.misc.enrichedAt).toISOString() : "",
-        "Created At":                p.createdAt ? new Date(p.createdAt).toISOString() : "",
+        "LinkedIn ID": p.linkedinId || "",
+        "Batch Name": p.batchName || "",
+        "Is Enriched": p.isEnriched ? "Yes" : "No",
+        "Enriched At": p.misc?.enrichedAt
+          ? new Date(p.misc.enrichedAt).toISOString()
+          : "",
+        "Created At": p.createdAt ? new Date(p.createdAt).toISOString() : "",
         // ── Personal ──
-        "List Name":                 e.list_name || "",
-        "Full Name":                 e.full_name || "",
-        "First Name":                e.first_name || "",
-        "Last Name":                 e.last_name || "",
-        "Email":                     e.email || "",
-        "Email Type":                e.email_type || "",
-        "Email Status":              e.email_status || "",
-        "Title":                     e.title || "",
-        "Location":                  e.location || "",
-        "Locality":                  e.locality || "",
-        "Region":                    e.region || "",
-        "Country":                   e.country || "",
-        "LinkedIn URL":              e.linkedin || e.linkedin_profile_url || p.linkedinId || "",
-        "Profile URL":               e.profile_url || "",
-        "Domain":                    e.domain || "",
-        "Phone 1":                   e.phone_number1 || "",
-        "Phone 2":                   e.phone_number2 || "",
-        "Phone 3":                   e.phone_number3 || "",
-        "Mobile Phone":              e.mobile_phone1 || "",
-        "Other Phone":               e.other_phone1 || "",
-        "Personal Email":            e.personal_email1 || "",
-        "Other Work Emails":         e.other_work_emails || "",
+        "List Name": e.list_name || "",
+        "Full Name": e.full_name || "",
+        "First Name": e.first_name || "",
+        "Last Name": e.last_name || "",
+        Email: e.email || "",
+        "Email Type": e.email_type || "",
+        "Email Status": e.email_status || "",
+        Title: e.title || "",
+        Location: e.location || "",
+        Locality: e.locality || "",
+        Region: e.region || "",
+        Country: e.country || "",
+        "LinkedIn URL":
+          e.linkedin || e.linkedin_profile_url || p.linkedinId || "",
+        "Profile URL": e.profile_url || "",
+        Domain: e.domain || "",
+        "Phone 1": e.phone_number1 || "",
+        "Phone 2": e.phone_number2 || "",
+        "Phone 3": e.phone_number3 || "",
+        "Mobile Phone": e.mobile_phone1 || "",
+        "Other Phone": e.other_phone1 || "",
+        "Personal Email": e.personal_email1 || "",
+        "Other Work Emails": e.other_work_emails || "",
         // ── Company ──
-        "Company":                   e.company || "",
-        "Company Domain":            e.company_domain || "",
-        "Company Industry":          e.company_industry || "",
-        "Company Sub-Industry":      e.company_subindustry || "",
-        "Company Size":              e.company_size || "",
-        "Company Size Range":        e.company_size_range || "",
-        "Company Founded":           e.company_founded || "",
-        "Company Revenue":           e.company_revenue || "",
-        "Company Funding":           e.company_funding || "",
-        "Company Type":              e.company_type || "",
-        "Company LinkedIn":          e.company_linkedin || "",
-        "Company Twitter":           e.company_twitter || "",
-        "Company Facebook":          e.company_facebook || "",
-        "Company Description":       e.company_description || "",
-        "Last Funding Round":        e.company_last_funding_round || "",
-        "Last Funding Amount":       e.company_last_funding_amount || "",
-        "Last Funding At":           e.company_last_funding_at || "",
-        "Company Location":          e.company_location || "",
-        "Company Street":            e.company_street || "",
-        "Company Locality":          e.company_locality || "",
-        "Company Region":            e.company_region || "",
-        "Company Country":           e.company_country || "",
-        "Company Postal Code":       e.company_postal_code || "",
+        Company: e.company || "",
+        "Company Domain": e.company_domain || "",
+        "Company Industry": e.company_industry || "",
+        "Company Sub-Industry": e.company_subindustry || "",
+        "Company Size": e.company_size || "",
+        "Company Size Range": e.company_size_range || "",
+        "Company Founded": e.company_founded || "",
+        "Company Revenue": e.company_revenue || "",
+        "Company Funding": e.company_funding || "",
+        "Company Type": e.company_type || "",
+        "Company LinkedIn": e.company_linkedin || "",
+        "Company Twitter": e.company_twitter || "",
+        "Company Facebook": e.company_facebook || "",
+        "Company Description": e.company_description || "",
+        "Last Funding Round": e.company_last_funding_round || "",
+        "Last Funding Amount": e.company_last_funding_amount || "",
+        "Last Funding At": e.company_last_funding_at || "",
+        "Company Location": e.company_location || "",
+        "Company Street": e.company_street || "",
+        "Company Locality": e.company_locality || "",
+        "Company Region": e.company_region || "",
+        "Company Country": e.company_country || "",
+        "Company Postal Code": e.company_postal_code || "",
       };
     });
 
@@ -911,12 +914,22 @@ const downloadEnrichedProfiles = asyncHandler(async (req, res, next) => {
     const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
     const date = new Date().toISOString().split("T")[0];
 
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename=LinkedIn_Enriched_Profiles_${date}.xlsx`);
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=LinkedIn_Enriched_Profiles_${date}.xlsx`
+    );
     return res.send(buffer);
   } catch (err) {
     console.error("Error downloading enriched profiles:", err);
-    return sendError(next, err.message || "Failed to download enriched profiles", 500);
+    return sendError(
+      next,
+      err.message || "Failed to download enriched profiles",
+      500
+    );
   }
 });
 

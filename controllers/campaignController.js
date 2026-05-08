@@ -4,6 +4,9 @@ import errorHandler from "../utils/index.js";
 import User from "../models/userModel.js";
 import AgentAssigned from "../models/agentAssigned.js";
 import { UserRoleEnum } from "../utils/enum.js";
+import { sendEmail } from "../services/microsoftGraphMailer.js";
+import { campaignAssignedToPMTemplate } from "../services/notificationEmailTemplates.js";
+import { EmailTrigger } from "../utils/enum.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 const {
   SUPERADMIN,
@@ -86,6 +89,38 @@ const createCampaign = asyncHandler(async (req, res, next) => {
       comments,
       clientDataType,
     });
+
+    // Fire-and-forget: notify all assigned Program Managers
+    if (campaign.programManager?.length) {
+      const createdByName = req.user?.employeeName || "";
+      User.find({ _id: { $in: campaign.programManager } })
+        .select("employeeName email")
+        .lean()
+        .then((pmUsers) => {
+          pmUsers.forEach((pm) => {
+            if (!pm.email) return;
+            sendEmail(
+              pm.email,
+              `You have been assigned to campaign: ${campaign.name}`,
+              campaignAssignedToPMTemplate({
+                pmName: pm.employeeName,
+                campaignName: campaign.name,
+                startDate: campaign.startDate,
+                endDate: campaign.endDate,
+                clientName: campaign.clientName,
+                brandName: campaign.brandName,
+                createdByName,
+              }),
+              {
+                trigger: EmailTrigger.CAMPAIGN_ASSIGNED_TO_PM,
+                campaignId: campaign._id,
+                recipientUserId: pm._id,
+              }
+            );
+          });
+        })
+        .catch((err) => console.error(`[Email] PM campaign notification failed: ${err.message}`));
+    }
 
     return sendResponse(res, 200, "Campaign created successfully", campaign);
   } catch (error) {
@@ -181,6 +216,12 @@ const updateCampaign = asyncHandler(async (req, res, next) => {
     const { _id, ...updateData } = req.body;
     console.log("Update Data:", updateData);
 
+    // Snapshot old PM list before update so we can diff newly added PMs
+    const oldCampaign = await Campaign.findById(_id).select("programManager").lean();
+    const oldPmIds = new Set(
+      (oldCampaign?.programManager || []).map((id) => id.toString())
+    );
+
     const updatedCampaign = await Campaign.findByIdAndUpdate(_id, updateData, {
       new: true,
       runValidators: true,
@@ -188,6 +229,34 @@ const updateCampaign = asyncHandler(async (req, res, next) => {
     console.log("Updated Campaign:", updatedCampaign);
 
     if (!updatedCampaign) return sendError(next, "Campaign not found", 404);
+
+    // Fire-and-forget: notify only newly added PMs
+    const newlyAddedPMs = (updatedCampaign.programManager || []).filter(
+      (pm) => !oldPmIds.has(pm._id.toString())
+    );
+    if (newlyAddedPMs.length > 0) {
+      newlyAddedPMs.forEach((pm) => {
+        if (!pm.email) return;
+        sendEmail(
+          pm.email,
+          `You have been assigned to campaign: ${updatedCampaign.name}`,
+          campaignAssignedToPMTemplate({
+            pmName: pm.employeeName,
+            campaignName: updatedCampaign.name,
+            startDate: updatedCampaign.startDate,
+            endDate: updatedCampaign.endDate,
+            clientName: updatedCampaign.clientName,
+            brandName: updatedCampaign.brandName,
+            createdByName: req.user?.employeeName || "",
+          }),
+          {
+            trigger: EmailTrigger.CAMPAIGN_ASSIGNED_TO_PM,
+            campaignId: updatedCampaign._id,
+            recipientUserId: pm._id,
+          }
+        );
+      });
+    }
 
     return sendResponse(
       res,

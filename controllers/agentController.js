@@ -7,6 +7,9 @@ import campaignModel from "../models/campaignModel.js";
 import callingDataModal from "../models/callingDataModal.js";
 import { maskEmail, maskPhone } from "../utils/mobileEmailMasking.js";
 import EngagementHistory from "../models/MasterDBModel/enagagementHistoryModel.js";
+import { sendEmail } from "../services/microsoftGraphMailer.js";
+import { agentAssignedToCampaignTemplate } from "../services/notificationEmailTemplates.js";
+import { EmailTrigger } from "../utils/enum.js";
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
@@ -21,11 +24,6 @@ const assignAgentsToCampaign = asyncHandler(async (req, res, next) => {
         400
       );
     }
-
-    // const campaignExists = await Campaign.exists({ _id: campaignId });
-    // if (!campaignExists) {
-    //   return sendError(next, "Campaign not found", 404);
-    // }
 
     const existingAssignments = await AgentAssigned.find({
       campaign_id: campaignId,
@@ -66,6 +64,47 @@ const assignAgentsToCampaign = asyncHandler(async (req, res, next) => {
 
     if (newAssignments.length > 0) {
       await AgentAssigned.insertMany(newAssignments);
+    }
+
+    // Fire-and-forget: notify ALL agents being assigned (new + re-activated)
+    if (agentIds.length > 0) {
+      Promise.all([
+        User.find({ _id: { $in: agentIds } })
+          .select("employeeName email")
+          .lean(),
+        campaignModel
+          .findById(campaignId)
+          .select("name clientName brandName startDate endDate")
+          .lean(),
+      ])
+        .then(([agents, campaign]) => {
+          if (!campaign) return;
+          agents.forEach((agent) => {
+            if (!agent.email) return;
+            sendEmail(
+              agent.email,
+              `You have been added to campaign: ${campaign.name}`,
+              agentAssignedToCampaignTemplate({
+                agentName: agent.employeeName,
+                campaignName: campaign.name,
+                clientName: campaign.clientName,
+                brandName: campaign.brandName,
+                startDate: campaign.startDate,
+                endDate: campaign.endDate,
+              }),
+              {
+                trigger: EmailTrigger.AGENT_ASSIGNED_TO_CAMPAIGN,
+                campaignId: campaign._id,
+                recipientUserId: agent._id,
+              }
+            );
+          });
+        })
+        .catch((err) =>
+          console.error(
+            `[Email] Agent campaign assignment notification failed: ${err.message}`
+          )
+        );
     }
 
     return sendResponse(res, 200, "Agents assigned successfully", {
@@ -500,7 +539,8 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
     // Basic filters
     if (dataSourceType) filter.dataSourceType = dataSourceType;
     if (batch) filter.batch = { $regex: new RegExp(batch.trim(), "i") };
-    if (registered !== undefined && registered !== "") filter.isRegistered = registered === "true";
+    if (registered !== undefined && registered !== "")
+      filter.isRegistered = registered === "true";
 
     let searchFilter = {};
 
@@ -572,7 +612,9 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
           const lastEntry = chatHist.reduce(
             (latest, item) => {
               const callDate = new Date(item.callingDate || "1970-01-01");
-              return callDate > new Date(latest.callingDate || "1970-01-01") ? item : latest;
+              return callDate > new Date(latest.callingDate || "1970-01-01")
+                ? item
+                : latest;
             },
             { callingDate: "1970-01-01" }
           );
@@ -650,7 +692,11 @@ const getEngagementHistoryByContactId = asyncHandler(async (req, res, next) => {
 
     return sendResponse(res, 200, "Engagement history fetched", { records });
   } catch (err) {
-    return sendError(next, err.message || "Failed to fetch engagement history", 500);
+    return sendError(
+      next,
+      err.message || "Failed to fetch engagement history",
+      500
+    );
   }
 });
 

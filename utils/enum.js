@@ -54,5 +54,13 @@ const ProgramStatus = Object.freeze({
 
 const HTTPLOG = false; //true, false
 
+const EmailTrigger = Object.freeze({
+  CAMPAIGN_ASSIGNED_TO_PM:         "CAMPAIGN_ASSIGNED_TO_PM",
+  AGENT_ASSIGNED_TO_CAMPAIGN:      "AGENT_ASSIGNED_TO_CAMPAIGN",
+  CALLING_DATA_UPLOADED:           "CALLING_DATA_UPLOADED",
+  CALLING_DATA_ASSIGNED_TO_AGENT:  "CALLING_DATA_ASSIGNED_TO_AGENT",
+  CALLING_DATA_REASSIGNED_TO_AGENT:"CALLING_DATA_REASSIGNED_TO_AGENT",
+});
+
 // Export the enums
-export { UserRoleEnum, HTTPLOG, Constants, ProgramType, ProgramStatus };
+export { UserRoleEnum, HTTPLOG, Constants, ProgramType, ProgramStatus, EmailTrigger };

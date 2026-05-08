@@ -10,6 +10,13 @@ import mongoose from "mongoose";
 import escapeStringRegexp from "escape-string-regexp";
 import { maskPhone, maskEmail } from "../utils/mobileEmailMasking.js";
 import EngagementHistory from "../models/MasterDBModel/enagagementHistoryModel.js";
+import { sendEmail } from "../services/microsoftGraphMailer.js";
+import {
+  callingDataUploadedToPMTemplate,
+  callingDataAssignedToAgentTemplate,
+  callingDataReassignedToAgentTemplate,
+} from "../services/notificationEmailTemplates.js";
+import { EmailTrigger } from "../utils/enum.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 const {
   ADMIN,
@@ -134,6 +141,34 @@ const uploadcallingData = asyncHandler(async (req, res, next) => {
     }
 
     await CallingData.insertMany(dbEntries);
+
+    // Fire-and-forget: notify campaign PM(s) about new data upload
+    Campaign.findById(CampaignId)
+      .populate({ path: "programManager", select: "employeeName email" })
+      .lean()
+      .then((campaign) => {
+        if (!campaign?.programManager?.length) return;
+        const uploadedByName = req.user?.employeeName || "";
+        campaign.programManager.forEach((pm) => {
+          if (!pm.email) return;
+          sendEmail(
+            pm.email,
+            `New calling data added to campaign: ${campaign.name}`,
+            callingDataUploadedToPMTemplate({
+              pmName: pm.employeeName,
+              campaignName: campaign.name,
+              count: dbEntries.length,
+              uploadedByName,
+            }),
+            {
+              trigger: EmailTrigger.CALLING_DATA_UPLOADED,
+              campaignId: campaign._id,
+              recipientUserId: pm._id,
+            }
+          );
+        });
+      })
+      .catch((err) => console.error(`[Email] Calling data upload notification failed: ${err.message}`));
 
     return sendResponse(res, 200, "Database uploaded successfully", {
       count: dbEntries.length,
@@ -728,6 +763,36 @@ const assignCallingDataToAgents = asyncHandler(async (req, res, next) => {
       { $set: { agentId, pmId, pmName } }
     );
 
+    // Fire-and-forget: notify the assigned agent
+    if (result.modifiedCount > 0) {
+      Promise.all([
+        User.findById(agentId).select("employeeName email").lean(),
+        // Get campaign name from one of the assigned records
+        CallingData.findOne({ _id: { $in: finalCallingDataIds } })
+          .populate({ path: "CampaignId", select: "name" })
+          .lean(),
+      ])
+        .then(([agent, sampleRecord]) => {
+          if (!agent?.email) return;
+          sendEmail(
+            agent.email,
+            `Calling data assigned to you`,
+            callingDataAssignedToAgentTemplate({
+              agentName: agent.employeeName,
+              campaignName: sampleRecord?.CampaignId?.name || "—",
+              count: result.modifiedCount,
+              pmName,
+            }),
+            {
+              trigger: EmailTrigger.CALLING_DATA_ASSIGNED_TO_AGENT,
+              campaignId: sampleRecord?.CampaignId?._id || null,
+              recipientUserId: agent._id,
+            }
+          );
+        })
+        .catch((err) => console.error(`[Email] Calling data assignment notification failed: ${err.message}`));
+    }
+
     return sendResponse(
       res,
       200,
@@ -817,6 +882,34 @@ const reassignCallingDatatoAgents = asyncHandler(async (req, res, next) => {
     }));
 
     const result = await CallingData.bulkWrite(bulkOps);
+
+    // Fire-and-forget: notify the newly assigned agent
+    if (result.modifiedCount > 0) {
+      Promise.all([
+        User.findById(newAgentId).select("employeeName email").lean(),
+        CallingData.findOne({ _id: { $in: callingDataIds } })
+          .populate({ path: "CampaignId", select: "name" })
+          .lean(),
+      ])
+        .then(([agent, sampleRecord]) => {
+          if (!agent?.email) return;
+          sendEmail(
+            agent.email,
+            `Calling data reassigned to you`,
+            callingDataReassignedToAgentTemplate({
+              agentName: agent.employeeName,
+              campaignName: sampleRecord?.CampaignId?.name || "—",
+              count: result.modifiedCount,
+            }),
+            {
+              trigger: EmailTrigger.CALLING_DATA_REASSIGNED_TO_AGENT,
+              campaignId: sampleRecord?.CampaignId?._id || null,
+              recipientUserId: agent._id,
+            }
+          );
+        })
+        .catch((err) => console.error(`[Email] Calling data reassignment notification failed: ${err.message}`));
+    }
 
     return sendResponse(
       res,
