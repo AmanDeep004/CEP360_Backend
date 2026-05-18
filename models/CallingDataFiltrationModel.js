@@ -59,12 +59,12 @@ const CampaignFilterSchema = new Schema(
   }
 );
 
+// Compound index for campaign + dataType + revision sort — must be before model()
+CampaignFilterSchema.index({ campaignId: 1, dataType: 1, revisionNo: -1 });
+
 const CampaignFilter = getPrimaryConnection().model(
   "CampaignFilter",
   CampaignFilterSchema
 );
-
-// Compound index for campaign + dataType + revision sort
-CampaignFilterSchema.index({ campaignId: 1, dataType: 1, revisionNo: -1 });
 
 export default CampaignFilter;

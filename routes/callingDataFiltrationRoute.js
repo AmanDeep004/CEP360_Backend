@@ -15,6 +15,7 @@ import {
   deactivateSharedLink,
   extendLinkExpiry,
   getClientMatchData,
+  getClientMatchSessionData,
   updateClientMatchAction,
 } from "../controllers/callingDataFiltrationController.js";
 import multer from "multer";
@@ -87,6 +88,7 @@ router.patch("/:filterId/deactivate", protect, deactivateSharedLink);
 router.patch("/:filterId/extend", protect, extendLinkExpiry);
 
 router.get("/clientMatchData/:campaignId", protect, getClientMatchData);
+router.get("/clientMatchData/:campaignId/history/:uploadSession", protect, getClientMatchSessionData);
 router.patch("/clientMatchData/:campaignId/action", protect, updateClientMatchAction);
 
 export default router;

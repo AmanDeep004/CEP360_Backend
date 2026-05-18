@@ -19,6 +19,7 @@ import {
   subscribeMatchJob,
   unsubscribeMatchJob,
 } from "../utils/matchJobStore.js";
+import { buildDbIndex, matchBatch } from "../services/companyMatcher.js";
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
@@ -1110,10 +1111,7 @@ const getPrevCampFiltersByCampaignId = asyncHandler(async (req, res, next) => {
       campaignId,
       dataType: dataSourceType,
     })
-      .sort({
-        revisionNo: 1,
-        createdAt: 1,
-      })
+      .sort({ revisionNo: 1, createdAt: 1 })
       .lean();
     return sendResponse(res, 200, "Campaign filters fetched successfully", {
       count: filters.length,
@@ -1149,33 +1147,9 @@ const getOrBuildDbIndex = async () => {
   if (_dbIndexCache && now - _dbIndexCacheTime < DB_INDEX_TTL_MS) {
     return _dbIndexCache;
   }
-  const allDbCompanies = await Company.find(
-    {},
-    { _id: 1, Company_Name: 1 }
-  ).lean();
-  const dbExactMap = new Map(); // raw lowercase name → company (for complete match)
-  const dbNormMap  = new Map(); // normalized name → company (for partial match)
-  const invertedIndex = new Map();
-  for (const c of allDbCompanies) {
-    const raw = (c.Company_Name || "").trim().toLowerCase();
-    if (raw && !dbExactMap.has(raw)) {
-      dbExactMap.set(raw, { _id: c._id, Company_Name: c.Company_Name });
-    }
-    const norm = normalizeCompanyName(c.Company_Name || "");
-    if (!norm) continue;
-    if (!dbNormMap.has(norm)) {
-      dbNormMap.set(norm, {
-        _id: c._id,
-        Company_Name: c.Company_Name,
-        simpleName: simplifyName(c.Company_Name),
-      });
-    }
-    for (const word of norm.split(/\s+/).filter((w) => w.length > 2)) {
-      if (!invertedIndex.has(word)) invertedIndex.set(word, new Set());
-      invertedIndex.get(word).add(norm);
-    }
-  }
-  _dbIndexCache = { dbExactMap, dbNormMap, invertedIndex };
+  const allDbCompanies = await Company.find({}, { _id: 1, Company_Name: 1 }).lean();
+  // buildDbIndex constructs all 6 lookup maps + TF-IDF vectors in one pass
+  _dbIndexCache = buildDbIndex(allDbCompanies);
   _dbIndexCacheTime = now;
   return _dbIndexCache;
 };
@@ -1207,11 +1181,9 @@ const setCachedMatchResult = (campaignId, result) => {
 };
 
 const invalidateMatchResultCache = (campaignId) => {
+  // Only clear the in-memory cache. Never delete DB records here — that would
+  // wipe all history before the new session is even persisted.
   _matchResultCache.delete(String(campaignId));
-  // Also wipe the DB so stale persisted results don't outlive a new upload
-  ClientMatchResult.deleteMany({ campaignId, dataType: "Client" }).catch((e) =>
-    console.warn("[MatchResult] Failed to invalidate DB cache:", e.message)
-  );
 };
 
 // ── Persistent DB helpers (survive server restarts) ───────────────────────────
@@ -1225,59 +1197,171 @@ const NOT_MATCHED_CHUNK = 5000; // plain strings → ~150 KB per chunk
  * Persist match results to MongoDB in chunks.
  * Runs fire-and-forget so it never delays the HTTP response.
  */
-const persistMatchResultToDb = async (campaignId, { completelyMatched, partiallyMatched, notMatched, duplicates = [] }) => {
+const persistMatchResultToDb = async (campaignId, { completelyMatched, partiallyMatched, notMatched, duplicates = [], uploadSession }) => {
   try {
-    // Wipe stale results for this campaign first
-    await ClientMatchResult.deleteMany({ campaignId, dataType: "Client" });
-
-    const chunks = [];
+    const base = { campaignId, dataType: "Client", uploadSession };
+    const chunks = [
+      // Meta chunk — stores counts so we can list history without loading all data
+      { ...base, chunkType: "meta", chunkIndex: 0, data: {
+        completeCount:   completelyMatched.length,
+        partialCount:    partiallyMatched.length,
+        notMatchedCount: notMatched.length,
+        duplicatesCount: duplicates.length,
+        uploadedAt:      uploadSession,
+      }},
+    ];
 
     for (let i = 0; i < completelyMatched.length; i += COMPLETE_CHUNK) {
-      chunks.push({ campaignId, dataType: "Client", chunkType: "complete", chunkIndex: Math.floor(i / COMPLETE_CHUNK), data: completelyMatched.slice(i, i + COMPLETE_CHUNK) });
+      chunks.push({ ...base, chunkType: "complete", chunkIndex: Math.floor(i / COMPLETE_CHUNK), data: completelyMatched.slice(i, i + COMPLETE_CHUNK) });
     }
     for (let i = 0; i < partiallyMatched.length; i += PARTIAL_CHUNK) {
-      chunks.push({ campaignId, dataType: "Client", chunkType: "partial", chunkIndex: Math.floor(i / PARTIAL_CHUNK), data: partiallyMatched.slice(i, i + PARTIAL_CHUNK) });
+      chunks.push({ ...base, chunkType: "partial", chunkIndex: Math.floor(i / PARTIAL_CHUNK), data: partiallyMatched.slice(i, i + PARTIAL_CHUNK) });
     }
     for (let i = 0; i < notMatched.length; i += NOT_MATCHED_CHUNK) {
-      chunks.push({ campaignId, dataType: "Client", chunkType: "notMatched", chunkIndex: Math.floor(i / NOT_MATCHED_CHUNK), data: notMatched.slice(i, i + NOT_MATCHED_CHUNK) });
+      chunks.push({ ...base, chunkType: "notMatched", chunkIndex: Math.floor(i / NOT_MATCHED_CHUNK), data: notMatched.slice(i, i + NOT_MATCHED_CHUNK) });
     }
     if (duplicates.length > 0) {
-      chunks.push({ campaignId, dataType: "Client", chunkType: "duplicates", chunkIndex: 0, data: duplicates });
+      chunks.push({ ...base, chunkType: "duplicates", chunkIndex: 0, data: duplicates });
     }
 
-    if (chunks.length > 0) {
-      await ClientMatchResult.insertMany(chunks, { ordered: false });
+    // Use upsert so re-uploading the same session (e.g. after server restart) never
+    // throws E11000. The filter includes uploadSession so different sessions don't conflict.
+    const ops = chunks.map((chunk) => ({
+      updateOne: {
+        filter: {
+          campaignId: chunk.campaignId,
+          dataType:   chunk.dataType,
+          uploadSession: chunk.uploadSession,
+          chunkType:  chunk.chunkType,
+          chunkIndex: chunk.chunkIndex,
+        },
+        update: { $set: chunk },
+        upsert: true,
+      },
+    }));
+    await ClientMatchResult.bulkWrite(ops, { ordered: false });
+    console.log(`[MatchResult] Persisted ${chunks.length} chunks for session ${uploadSession}`);
+
+    // Backfill uploadHistory into the in-memory cache so future fast-path requests
+    // return history metadata from memory — no extra DB query needed.
+    const history = await loadUploadHistory(campaignId, uploadSession);
+    const existing = _matchResultCache.get(String(campaignId));
+    if (existing) {
+      _matchResultCache.set(String(campaignId), { ...existing, uploadHistory: history });
     }
-    console.log(`[MatchResult] Persisted ${chunks.length} chunks for campaign ${campaignId}`);
   } catch (err) {
     console.error("[MatchResult] Failed to persist to DB:", err.message);
+    throw err; // re-throw so callers can handle (non-fatal in job context, logged in slow path)
   }
 };
 
 /**
- * Load match results from MongoDB (used when in-memory cache is cold).
+ * Load the latest upload session's match results from MongoDB.
  * Returns null if nothing is persisted yet.
  */
 const loadMatchResultFromDb = async (campaignId) => {
-  const [completeDocs, partialDocs, notMatchedDocs, duplicateDocs] = await Promise.all([
-    ClientMatchResult.find({ campaignId, dataType: "Client", chunkType: "complete" })
-      .sort({ chunkIndex: 1 }).select("data").lean(),
-    ClientMatchResult.find({ campaignId, dataType: "Client", chunkType: "partial" })
-      .sort({ chunkIndex: 1 }).select("data").lean(),
-    ClientMatchResult.find({ campaignId, dataType: "Client", chunkType: "notMatched" })
-      .sort({ chunkIndex: 1 }).select("data").lean(),
-    ClientMatchResult.find({ campaignId, dataType: "Client", chunkType: "duplicates" })
-      .sort({ chunkIndex: 1 }).select("data").lean(),
-  ]);
+  // Find the most recent session (uses chunkType index — fast)
+  const latest = await ClientMatchResult.findOne({ campaignId, dataType: "Client", chunkType: "meta" })
+    .sort({ uploadSession: -1 }).select("uploadSession").lean();
+  if (!latest) return null;
+
+  const session = latest.uploadSession;
+
+  // Fetch data chunks + history in one parallel round-trip.
+  // historySessionsDistinct: sessions OTHER than current that have real data chunks.
+  // historyMetaDocs: meta counts for those sessions — both fetched in parallel.
+  const [completeDocs, partialDocs, notMatchedDocs, duplicateDocs, historySessionsDistinct] =
+    await Promise.all([
+      ClientMatchResult.find({ campaignId, dataType: "Client", uploadSession: session, chunkType: "complete" })
+        .sort({ chunkIndex: 1 }).select("data").lean(),
+      ClientMatchResult.find({ campaignId, dataType: "Client", uploadSession: session, chunkType: "partial" })
+        .sort({ chunkIndex: 1 }).select("data").lean(),
+      ClientMatchResult.find({ campaignId, dataType: "Client", uploadSession: session, chunkType: "notMatched" })
+        .sort({ chunkIndex: 1 }).select("data").lean(),
+      ClientMatchResult.find({ campaignId, dataType: "Client", uploadSession: session, chunkType: "duplicates" })
+        .sort({ chunkIndex: 1 }).select("data").lean(),
+      ClientMatchResult.distinct("uploadSession", {
+        campaignId, dataType: "Client",
+        chunkType: { $in: ["complete", "partial", "notMatched"] },
+        uploadSession: { $ne: session },
+      }),
+    ]);
 
   if (!completeDocs.length && !partialDocs.length && !notMatchedDocs.length) return null;
 
+  // Fetch meta counts for history sessions — parallel with nothing else to wait on
+  let uploadHistory = [];
+  if (historySessionsDistinct.length) {
+    const metaDocs = await ClientMatchResult.find({
+      campaignId, dataType: "Client",
+      chunkType: "meta",
+      uploadSession: { $in: historySessionsDistinct },
+    }).sort({ uploadSession: -1 }).select("uploadSession data").lean();
+
+    const metaBySession = Object.fromEntries(metaDocs.map((d) => [d.uploadSession, d]));
+    uploadHistory = historySessionsDistinct
+      .sort((a, b) => (b > a ? 1 : -1))
+      .map((s) => {
+        const d = metaBySession[s];
+        return {
+          uploadSession:   s,
+          uploadedAt:      s,
+          completeCount:   d?.data?.completeCount   ?? 0,
+          partialCount:    d?.data?.partialCount    ?? 0,
+          notMatchedCount: d?.data?.notMatchedCount ?? 0,
+          duplicatesCount: d?.data?.duplicatesCount ?? 0,
+        };
+      });
+  }
+
   return {
+    uploadSession: session,
+    uploadHistory,
     completelyMatched: completeDocs.flatMap((d) => d.data),
     partiallyMatched:  partialDocs.flatMap((d) => d.data),
     notMatched:        notMatchedDocs.flatMap((d) => d.data),
     duplicates:        duplicateDocs.flatMap((d) => d.data),
   };
+};
+
+/**
+ * Load all upload sessions' metadata (counts + uploadSession key) for a campaign.
+ * Returns array sorted newest-first, excluding the current session.
+ */
+const loadUploadHistory = async (campaignId, currentSession) => {
+  // Only list sessions that have actual data chunks — meta-only sessions
+  // (e.g. orphaned from a crash or old deleteMany) would 404 when clicked.
+  const dataSessions = await ClientMatchResult.distinct("uploadSession", {
+    campaignId,
+    dataType: "Client",
+    chunkType: { $in: ["complete", "partial", "notMatched"] },
+    ...(currentSession ? { uploadSession: { $ne: currentSession } } : {}),
+  });
+
+  if (!dataSessions.length) return [];
+
+  const metaDocs = await ClientMatchResult.find({
+    campaignId,
+    dataType: "Client",
+    chunkType: "meta",
+    uploadSession: { $in: dataSessions },
+  }).sort({ uploadSession: -1 }).select("uploadSession data").lean();
+
+  // For sessions where meta chunk is missing, fall back to a minimal entry
+  const metaBySession = Object.fromEntries(metaDocs.map((d) => [d.uploadSession, d]));
+  return dataSessions
+    .sort((a, b) => (b > a ? 1 : -1)) // newest first
+    .map((session) => {
+      const d = metaBySession[session];
+      return {
+        uploadSession:   session,
+        uploadedAt:      session,
+        completeCount:   d?.data?.completeCount   ?? 0,
+        partialCount:    d?.data?.partialCount    ?? 0,
+        notMatchedCount: d?.data?.notMatchedCount ?? 0,
+        duplicatesCount: d?.data?.duplicatesCount ?? 0,
+      };
+    });
 };
 
 /**
@@ -1408,142 +1492,54 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
   await yieldControl();
 
   // Stage 2 — load DB index (shared cache, rebuilt every 30 min)
-  const { dbExactMap, dbNormMap, invertedIndex } = await getOrBuildDbIndex();
+  const dbIndex = await getOrBuildDbIndex();
 
   updateMatchJob(
     jobId,
-    `Index ready. Matching ${companyNames.length.toLocaleString()} companies...`,
+    `Index ready. Matching ${matchRows.length.toLocaleString()} unique companies...`,
     20
   );
   await yieldControl();
 
-  // Stage 3 — batch match with inverted index + bidirectional containment
-  const BATCH_SIZE = 500;
+  // Stage 3 — 6-step pipeline in batches (yield every 500 rows for SSE flush)
+  const BATCH_SIZE   = 500;
   const totalBatches = Math.ceil(matchRows.length / BATCH_SIZE);
-  const completelyMatched = [];
-  const partiallyMatched = [];
-  const matchedInputSet = new Set();    // tracks matched input names (lowercase)
+  // Use a Map across all batches so cross-batch duplicate DB companies are caught too.
+  const completeMap   = new Map(); // _id string → entry
+  const partiallyMatched  = [];
+  const notMatchedRows    = [];
+  const sameCompanyDups   = []; // names whose DB company was already matched by another name
 
   for (let b = 0; b < totalBatches; b++) {
     const batch = matchRows.slice(b * BATCH_SIZE, (b + 1) * BATCH_SIZE);
-    const done = Math.min((b + 1) * BATCH_SIZE, matchRows.length);
-    const percent = 20 + Math.round((b / totalBatches) * 70);
+    const done  = Math.min((b + 1) * BATCH_SIZE, matchRows.length);
     updateMatchJob(
       jobId,
-      `Matching companies... ${done.toLocaleString()} / ${companyRows.length.toLocaleString()}`,
-      percent
+      `Matching companies... ${done.toLocaleString()} / ${matchRows.length.toLocaleString()}`,
+      20 + Math.round((b / totalBatches) * 73)
     );
     await yieldControl();
 
-    for (const { name: inputName, companySpecificId, segment } of batch) {
-      const inputKey = inputName.toLowerCase();
+    const { completelyMatched: bc, partiallyMatched: bp, notMatched: bn, sameCompanyDuplicates: bsd } =
+      matchBatch(batch, dbIndex, getSuggestionsLimit, MAX_CANDIDATES);
 
-      // 1. Exact match — raw case-insensitive, no normalization (checked first,
-      //    before normInput so names like "Ltd & Co" still get an exact match)
-      if (dbExactMap.has(inputKey)) {
-        const c = dbExactMap.get(inputKey);
-        completelyMatched.push({
-          _id: c._id,
-          Company_Name: c.Company_Name,
-          matchedWith: inputName,
-          ...(companySpecificId ? { companySpecificId } : {}),
-          ...(segment          ? { segment }          : {}),
-        });
-        matchedInputSet.add(inputKey);
-        continue;
-      }
-
-      // Partial match needs a normalized form — skip if normalization yields nothing
-      const normInput = normalizeCompanyName(inputName);
-      if (!normInput) continue;
-
-      // 2. Get candidate DB companies sharing at least one word with the input
-      //    Sort by ascending index frequency so rare/specific words (e.g. "assam")
-      //    are processed before common words (e.g. "the", "bank") — ensures the
-      //    MAX_CANDIDATES cap doesn't cut off the correct DB entry prematurely.
-      const inputWords = normInput.split(/\s+/).filter((w) => w.length > 2);
-      inputWords.sort(
-        (a, b) =>
-          (invertedIndex.get(a)?.size || 0) - (invertedIndex.get(b)?.size || 0)
-      );
-      const candidateNorms = new Set();
-      outer: for (const w of inputWords) {
-        for (const cn of invertedIndex.get(w) || []) {
-          candidateNorms.add(cn);
-          if (candidateNorms.size >= MAX_CANDIDATES) break outer;
-        }
-      }
-
-      // 3. Score all candidates — containment and Jaccard both go to partiallyMatched
-      const simpleInput = simplifyName(inputName);
-      const scored = [];
-
-      for (const cNorm of candidateNorms) {
-        const c = dbNormMap.get(cNorm);
-        if (!c) continue;
-
-        let score = 0;
-
-        // Check A: normalized containment (stopwords stripped from both sides)
-        if (normInput.includes(cNorm) || cNorm.includes(normInput)) {
-          const aLen = inputWords.length;
-          const bLen =
-            cNorm.split(/\s+/).filter((w) => w.length > 2).length || 1;
-          score = Math.min(aLen, bLen) / Math.max(aLen, bLen, 1);
-        } else {
-          // Check B: Jaccard word-overlap on normalized tokens
-          const aWords = new Set(inputWords);
-          const bWords = new Set(
-            cNorm.split(/\s+/).filter((w) => w.length > 2)
-          );
-          const inter = [...aWords].filter((w) => bWords.has(w)).length;
-          const unionSize = new Set([...aWords, ...bWords]).size;
-          score = unionSize > 0 ? inter / unionSize : 0;
-        }
-
-        // Check C: simple toLower containment (no stopword stripping).
-        // Catches cases where stopword removal hides meaningful words
-        // e.g. "co" stripped from "co-operative" breaks normalized containment.
-        if (score < 0.3) {
-          const simpleDb = c.simpleName;
-          if (
-            simpleDb.includes(simpleInput) ||
-            simpleInput.includes(simpleDb)
-          ) {
-            const aLen = simpleInput.split(/\s+/).length;
-            const bLen = simpleDb.split(/\s+/).length || 1;
-            score = Math.max(
-              score,
-              Math.min(aLen, bLen) / Math.max(aLen, bLen, 1)
-            );
-          }
-        }
-
-        if (score >= 0.3) {
-          scored.push({
-            _id: c._id,
-            Company_Name: c.Company_Name,
-            matchPercent: Math.round(score * 100),
-          });
-        }
-      }
-
-      if (scored.length > 0) {
-        scored.sort((a, b) => b.matchPercent - a.matchPercent);
-        partiallyMatched.push({
-          input: inputName,
-          suggestions: scored.slice(0, getSuggestionsLimit(matchRows.length)),
-          ...(companySpecificId ? { companySpecificId } : {}),
-          ...(segment          ? { segment }          : {}),
-        });
-        matchedInputSet.add(inputKey);
+    // Merge bc into completeMap — batch-level dedup already done; cross-batch dedup here
+    for (const entry of bc) {
+      const id = String(entry._id);
+      if (completeMap.has(id)) {
+        sameCompanyDups.push(entry.matchedWith); // second cross-batch match → duplicate
+      } else {
+        completeMap.set(id, entry);
       }
     }
+    partiallyMatched.push(...bp);
+    notMatchedRows.push(...bn);
+    if (bsd?.length) sameCompanyDups.push(...bsd);
   }
 
+  const completelyMatched = [...completeMap.values()];
   const notMatched = [
-    ...matchNames.filter((name) => !matchedInputSet.has(name.toLowerCase())),
-    // Rows that had no company name in the uploaded file — can't be matched
+    ...notMatchedRows,
     ...Array.from({ length: invalidRowCount }, () => "(No Company Name)"),
   ];
 
@@ -1564,12 +1560,28 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
   await ClientCompanyList.deleteMany({ campaignId, dataType });
   await ClientCompanyList.insertMany(chunks, { ordered: false });
 
-  // Cache results in memory so getClientMatchData returns instantly on next call
-  setCachedMatchResult(campaignId, { completelyMatched, partiallyMatched, notMatched, duplicates });
+  // ISO timestamp used as the unique session ID for this upload
+  const uploadSession = new Date().toISOString();
 
-  // Persist to DB in the background — survives server restarts so cache misses
-  // load from DB instead of re-running the full algorithm (which can take minutes).
-  persistMatchResultToDb(campaignId, { completelyMatched, partiallyMatched, notMatched, duplicates });
+  // Merge same-DB-company duplicates into the main duplicates list so the total
+  // row count matches the original upload (complete + partial + notMatched + duplicates = uploaded)
+  const allDuplicates = [...duplicates, ...sameCompanyDups];
+
+  // Cache results in memory so getClientMatchData returns instantly on next call
+  setCachedMatchResult(campaignId, { completelyMatched, partiallyMatched, notMatched, duplicates: allDuplicates, uploadSession });
+
+  // Persist to DB synchronously (awaited) BEFORE signalling SSE complete.
+  // This guarantees that when the frontend calls getClientMatchData after receiving
+  // the SSE "complete" signal, the data is already in DB — even if the server
+  // restarts immediately afterward.
+  updateMatchJob(jobId, "Saving to database...", 97);
+  try {
+    await persistMatchResultToDb(campaignId, { completelyMatched, partiallyMatched, notMatched, duplicates: allDuplicates, uploadSession });
+  } catch (persistErr) {
+    // Non-fatal: data is already in the memory cache, job can still complete.
+    // The slow path in getClientMatchData will re-persist on the next cache miss.
+    console.warn("[runCompanyMatchJob] DB persist failed (data still in memory cache):", persistErr.message);
+  }
 
   // Send only a signal — NOT the full result data.
   // Large arrays (3 lakh notMatched entries) would exceed SSE buffer limits.
@@ -1671,9 +1683,10 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
       campaignId,
       filters = [],
       exclusions = [],
-      datatype = datatype || "Client",
+      datatype = "Client",
       companyIds = [],
       companyMetaMap = {},
+      filterId,          // optional — if provided, update existing record instead of creating a new one
     } = req.body;
 
     if (!campaignId) {
@@ -1836,43 +1849,61 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
       contacts: [],
     };
 
-    const lastFilter = await CampaignFilter.findOne({ campaignId }).sort({
-      revisionNo: -1,
-    });
-
-    let revisionNo = 1;
-    let listName = "List1";
-    if (lastFilter) {
-      revisionNo = lastFilter.revisionNo + 1;
-      listName = `List${revisionNo}`;
-    }
-
     // Resolve company names for the IDs used in this filter
     let companyNamesUsed = [];
     if (companyIds.length > 0) {
       const companiesUsed = await Company.find(
-        {
-          _id: { $in: companyIds.map((id) => new mongoose.Types.ObjectId(id)) },
-        },
+        { _id: { $in: companyIds.map((id) => new mongoose.Types.ObjectId(id)) } },
         { Company_Name: 1 }
       ).lean();
-      companyNamesUsed = companiesUsed
-        .map((c) => c.Company_Name)
-        .filter(Boolean);
+      companyNamesUsed = companiesUsed.map((c) => c.Company_Name).filter(Boolean);
     }
 
-    const campaignFilter = await CampaignFilter.create({
-      campaignId,
-      filters,
-      exclusions,
-      revisionNo,
-      listName,
-      filteredData,
-      dataType: datatype,
-      contactCount: stats.totalContacts,
-      status: "Pending",
-      misc: { companyIdsUsed: companyIds, companyNamesUsed, companyMetaMap },
-    });
+    let campaignFilter;
+    let revisionNo;
+    let listName;
+
+    // If filterId is supplied, UPDATE the existing record so we never accumulate
+    // stale filter revisions and the assignment always uses exactly this filter.
+    if (filterId) {
+      campaignFilter = await CampaignFilter.findByIdAndUpdate(
+        filterId,
+        {
+          filters,
+          exclusions,
+          filteredData,
+          contactCount: stats.totalContacts,
+          status: "Pending",
+          "misc.companyIdsUsed": companyIds,
+          "misc.companyNamesUsed": companyNamesUsed,
+          "misc.companyMetaMap": companyMetaMap,
+        },
+        { new: true }
+      );
+      // Fallback: filterId was invalid/deleted — create a fresh one
+      if (!campaignFilter) filterId = null;
+    }
+
+    if (!filterId) {
+      const lastFilter = await CampaignFilter.findOne({ campaignId }).sort({ revisionNo: -1 });
+      revisionNo = lastFilter ? lastFilter.revisionNo + 1 : 1;
+      listName = `List${revisionNo}`;
+      campaignFilter = await CampaignFilter.create({
+        campaignId,
+        filters,
+        exclusions,
+        revisionNo,
+        listName,
+        filteredData,
+        dataType: datatype,
+        contactCount: stats.totalContacts,
+        status: "Pending",
+        misc: { companyIdsUsed: companyIds, companyNamesUsed, companyMetaMap },
+      });
+    }
+
+    revisionNo = campaignFilter.revisionNo;
+    listName   = campaignFilter.listName;
 
     return sendResponse(
       res,
@@ -1996,17 +2027,18 @@ const assignCallingDataToCampaign = asyncHandler(async (req, res, next) => {
 const assignCallingDataToCampaignClientSuggested = asyncHandler(
   async (req, res, next) => {
     try {
-      const { campaignId, uploadedBy, dataSourceType = "Client" } = req.body;
+      const { campaignId, uploadedBy, dataSourceType = "Client", filterId } = req.body;
       if (!campaignId || !uploadedBy) {
         return sendError(next, "Required fields missing", 400);
       }
 
-      const lastFilter = await CampaignFilter.findOne({
-        campaignId,
-        dataType: "Client",
-      })
-        .sort({ revisionNo: -1, createdAt: -1 })
-        .lean();
+      // Use the exact filter that was shown to the user (filterId) when available.
+      // Fallback to latest by revisionNo for backward compatibility.
+      const lastFilter = filterId
+        ? await CampaignFilter.findById(filterId).lean()
+        : await CampaignFilter.findOne({ campaignId, dataType: "Client" })
+            .sort({ revisionNo: -1, createdAt: -1 })
+            .lean();
       if (!lastFilter) {
         return sendError(next, "No client filter found for this campaign", 404);
       }
@@ -2447,49 +2479,63 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
     const { campaignId } = req.params;
     if (!campaignId) return sendError(next, "Campaign ID is required", 400);
 
-    // Always fetch the latest doc for approvedIds/rejectedIds (updated independently)
-    const latestDoc = await ClientCompanyList.findOne({
-      campaignId,
-      dataType: "Client",
-    })
+    // Fire the approvedIds DB query and check memory cache simultaneously.
+    // If cache hits, latestDocPromise resolves in parallel — no serial wait.
+    const latestDocPromise = ClientCompanyList.findOne({ campaignId, dataType: "Client" })
       .sort({ updatedAt: -1 })
       .select("approvedIds rejectedIds")
       .lean();
 
-    const approvedIds = (latestDoc?.approvedIds || []).map((e) => ({
-      _id: String(e.companyId),
-      Company_Name: e.Company_Name,
-    }));
-    const rejectedIds = (latestDoc?.rejectedIds || []).map((e) => ({
-      _id: String(e.companyId),
-      Company_Name: e.Company_Name,
-    }));
+    // Helper: build response payload. Uses uploadHistory from the result object
+    // when already cached — avoids any extra DB query on the fast path.
+    const buildPayload = async (result) => {
+      const latestDoc = await latestDocPromise;
+      const approvedIds = (latestDoc?.approvedIds || []).map((e) => ({
+        _id: String(e.companyId), Company_Name: e.Company_Name, inputName: e.inputName,
+      }));
+      const rejectedIds = (latestDoc?.rejectedIds || []).map((e) => ({
+        _id: String(e.companyId), Company_Name: e.Company_Name, inputName: e.inputName,
+      }));
+      // uploadHistory is already on the result when loaded from DB or after persist backfill.
+      // Only fall back to a DB query when it's genuinely missing (rare cold start).
+      const history = result.uploadHistory !== undefined
+        ? result.uploadHistory
+        : result.uploadSession ? await loadUploadHistory(campaignId, result.uploadSession) : [];
+      return {
+        completelyMatched: result.completelyMatched,
+        partiallyMatched:  result.partiallyMatched,
+        notMatched:        result.notMatched,
+        duplicates:        result.duplicates || [],
+        approvedIds,
+        rejectedIds,
+        uploadSession: result.uploadSession || null,
+        uploadHistory: history,
+      };
+    };
 
     // ── Fast path: return from in-memory cache ────────────────────────────────
     const cached = getCachedMatchResult(campaignId);
     if (cached) {
+      // If uploadHistory is missing it means the previous DB persist failed (E11000).
+      // Retry now with the fixed bulkWrite upsert so this session lands in DB and
+      // shows up in future history tabs.
+      if (cached.uploadHistory === undefined && cached.uploadSession) {
+        persistMatchResultToDb(campaignId, {
+          completelyMatched: cached.completelyMatched || [],
+          partiallyMatched:  cached.partiallyMatched  || [],
+          notMatched:        cached.notMatched        || [],
+          duplicates:        cached.duplicates        || [],
+          uploadSession:     cached.uploadSession,
+        }).catch((e) => console.warn("[getClientMatchData] Retry persist failed:", e.message));
+      }
       try {
-        return sendResponse(res, 200, "Client match data fetched", {
-          completelyMatched: cached.completelyMatched,
-          partiallyMatched: cached.partiallyMatched,
-          notMatched: cached.notMatched,
-          duplicates: cached.duplicates || [],
-          approvedIds,
-          rejectedIds,
-        });
+        return sendResponse(res, 200, "Client match data fetched", await buildPayload(cached));
       } catch (serializeErr) {
         console.error("[getClientMatchData] Cache response serialization failed:", serializeErr.message);
         return res.status(200).json({
           success: false,
           message: "Match data is too large to send in one response. Please re-upload a smaller file or contact support.",
-          data: {
-            completelyMatchedCount: cached.completelyMatched.length,
-            partiallyMatchedCount:  cached.partiallyMatched.length,
-            notMatchedCount:        cached.notMatched.length,
-            approvedIds,
-            rejectedIds,
-            tooLarge: true,
-          },
+          data: { completelyMatchedCount: cached.completelyMatched.length, partiallyMatchedCount: cached.partiallyMatched.length, notMatchedCount: cached.notMatched.length, tooLarge: true },
         });
       }
     }
@@ -2500,182 +2546,79 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
       console.log(`[getClientMatchData] Loaded from DB for campaign ${campaignId}`);
       setCachedMatchResult(campaignId, dbResult); // warm the memory cache
       try {
-        return sendResponse(res, 200, "Client match data fetched", {
-          ...dbResult,
-          duplicates: dbResult.duplicates || [],
-          approvedIds,
-          rejectedIds,
-        });
+        return sendResponse(res, 200, "Client match data fetched", await buildPayload(dbResult));
       } catch (serializeErr) {
         console.error("[getClientMatchData] DB response serialization failed:", serializeErr.message);
         return res.status(200).json({
           success: false,
           message: "Match data is too large to send in one response. Please re-upload a smaller file or contact support.",
-          data: {
-            completelyMatchedCount: dbResult.completelyMatched.length,
-            partiallyMatchedCount:  dbResult.partiallyMatched.length,
-            notMatchedCount:        dbResult.notMatched.length,
-            approvedIds,
-            rejectedIds,
-            tooLarge: true,
-          },
+          data: { completelyMatchedCount: dbResult.completelyMatched.length, partiallyMatchedCount: dbResult.partiallyMatched.length, notMatchedCount: dbResult.notMatched.length, tooLarge: true },
         });
       }
     }
 
     // ── Slow path: nothing persisted — read saved names and re-run matching ───
-    const docs = await ClientCompanyList.find({
-      campaignId,
-      dataType: "Client",
-    })
-      .sort({ updatedAt: -1 })
-      .select("companyNames")
-      .lean();
+    const docs = await ClientCompanyList.find({ campaignId, dataType: "Client" })
+      .sort({ updatedAt: -1 }).select("companyNames").lean();
 
     if (!docs.length || !docs.some((d) => d.companyNames?.length)) {
       return sendResponse(res, 200, "No match data found", null);
     }
 
-    const companyNames = docs.flatMap((d) => d.companyNames || []);
+    const allCompanyNames = docs.flatMap((d) => d.companyNames || []);
 
-    // Use shared DB index cache — avoids reloading 3.7 lakh companies every time
-    const { dbNormMap, invertedIndex } = await getOrBuildDbIndex();
+    const seenSlowKeys = new Set();
+    const slowMatchRows = [];
+    const duplicates = [];
+    for (const name of allCompanyNames) {
+      const key = name.toLowerCase();
+      if (!seenSlowKeys.has(key)) { seenSlowKeys.add(key); slowMatchRows.push({ name }); }
+      else duplicates.push(name);
+    }
 
-    const completelyMatched = [];
+    const dbIndex = await getOrBuildDbIndex();
+    const slowCompleteMap  = new Map();
     const partiallyMatched = [];
-    const matchedInputSet = new Set();
-    const matchedCompanyIdSet = new Set(); // prevents same DB company appearing twice
-
-    // Process in batches with yieldControl so the event loop isn't blocked
-    // during large cache-miss re-matches
+    const notMatchedRows   = [];
+    const slowSameCompDups = [];
     const REMATCH_BATCH = 500;
-    for (let batchStart = 0; batchStart < companyNames.length; batchStart += REMATCH_BATCH) {
+
+    for (let i = 0; i < slowMatchRows.length; i += REMATCH_BATCH) {
       await yieldControl();
-    const batch = companyNames.slice(batchStart, batchStart + REMATCH_BATCH);
-    for (const inputName of batch) {
-      const normInput = normalizeCompanyName(inputName);
-      if (!normInput) continue;
-      const inputKey = inputName.toLowerCase();
-
-      if (dbNormMap.has(normInput)) {
-        const c = dbNormMap.get(normInput);
-        const cIdStr = String(c._id);
-        if (!matchedCompanyIdSet.has(cIdStr)) {
-          matchedCompanyIdSet.add(cIdStr);
-          completelyMatched.push({
-            _id: c._id,
-            Company_Name: c.Company_Name,
-            matchedWith: inputName,
-          });
-        }
-        matchedInputSet.add(inputKey);
-        continue;
+      const { completelyMatched: bc, partiallyMatched: bp, notMatched: bn, sameCompanyDuplicates: bsd } =
+        matchBatch(slowMatchRows.slice(i, i + REMATCH_BATCH), dbIndex, getSuggestionsLimit, MAX_CANDIDATES);
+      for (const entry of bc) {
+        const id = String(entry._id);
+        if (slowCompleteMap.has(id)) slowSameCompDups.push(entry.matchedWith);
+        else slowCompleteMap.set(id, entry);
       }
+      partiallyMatched.push(...bp);
+      notMatchedRows.push(...bn);
+      if (bsd?.length) slowSameCompDups.push(...bsd);
+    }
+    const completelyMatched = [...slowCompleteMap.values()];
+    const notMatched = notMatchedRows;
+    const allDuplicates = [...duplicates, ...slowSameCompDups];
+    const uploadSession = new Date().toISOString();
 
-      const inputWords = normInput.split(/\s+/).filter((w) => w.length > 2);
-      // Sort rarest words first so specific words are processed before common
-      // ones hit the MAX_CANDIDATES cap
-      inputWords.sort(
-        (a, b) =>
-          (invertedIndex.get(a)?.size || 0) - (invertedIndex.get(b)?.size || 0)
-      );
-      const candidateNorms = new Set();
-      outer2: for (const w of inputWords) {
-        for (const cn of invertedIndex.get(w) || []) {
-          candidateNorms.add(cn);
-          if (candidateNorms.size >= MAX_CANDIDATES) break outer2;
-        }
-      }
+    setCachedMatchResult(campaignId, { completelyMatched, partiallyMatched, notMatched, duplicates: allDuplicates, uploadSession });
 
-      const simpleInput = simplifyName(inputName);
-      const scored = [];
-      for (const cNorm of candidateNorms) {
-        const c = dbNormMap.get(cNorm);
-        if (!c) continue;
-
-        let score = 0;
-
-        // Check A: normalized containment
-        if (normInput.includes(cNorm) || cNorm.includes(normInput)) {
-          const aLen = inputWords.length;
-          const bLen =
-            cNorm.split(/\s+/).filter((w) => w.length > 2).length || 1;
-          score = Math.min(aLen, bLen) / Math.max(aLen, bLen, 1);
-        } else {
-          // Check B: Jaccard on normalized tokens
-          const aWords = new Set(inputWords);
-          const bWords = new Set(
-            cNorm.split(/\s+/).filter((w) => w.length > 2)
-          );
-          const inter = [...aWords].filter((w) => bWords.has(w)).length;
-          const unionSize = new Set([...aWords, ...bWords]).size;
-          score = unionSize > 0 ? inter / unionSize : 0;
-        }
-
-        // Check C: simple toLower containment — preserves words stripped by normalization
-        if (score < 0.3) {
-          const simpleDb = c.simpleName;
-          if (
-            simpleDb.includes(simpleInput) ||
-            simpleInput.includes(simpleDb)
-          ) {
-            const aLen = simpleInput.split(/\s+/).length;
-            const bLen = simpleDb.split(/\s+/).length || 1;
-            score = Math.max(
-              score,
-              Math.min(aLen, bLen) / Math.max(aLen, bLen, 1)
-            );
-          }
-        }
-
-        if (score >= 0.3) {
-          scored.push({
-            _id: c._id,
-            Company_Name: c.Company_Name,
-            matchPercent: Math.round(score * 100),
-          });
-        }
-      }
-
-      if (scored.length > 0) {
-        scored.sort((a, b) => b.matchPercent - a.matchPercent);
-        partiallyMatched.push({ input: inputName, suggestions: scored.slice(0, getSuggestionsLimit(companyNames.length)) });
-        matchedInputSet.add(inputKey);
-      }
-    } // end inner batch loop
-    } // end outer batch loop
-
-    const notMatched = companyNames.filter(
-      (name) => !matchedInputSet.has(name.toLowerCase())
-    );
-
-    // Populate in-memory cache and persist to DB so future cold starts skip re-matching
-    setCachedMatchResult(campaignId, { completelyMatched, partiallyMatched, notMatched });
-    persistMatchResultToDb(campaignId, { completelyMatched, partiallyMatched, notMatched });
+    // Respond first (data is already in memory cache), then persist to DB so
+    // future page loads / server restarts don't need to re-run the matcher.
+    // Errors are logged so they don't silently swallow failures.
+    persistMatchResultToDb(campaignId, { completelyMatched, partiallyMatched, notMatched, duplicates, uploadSession })
+      .catch((e) => console.error("[getClientMatchData] Background persist failed:", e.message));
 
     try {
-      return sendResponse(res, 200, "Client match data fetched", {
-        completelyMatched,
-        partiallyMatched,
-        notMatched,
-        approvedIds,
-        rejectedIds,
-      });
+      return sendResponse(res, 200, "Client match data fetched",
+        await buildPayload({ completelyMatched, partiallyMatched, notMatched, duplicates, uploadSession })
+      );
     } catch (serializeErr) {
-      // Response payload too large to serialize (e.g. "Invalid string length").
-      // Return summary counts so the frontend can still show progress.
       console.error("[getClientMatchData] Response serialization failed:", serializeErr.message);
       return res.status(200).json({
         success: false,
         message: "Match data is too large to send in one response. Please re-upload a smaller file or contact support.",
-        data: {
-          completelyMatchedCount: completelyMatched.length,
-          partiallyMatchedCount:  partiallyMatched.length,
-          notMatchedCount:        notMatched.length,
-          approvedIds,
-          rejectedIds,
-          tooLarge: true,
-        },
+        data: { completelyMatchedCount: completelyMatched.length, partiallyMatchedCount: partiallyMatched.length, notMatchedCount: notMatched.length, tooLarge: true },
       });
     }
   } catch (err) {
@@ -2684,12 +2627,49 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
 });
 
 // PATCH: persist approve/reject action — stores { companyId, Company_Name }
+// GET: fetch a specific historical upload session (read-only, no approvals)
+const getClientMatchSessionData = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId, uploadSession } = req.params;
+    if (!campaignId || !uploadSession) {
+      return sendError(next, "campaignId and uploadSession are required", 400);
+    }
+
+    const [completeDocs, partialDocs, notMatchedDocs, duplicateDocs] = await Promise.all([
+      ClientMatchResult.find({ campaignId, dataType: "Client", uploadSession, chunkType: "complete" })
+        .sort({ chunkIndex: 1 }).select("data").lean(),
+      ClientMatchResult.find({ campaignId, dataType: "Client", uploadSession, chunkType: "partial" })
+        .sort({ chunkIndex: 1 }).select("data").lean(),
+      ClientMatchResult.find({ campaignId, dataType: "Client", uploadSession, chunkType: "notMatched" })
+        .sort({ chunkIndex: 1 }).select("data").lean(),
+      ClientMatchResult.find({ campaignId, dataType: "Client", uploadSession, chunkType: "duplicates" })
+        .sort({ chunkIndex: 1 }).select("data").lean(),
+    ]);
+
+    if (!completeDocs.length && !partialDocs.length && !notMatchedDocs.length && !duplicateDocs.length) {
+      return sendError(next, "Session not found", 404);
+    }
+
+    return sendResponse(res, 200, "Historical session fetched", {
+      uploadSession,
+      completelyMatched: completeDocs.flatMap((d) => d.data),
+      partiallyMatched:  partialDocs.flatMap((d) => d.data),
+      notMatched:        notMatchedDocs.flatMap((d) => d.data),
+      duplicates:        duplicateDocs.flatMap((d) => d.data),
+    });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
 const updateClientMatchAction = asyncHandler(async (req, res, next) => {
   try {
     const { campaignId } = req.params;
-    const { companyId, companyName, type, action } = req.body;
+    const { companyId, companyName, inputName, type, action } = req.body;
     // type: "approved" | "rejected"
     // action: "add" | "remove"
+    // inputName: the uploaded company name (row identifier) so restore knows
+    //            which partial row this decision belongs to
 
     if (!campaignId || !companyId || !type || !action) {
       return sendError(
@@ -2700,26 +2680,29 @@ const updateClientMatchAction = asyncHandler(async (req, res, next) => {
     }
 
     const field = type === "approved" ? "approvedIds" : "rejectedIds";
+    // Pull by both companyId AND inputName so two rows with the same DB company
+    // but different input names are tracked independently.
+    const pullMatch = inputName ? { companyId, inputName } : { companyId };
     const filter = { campaignId, dataType: "Client" };
     const sortOpt = { sort: { updatedAt: -1 } };
 
     if (action === "add") {
-      // Remove any existing entry for this companyId first (prevents duplicates),
-      // then push the new entry with the company name included.
+      // Remove any existing entry for this (companyId, inputName) pair first
+      // to prevent duplicates, then push the new entry.
       await ClientCompanyList.findOneAndUpdate(
         filter,
-        { $pull: { [field]: { companyId } } },
+        { $pull: { [field]: pullMatch } },
         sortOpt
       );
       await ClientCompanyList.findOneAndUpdate(
         filter,
-        { $push: { [field]: { companyId, Company_Name: companyName } } },
+        { $push: { [field]: { companyId, Company_Name: companyName, inputName: inputName || "" } } },
         sortOpt
       );
     } else {
       await ClientCompanyList.findOneAndUpdate(
         filter,
-        { $pull: { [field]: { companyId } } },
+        { $pull: { [field]: pullMatch } },
         sortOpt
       );
     }
@@ -2750,5 +2733,6 @@ export {
   deactivateSharedLink,
   extendLinkExpiry,
   getClientMatchData,
+  getClientMatchSessionData,
   updateClientMatchAction,
 };
