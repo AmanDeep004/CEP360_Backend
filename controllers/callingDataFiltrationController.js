@@ -6,6 +6,7 @@ import errorHandler from "../utils/index.js";
 import CallingData from "../models/callingDataModal.js";
 import ClientCompanyList from "../models/clientCompanyList.js";
 import ClientMatchResult from "../models/clientMatchResultModel.js";
+import ClientMatchEntry from "../models/clientMatchEntryModel.js";
 import SharedFilter from "../models/sharedFilter.js";
 import XLSX from "xlsx";
 import csv from "csvtojson";
@@ -1193,6 +1194,97 @@ const COMPLETE_CHUNK   = 2000; // ~100 bytes each → ~200 KB per chunk
 const PARTIAL_CHUNK    =  300; // ~200–500 bytes each (suggestions) → ~150 KB per chunk
 const NOT_MATCHED_CHUNK = 5000; // plain strings → ~150 KB per chunk
 
+// Flat-collection insert batch size (avoids building one giant array in memory)
+const ENTRY_BATCH = 500;
+
+/**
+ * Returns true when the dataset is too large for the browser to receive in one response.
+ * Estimated JSON bytes: complete×150 + partial×600 + notMatched×30 > 25 MB
+ */
+const isResultTooLarge = ({ completeCount = 0, partialCount = 0, notMatchedCount = 0 } = {}) =>
+  completeCount * 150 + partialCount * 600 + notMatchedCount * 30 > 25_000_000;
+
+/**
+ * Persist match results to the flat ClientMatchEntry collection.
+ * Streams inserts in small batches so we never build a giant in-memory array —
+ * prevents the OOM crash that plagued the old bulkWrite-all-chunks approach.
+ */
+const persistToEntryCollection = async (campaignId, {
+  completelyMatched, partiallyMatched, notMatched, duplicates = [], uploadSession, counts,
+}) => {
+  const base = { campaignId, dataType: "Client", uploadSession };
+
+  // Meta doc first — stores counts so history tabs work without loading all entries
+  await ClientMatchEntry.findOneAndUpdate(
+    { campaignId, dataType: "Client", uploadSession, matchType: "meta" },
+    { $set: { ...base, matchType: "meta", counts } },
+    { upsert: true, new: true }
+  );
+
+  // Stream-insert complete entries
+  for (let i = 0; i < completelyMatched.length; i += ENTRY_BATCH) {
+    const batch = completelyMatched.slice(i, i + ENTRY_BATCH).map((e) => ({
+      ...base,
+      matchType: "complete",
+      inputName: e.matchedWith || "",
+      companySpecificId: e.companySpecificId || "",
+      segment: e.segment || "",
+      companyId: e._id,
+      companyName: e.Company_Name,
+      matchedWith: e.matchedWith || "",
+    }));
+    await ClientMatchEntry.insertMany(batch, { ordered: false });
+    await yieldControl();
+  }
+
+  // Stream-insert partial entries
+  for (let i = 0; i < partiallyMatched.length; i += ENTRY_BATCH) {
+    const batch = partiallyMatched.slice(i, i + ENTRY_BATCH).map((e) => ({
+      ...base,
+      matchType: "partial",
+      inputName: e.inputName || "",
+      companySpecificId: e.companySpecificId || "",
+      segment: e.segment || "",
+      suggestions: e.suggestions || [],
+    }));
+    await ClientMatchEntry.insertMany(batch, { ordered: false });
+    await yieldControl();
+  }
+
+  // Stream-insert notMatched entries (larger batches — just strings)
+  const NM_BATCH = ENTRY_BATCH * 4;
+  for (let i = 0; i < notMatched.length; i += NM_BATCH) {
+    const batch = notMatched.slice(i, i + NM_BATCH).map((name) => ({
+      ...base,
+      matchType: "notMatched",
+      inputName: typeof name === "string" ? name : (name?.inputName || ""),
+    }));
+    await ClientMatchEntry.insertMany(batch, { ordered: false });
+    await yieldControl();
+  }
+
+  // Stream-insert duplicate entries
+  for (let i = 0; i < duplicates.length; i += NM_BATCH) {
+    const batch = duplicates.slice(i, i + NM_BATCH).map((name) => ({
+      ...base,
+      matchType: "duplicate",
+      inputName: typeof name === "string" ? name : (name?.inputName || ""),
+    }));
+    await ClientMatchEntry.insertMany(batch, { ordered: false });
+    await yieldControl();
+  }
+
+  console.log(`[MatchEntry] Persisted session ${uploadSession} — C:${counts.completeCount} P:${counts.partialCount} N:${counts.notMatchedCount} D:${counts.duplicatesCount}`);
+
+  // Backfill uploadHistory into cache so the next getClientMatchData call doesn't
+  // need an extra DB query for history tabs.
+  const history = await loadUploadHistoryFromEntry(campaignId, uploadSession);
+  const existing = _matchResultCache.get(String(campaignId));
+  if (existing) {
+    _matchResultCache.set(String(campaignId), { ...existing, uploadHistory: history });
+  }
+};
+
 /**
  * Persist match results to MongoDB in chunks.
  * Runs fire-and-forget so it never delays the HTTP response.
@@ -1365,6 +1457,90 @@ const loadUploadHistory = async (campaignId, currentSession) => {
 };
 
 /**
+ * Load upload history from the new flat ClientMatchEntry collection.
+ * Returns array of session metadata sorted newest-first, excluding currentSession.
+ */
+const loadUploadHistoryFromEntry = async (campaignId, currentSession) => {
+  const metaDocs = await ClientMatchEntry.find({
+    campaignId,
+    dataType: "Client",
+    matchType: "meta",
+    ...(currentSession ? { uploadSession: { $ne: currentSession } } : {}),
+  })
+    .sort({ uploadSession: -1 })
+    .select("uploadSession counts")
+    .lean();
+
+  return metaDocs.map((d) => ({
+    uploadSession:   d.uploadSession,
+    uploadedAt:      d.uploadSession,
+    completeCount:   d.counts?.completeCount   ?? 0,
+    partialCount:    d.counts?.partialCount    ?? 0,
+    notMatchedCount: d.counts?.notMatchedCount ?? 0,
+    duplicatesCount: d.counts?.duplicatesCount ?? 0,
+  }));
+};
+
+/**
+ * Load the latest upload session from the new flat ClientMatchEntry collection.
+ * Returns null when no data exists (caller should fall back to loadMatchResultFromDb).
+ * Returns { tooLarge: true, counts, uploadHistory } for very large datasets.
+ */
+const loadMatchResultFromEntry = async (campaignId) => {
+  const meta = await ClientMatchEntry.findOne({
+    campaignId,
+    dataType: "Client",
+    matchType: "meta",
+  })
+    .sort({ uploadSession: -1 })
+    .lean();
+
+  if (!meta) return null;
+
+  const { uploadSession, counts = {} } = meta;
+  const uploadHistory = await loadUploadHistoryFromEntry(campaignId, uploadSession);
+
+  if (isResultTooLarge(counts)) {
+    return {
+      tooLarge: true,
+      uploadSession,
+      completelyMatchedCount: counts.completeCount   ?? 0,
+      partiallyMatchedCount:  counts.partialCount    ?? 0,
+      notMatchedCount:        counts.notMatchedCount ?? 0,
+      duplicatesCount:        counts.duplicatesCount ?? 0,
+      uploadHistory,
+    };
+  }
+
+  const [completeDocs, partialDocs, notMatchedDocs, duplicateDocs] = await Promise.all([
+    ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession, matchType: "complete" }).lean(),
+    ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession, matchType: "partial" }).lean(),
+    ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession, matchType: "notMatched" }).lean(),
+    ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession, matchType: "duplicate" }).lean(),
+  ]);
+
+  return {
+    uploadSession,
+    uploadHistory,
+    completelyMatched: completeDocs.map((d) => ({
+      _id:         d.companyId,
+      Company_Name: d.companyName,
+      matchedWith:  d.matchedWith || d.inputName,
+      ...(d.companySpecificId ? { companySpecificId: d.companySpecificId } : {}),
+      ...(d.segment           ? { segment: d.segment }                     : {}),
+    })),
+    partiallyMatched: partialDocs.map((d) => ({
+      inputName:   d.inputName,
+      suggestions: d.suggestions || [],
+      ...(d.companySpecificId ? { companySpecificId: d.companySpecificId } : {}),
+      ...(d.segment           ? { segment: d.segment }                     : {}),
+    })),
+    notMatched: notMatchedDocs.map((d) => d.inputName),
+    duplicates: duplicateDocs.map((d) => d.inputName),
+  };
+};
+
+/**
  * Normalize a company name for matching:
  * - lowercase, strip punctuation, remove common corporate suffixes,
  *   collapse whitespace.
@@ -1449,7 +1625,7 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
     };
 
     if (ext.endsWith(".xlsx") || ext.endsWith(".xls")) {
-      const workbook = XLSX.readFile(filePath, { cellText: true, cellDates: false });
+      const workbook = XLSX.readFile(filePath, { cellText: false, cellDates: false, raw: false }); // skip w/h/r fields → ~3-5x less memory for large files
       const sheet = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
       companyRows = filterAndCount(sheet.map(parseRow));
     } else {
@@ -1482,8 +1658,6 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
       duplicates.push(row.name);
     }
   }
-  const matchNames = matchRows.map((r) => r.name);
-
   updateMatchJob(
     jobId,
     `Parsed ${companyNames.length.toLocaleString()} companies. Scanning database...`,
@@ -1543,22 +1717,21 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
     ...Array.from({ length: invalidRowCount }, () => "(No Company Name)"),
   ];
 
-  // Stage 4 — save in chunks to stay within MongoDB's 16MB document limit
-  // insertMany sends all chunks in one round-trip instead of 50 sequential creates
+  // Stage 4 — save company names list for ClientCompanyList (for re-match on cache miss)
   updateMatchJob(jobId, "Saving results...", 93);
   await yieldControl();
 
   const SAVE_CHUNK = 10_000;
-  const chunks = [];
+  const nameChunks = [];
   for (let i = 0; i < companyNames.length; i += SAVE_CHUNK) {
-    chunks.push({
+    nameChunks.push({
       campaignId,
       dataType,
       companyNames: companyNames.slice(i, i + SAVE_CHUNK),
     });
   }
   await ClientCompanyList.deleteMany({ campaignId, dataType });
-  await ClientCompanyList.insertMany(chunks, { ordered: false });
+  await ClientCompanyList.insertMany(nameChunks, { ordered: false });
 
   // ISO timestamp used as the unique session ID for this upload
   const uploadSession = new Date().toISOString();
@@ -1567,20 +1740,46 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
   // row count matches the original upload (complete + partial + notMatched + duplicates = uploaded)
   const allDuplicates = [...duplicates, ...sameCompanyDups];
 
-  // Cache results in memory so getClientMatchData returns instantly on next call
-  setCachedMatchResult(campaignId, { completelyMatched, partiallyMatched, notMatched, duplicates: allDuplicates, uploadSession });
+  const counts = {
+    completeCount:   completelyMatched.length,
+    partialCount:    partiallyMatched.length,
+    notMatchedCount: notMatched.length,
+    duplicatesCount: allDuplicates.length,
+  };
+  const tooLarge = isResultTooLarge(counts);
 
-  // Persist to DB synchronously (awaited) BEFORE signalling SSE complete.
-  // This guarantees that when the frontend calls getClientMatchData after receiving
-  // the SSE "complete" signal, the data is already in DB — even if the server
-  // restarts immediately afterward.
+  // For non-tooLarge: cache arrays NOW so getClientMatchData can serve them even if
+  // the DB persist fails. persistToEntryCollection will then backfill uploadHistory.
+  if (!tooLarge) {
+    setCachedMatchResult(campaignId, {
+      completelyMatched, partiallyMatched, notMatched,
+      duplicates: allDuplicates, uploadSession,
+    });
+  }
+
+  // Persist to DB — streaming flat inserts avoid the OOM from building all chunks at once
   updateMatchJob(jobId, "Saving to database...", 97);
   try {
-    await persistMatchResultToDb(campaignId, { completelyMatched, partiallyMatched, notMatched, duplicates: allDuplicates, uploadSession });
+    await persistToEntryCollection(campaignId, {
+      completelyMatched, partiallyMatched, notMatched,
+      duplicates: allDuplicates, uploadSession, counts,
+    });
   } catch (persistErr) {
-    // Non-fatal: data is already in the memory cache, job can still complete.
-    // The slow path in getClientMatchData will re-persist on the next cache miss.
-    console.warn("[runCompanyMatchJob] DB persist failed (data still in memory cache):", persistErr.message);
+    // Non-fatal: data is already in memory cache (for non-tooLarge)
+    console.warn("[runCompanyMatchJob] DB persist failed:", persistErr.message);
+  }
+
+  // For tooLarge: cache counts-only AFTER persist (arrays not needed in memory anymore)
+  if (tooLarge) {
+    setCachedMatchResult(campaignId, {
+      tooLarge: true,
+      uploadSession,
+      completelyMatchedCount: counts.completeCount,
+      partiallyMatchedCount:  counts.partialCount,
+      notMatchedCount:        counts.notMatchedCount,
+      duplicatesCount:        counts.duplicatesCount,
+      uploadHistory: [],
+    });
   }
 
   // Send only a signal — NOT the full result data.
@@ -2489,6 +2688,28 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
     // Helper: build response payload. Uses uploadHistory from the result object
     // when already cached — avoids any extra DB query on the fast path.
     const buildPayload = async (result) => {
+      // tooLarge — return counts only, no arrays (avoids serialization OOM)
+      if (result.tooLarge) {
+        const latestDoc = await latestDocPromise;
+        const approvedIds = (latestDoc?.approvedIds || []).map((e) => ({
+          _id: String(e.companyId), Company_Name: e.Company_Name, inputName: e.inputName,
+        }));
+        const rejectedIds = (latestDoc?.rejectedIds || []).map((e) => ({
+          _id: String(e.companyId), Company_Name: e.Company_Name, inputName: e.inputName,
+        }));
+        return {
+          tooLarge: true,
+          completelyMatchedCount: result.completelyMatchedCount ?? result.completeCount ?? 0,
+          partiallyMatchedCount:  result.partiallyMatchedCount  ?? result.partialCount  ?? 0,
+          notMatchedCount:        result.notMatchedCount ?? 0,
+          duplicatesCount:        result.duplicatesCount ?? 0,
+          approvedIds,
+          rejectedIds,
+          uploadSession:  result.uploadSession || null,
+          uploadHistory:  result.uploadHistory || [],
+        };
+      }
+
       const latestDoc = await latestDocPromise;
       const approvedIds = (latestDoc?.approvedIds || []).map((e) => ({
         _id: String(e.companyId), Company_Name: e.Company_Name, inputName: e.inputName,
@@ -2498,9 +2719,16 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
       }));
       // uploadHistory is already on the result when loaded from DB or after persist backfill.
       // Only fall back to a DB query when it's genuinely missing (rare cold start).
-      const history = result.uploadHistory !== undefined
-        ? result.uploadHistory
-        : result.uploadSession ? await loadUploadHistory(campaignId, result.uploadSession) : [];
+      let history;
+      if (result.uploadHistory !== undefined) {
+        history = result.uploadHistory;
+      } else if (result.uploadSession) {
+        // Try new flat collection first; fall back to old chunked collection for legacy data
+        history = await loadUploadHistoryFromEntry(campaignId, result.uploadSession);
+        if (!history.length) history = await loadUploadHistory(campaignId, result.uploadSession);
+      } else {
+        history = [];
+      }
       return {
         completelyMatched: result.completelyMatched,
         partiallyMatched:  result.partiallyMatched,
@@ -2516,45 +2744,15 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
     // ── Fast path: return from in-memory cache ────────────────────────────────
     const cached = getCachedMatchResult(campaignId);
     if (cached) {
-      // If uploadHistory is missing it means the previous DB persist failed (E11000).
-      // Retry now with the fixed bulkWrite upsert so this session lands in DB and
-      // shows up in future history tabs.
-      if (cached.uploadHistory === undefined && cached.uploadSession) {
-        persistMatchResultToDb(campaignId, {
-          completelyMatched: cached.completelyMatched || [],
-          partiallyMatched:  cached.partiallyMatched  || [],
-          notMatched:        cached.notMatched        || [],
-          duplicates:        cached.duplicates        || [],
-          uploadSession:     cached.uploadSession,
-        }).catch((e) => console.warn("[getClientMatchData] Retry persist failed:", e.message));
-      }
-      try {
-        return sendResponse(res, 200, "Client match data fetched", await buildPayload(cached));
-      } catch (serializeErr) {
-        console.error("[getClientMatchData] Cache response serialization failed:", serializeErr.message);
-        return res.status(200).json({
-          success: false,
-          message: "Match data is too large to send in one response. Please re-upload a smaller file or contact support.",
-          data: { completelyMatchedCount: cached.completelyMatched.length, partiallyMatchedCount: cached.partiallyMatched.length, notMatchedCount: cached.notMatched.length, tooLarge: true },
-        });
-      }
+      return sendResponse(res, 200, "Client match data fetched", await buildPayload(cached));
     }
 
-    // ── DB path: cache miss — try loading persisted results before re-matching ──
-    const dbResult = await loadMatchResultFromDb(campaignId);
+    // ── DB path: cache miss — try new flat collection first, then old chunks ──
+    const dbResult = await loadMatchResultFromEntry(campaignId) || await loadMatchResultFromDb(campaignId);
     if (dbResult) {
       console.log(`[getClientMatchData] Loaded from DB for campaign ${campaignId}`);
-      setCachedMatchResult(campaignId, dbResult); // warm the memory cache
-      try {
-        return sendResponse(res, 200, "Client match data fetched", await buildPayload(dbResult));
-      } catch (serializeErr) {
-        console.error("[getClientMatchData] DB response serialization failed:", serializeErr.message);
-        return res.status(200).json({
-          success: false,
-          message: "Match data is too large to send in one response. Please re-upload a smaller file or contact support.",
-          data: { completelyMatchedCount: dbResult.completelyMatched.length, partiallyMatchedCount: dbResult.partiallyMatched.length, notMatchedCount: dbResult.notMatched.length, tooLarge: true },
-        });
-      }
+      if (!dbResult.tooLarge) setCachedMatchResult(campaignId, dbResult); // warm cache (skip for tooLarge — arrays too big)
+      return sendResponse(res, 200, "Client match data fetched", await buildPayload(dbResult));
     }
 
     // ── Slow path: nothing persisted — read saved names and re-run matching ───
@@ -2605,22 +2803,20 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
 
     // Respond first (data is already in memory cache), then persist to DB so
     // future page loads / server restarts don't need to re-run the matcher.
-    // Errors are logged so they don't silently swallow failures.
-    persistMatchResultToDb(campaignId, { completelyMatched, partiallyMatched, notMatched, duplicates, uploadSession })
-      .catch((e) => console.error("[getClientMatchData] Background persist failed:", e.message));
+    const slowCounts = {
+      completeCount:   completelyMatched.length,
+      partialCount:    partiallyMatched.length,
+      notMatchedCount: notMatched.length,
+      duplicatesCount: allDuplicates.length,
+    };
+    persistToEntryCollection(campaignId, {
+      completelyMatched, partiallyMatched, notMatched,
+      duplicates: allDuplicates, uploadSession, counts: slowCounts,
+    }).catch((e) => console.error("[getClientMatchData] Background persist failed:", e.message));
 
-    try {
-      return sendResponse(res, 200, "Client match data fetched",
-        await buildPayload({ completelyMatched, partiallyMatched, notMatched, duplicates, uploadSession })
-      );
-    } catch (serializeErr) {
-      console.error("[getClientMatchData] Response serialization failed:", serializeErr.message);
-      return res.status(200).json({
-        success: false,
-        message: "Match data is too large to send in one response. Please re-upload a smaller file or contact support.",
-        data: { completelyMatchedCount: completelyMatched.length, partiallyMatchedCount: partiallyMatched.length, notMatchedCount: notMatched.length, tooLarge: true },
-      });
-    }
+    return sendResponse(res, 200, "Client match data fetched",
+      await buildPayload({ completelyMatched, partiallyMatched, notMatched, duplicates: allDuplicates, uploadSession })
+    );
   } catch (err) {
     return sendError(next, err.message, 500);
   }
@@ -2635,6 +2831,47 @@ const getClientMatchSessionData = asyncHandler(async (req, res, next) => {
       return sendError(next, "campaignId and uploadSession are required", 400);
     }
 
+    // Try new flat collection first
+    const entryMeta = await ClientMatchEntry.findOne({
+      campaignId, dataType: "Client", uploadSession, matchType: "meta",
+    }).lean();
+
+    if (entryMeta) {
+      const counts = entryMeta.counts || {};
+      if (isResultTooLarge(counts)) {
+        return sendResponse(res, 200, "Historical session fetched", {
+          uploadSession,
+          tooLarge: true,
+          completelyMatchedCount: counts.completeCount   ?? 0,
+          partiallyMatchedCount:  counts.partialCount    ?? 0,
+          notMatchedCount:        counts.notMatchedCount ?? 0,
+          duplicatesCount:        counts.duplicatesCount ?? 0,
+        });
+      }
+      const [completeDocs, partialDocs, notMatchedDocs, duplicateDocs] = await Promise.all([
+        ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession, matchType: "complete" }).lean(),
+        ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession, matchType: "partial" }).lean(),
+        ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession, matchType: "notMatched" }).lean(),
+        ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession, matchType: "duplicate" }).lean(),
+      ]);
+      return sendResponse(res, 200, "Historical session fetched", {
+        uploadSession,
+        completelyMatched: completeDocs.map((d) => ({
+          _id: d.companyId, Company_Name: d.companyName, matchedWith: d.matchedWith || d.inputName,
+          ...(d.companySpecificId ? { companySpecificId: d.companySpecificId } : {}),
+          ...(d.segment           ? { segment: d.segment }                     : {}),
+        })),
+        partiallyMatched: partialDocs.map((d) => ({
+          inputName: d.inputName, suggestions: d.suggestions || [],
+          ...(d.companySpecificId ? { companySpecificId: d.companySpecificId } : {}),
+          ...(d.segment           ? { segment: d.segment }                     : {}),
+        })),
+        notMatched: notMatchedDocs.map((d) => d.inputName),
+        duplicates: duplicateDocs.map((d)  => d.inputName),
+      });
+    }
+
+    // Fall back to old chunked collection
     const [completeDocs, partialDocs, notMatchedDocs, duplicateDocs] = await Promise.all([
       ClientMatchResult.find({ campaignId, dataType: "Client", uploadSession, chunkType: "complete" })
         .sort({ chunkIndex: 1 }).select("data").lean(),
@@ -2717,6 +2954,67 @@ const updateClientMatchAction = asyncHandler(async (req, res, next) => {
   }
 });
 
+/**
+ * GET /filtration/clientMatchEntries/:campaignId
+ * Paginated endpoint for large match datasets.
+ * Query params: matchType (complete|partial|notMatched|duplicate), uploadSession, page (0-based), limit (max 500)
+ */
+const getClientMatchEntries = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    const { matchType = "complete", uploadSession, page = 0, limit = 100 } = req.query;
+    if (!campaignId) return sendError(next, "Campaign ID is required", 400);
+
+    // Resolve session: use provided or fall back to latest
+    let session = uploadSession;
+    if (!session) {
+      const meta = await ClientMatchEntry.findOne({
+        campaignId, dataType: "Client", matchType: "meta",
+      }).sort({ uploadSession: -1 }).lean();
+      if (!meta) return sendResponse(res, 200, "No data found", { entries: [], total: 0, hasMore: false });
+      session = meta.uploadSession;
+    }
+
+    const skip = parseInt(page) * Math.min(parseInt(limit), 500);
+    const lim  = Math.min(parseInt(limit), 500);
+
+    const [docs, total] = await Promise.all([
+      ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession: session, matchType })
+        .skip(skip).limit(lim + 1).lean(),
+      ClientMatchEntry.countDocuments({ campaignId, dataType: "Client", uploadSession: session, matchType }),
+    ]);
+
+    const hasMore = docs.length > lim;
+    const page_docs = hasMore ? docs.slice(0, lim) : docs;
+
+    let entries;
+    if (matchType === "complete") {
+      entries = page_docs.map((d) => ({
+        _id: d.companyId, Company_Name: d.companyName, matchedWith: d.matchedWith,
+        ...(d.companySpecificId ? { companySpecificId: d.companySpecificId } : {}),
+        ...(d.segment           ? { segment: d.segment }                     : {}),
+      }));
+    } else if (matchType === "partial") {
+      entries = page_docs.map((d) => ({
+        inputName: d.inputName, suggestions: d.suggestions || [],
+        ...(d.companySpecificId ? { companySpecificId: d.companySpecificId } : {}),
+        ...(d.segment           ? { segment: d.segment }                     : {}),
+      }));
+    } else {
+      entries = page_docs.map((d) => d.inputName);
+    }
+
+    return sendResponse(res, 200, "Entries fetched", {
+      entries, total, hasMore,
+      uploadSession: session,
+      page: parseInt(page),
+      limit: lim,
+    });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
 export {
   callingDataFilter,
   callingDataFilterLightweight,
@@ -2735,4 +3033,5 @@ export {
   getClientMatchData,
   getClientMatchSessionData,
   updateClientMatchAction,
+  getClientMatchEntries,
 };

@@ -17,6 +17,7 @@ import {
   getClientMatchData,
   getClientMatchSessionData,
   updateClientMatchAction,
+  getClientMatchEntries,
 } from "../controllers/callingDataFiltrationController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -89,6 +90,7 @@ router.patch("/:filterId/extend", protect, extendLinkExpiry);
 
 router.get("/clientMatchData/:campaignId", protect, getClientMatchData);
 router.get("/clientMatchData/:campaignId/history/:uploadSession", protect, getClientMatchSessionData);
+router.get("/clientMatchEntries/:campaignId", protect, getClientMatchEntries);
 router.patch("/clientMatchData/:campaignId/action", protect, updateClientMatchAction);
 
 export default router;
