@@ -5,7 +5,6 @@ import Campaign from "../models/campaignModel.js";
 import errorHandler from "../utils/index.js";
 import CallingData from "../models/callingDataModal.js";
 import ClientCompanyList from "../models/clientCompanyList.js";
-import ClientMatchResult from "../models/clientMatchResultModel.js";
 import ClientMatchEntry from "../models/clientMatchEntryModel.js";
 import SharedFilter from "../models/sharedFilter.js";
 import XLSX from "xlsx";
@@ -254,9 +253,18 @@ function buildAssignPipeline(preLookupMatch, postLookupMatch) {
 /** Map one aggregation row → CallingData insert document */
 function mapContactToEntry(
   row,
-  { campaignId, uploadedBy, batchLabel, dataSourceType, source, companyMetaMap = {} }
+  {
+    campaignId,
+    uploadedBy,
+    batchLabel,
+    dataSourceType,
+    source,
+    companyMetaMap = {},
+  }
 ) {
-  const companyIdStr = row.company_info?._id ? String(row.company_info._id) : "";
+  const companyIdStr = row.company_info?._id
+    ? String(row.company_info._id)
+    : "";
   const meta = companyMetaMap[companyIdStr] || {};
   return {
     CampaignId: new mongoose.Types.ObjectId(campaignId),
@@ -321,7 +329,7 @@ function mapContactToEntry(
     EngagementPoints: row.EngagementPoints,
     clientInfo: {
       companySpecificId: meta.companySpecificId || "",
-      segment:           meta.segment           || "",
+      segment: meta.segment || "",
     },
   };
 }
@@ -1148,7 +1156,10 @@ const getOrBuildDbIndex = async () => {
   if (_dbIndexCache && now - _dbIndexCacheTime < DB_INDEX_TTL_MS) {
     return _dbIndexCache;
   }
-  const allDbCompanies = await Company.find({}, { _id: 1, Company_Name: 1 }).lean();
+  const allDbCompanies = await Company.find(
+    {},
+    { _id: 1, Company_Name: 1 }
+  ).lean();
   // buildDbIndex constructs all 6 lookup maps + TF-IDF vectors in one pass
   _dbIndexCache = buildDbIndex(allDbCompanies);
   _dbIndexCacheTime = now;
@@ -1189,19 +1200,20 @@ const invalidateMatchResultCache = (campaignId) => {
 
 // ── Persistent DB helpers (survive server restarts) ───────────────────────────
 
-// Chunk sizes chosen to stay comfortably under MongoDB's 16 MB document limit.
-const COMPLETE_CHUNK   = 2000; // ~100 bytes each → ~200 KB per chunk
-const PARTIAL_CHUNK    =  300; // ~200–500 bytes each (suggestions) → ~150 KB per chunk
-const NOT_MATCHED_CHUNK = 5000; // plain strings → ~150 KB per chunk
-
 // Flat-collection insert batch size (avoids building one giant array in memory)
 const ENTRY_BATCH = 500;
+// Rows per page returned by getClientMatchData — matches frontend default rowsPerPage
+const MATCH_PAGE_SIZE = 100;
 
 /**
  * Returns true when the dataset is too large for the browser to receive in one response.
  * Estimated JSON bytes: complete×150 + partial×600 + notMatched×30 > 25 MB
  */
-const isResultTooLarge = ({ completeCount = 0, partialCount = 0, notMatchedCount = 0 } = {}) =>
+const isResultTooLarge = ({
+  completeCount = 0,
+  partialCount = 0,
+  notMatchedCount = 0,
+} = {}) =>
   completeCount * 150 + partialCount * 600 + notMatchedCount * 30 > 25_000_000;
 
 /**
@@ -1209,9 +1221,17 @@ const isResultTooLarge = ({ completeCount = 0, partialCount = 0, notMatchedCount
  * Streams inserts in small batches so we never build a giant in-memory array —
  * prevents the OOM crash that plagued the old bulkWrite-all-chunks approach.
  */
-const persistToEntryCollection = async (campaignId, {
-  completelyMatched, partiallyMatched, notMatched, duplicates = [], uploadSession, counts,
-}) => {
+const persistToEntryCollection = async (
+  campaignId,
+  {
+    completelyMatched,
+    partiallyMatched,
+    notMatched,
+    duplicates = [],
+    uploadSession,
+    counts,
+  }
+) => {
   const base = { campaignId, dataType: "Client", uploadSession };
 
   // Meta doc first — stores counts so history tabs work without loading all entries
@@ -1242,7 +1262,7 @@ const persistToEntryCollection = async (campaignId, {
     const batch = partiallyMatched.slice(i, i + ENTRY_BATCH).map((e) => ({
       ...base,
       matchType: "partial",
-      inputName: e.inputName || "",
+      inputName: e.input || e.inputName || "",
       companySpecificId: e.companySpecificId || "",
       segment: e.segment || "",
       suggestions: e.suggestions || [],
@@ -1257,7 +1277,7 @@ const persistToEntryCollection = async (campaignId, {
     const batch = notMatched.slice(i, i + NM_BATCH).map((name) => ({
       ...base,
       matchType: "notMatched",
-      inputName: typeof name === "string" ? name : (name?.inputName || ""),
+      inputName: typeof name === "string" ? name : name?.inputName || "",
     }));
     await ClientMatchEntry.insertMany(batch, { ordered: false });
     await yieldControl();
@@ -1268,192 +1288,26 @@ const persistToEntryCollection = async (campaignId, {
     const batch = duplicates.slice(i, i + NM_BATCH).map((name) => ({
       ...base,
       matchType: "duplicate",
-      inputName: typeof name === "string" ? name : (name?.inputName || ""),
+      inputName: typeof name === "string" ? name : name?.inputName || "",
     }));
     await ClientMatchEntry.insertMany(batch, { ordered: false });
     await yieldControl();
   }
 
-  console.log(`[MatchEntry] Persisted session ${uploadSession} — C:${counts.completeCount} P:${counts.partialCount} N:${counts.notMatchedCount} D:${counts.duplicatesCount}`);
+  console.log(
+    `[MatchEntry] Persisted session ${uploadSession} — C:${counts.completeCount} P:${counts.partialCount} N:${counts.notMatchedCount} D:${counts.duplicatesCount}`
+  );
 
   // Backfill uploadHistory into cache so the next getClientMatchData call doesn't
   // need an extra DB query for history tabs.
   const history = await loadUploadHistoryFromEntry(campaignId, uploadSession);
   const existing = _matchResultCache.get(String(campaignId));
   if (existing) {
-    _matchResultCache.set(String(campaignId), { ...existing, uploadHistory: history });
-  }
-};
-
-/**
- * Persist match results to MongoDB in chunks.
- * Runs fire-and-forget so it never delays the HTTP response.
- */
-const persistMatchResultToDb = async (campaignId, { completelyMatched, partiallyMatched, notMatched, duplicates = [], uploadSession }) => {
-  try {
-    const base = { campaignId, dataType: "Client", uploadSession };
-    const chunks = [
-      // Meta chunk — stores counts so we can list history without loading all data
-      { ...base, chunkType: "meta", chunkIndex: 0, data: {
-        completeCount:   completelyMatched.length,
-        partialCount:    partiallyMatched.length,
-        notMatchedCount: notMatched.length,
-        duplicatesCount: duplicates.length,
-        uploadedAt:      uploadSession,
-      }},
-    ];
-
-    for (let i = 0; i < completelyMatched.length; i += COMPLETE_CHUNK) {
-      chunks.push({ ...base, chunkType: "complete", chunkIndex: Math.floor(i / COMPLETE_CHUNK), data: completelyMatched.slice(i, i + COMPLETE_CHUNK) });
-    }
-    for (let i = 0; i < partiallyMatched.length; i += PARTIAL_CHUNK) {
-      chunks.push({ ...base, chunkType: "partial", chunkIndex: Math.floor(i / PARTIAL_CHUNK), data: partiallyMatched.slice(i, i + PARTIAL_CHUNK) });
-    }
-    for (let i = 0; i < notMatched.length; i += NOT_MATCHED_CHUNK) {
-      chunks.push({ ...base, chunkType: "notMatched", chunkIndex: Math.floor(i / NOT_MATCHED_CHUNK), data: notMatched.slice(i, i + NOT_MATCHED_CHUNK) });
-    }
-    if (duplicates.length > 0) {
-      chunks.push({ ...base, chunkType: "duplicates", chunkIndex: 0, data: duplicates });
-    }
-
-    // Use upsert so re-uploading the same session (e.g. after server restart) never
-    // throws E11000. The filter includes uploadSession so different sessions don't conflict.
-    const ops = chunks.map((chunk) => ({
-      updateOne: {
-        filter: {
-          campaignId: chunk.campaignId,
-          dataType:   chunk.dataType,
-          uploadSession: chunk.uploadSession,
-          chunkType:  chunk.chunkType,
-          chunkIndex: chunk.chunkIndex,
-        },
-        update: { $set: chunk },
-        upsert: true,
-      },
-    }));
-    await ClientMatchResult.bulkWrite(ops, { ordered: false });
-    console.log(`[MatchResult] Persisted ${chunks.length} chunks for session ${uploadSession}`);
-
-    // Backfill uploadHistory into the in-memory cache so future fast-path requests
-    // return history metadata from memory — no extra DB query needed.
-    const history = await loadUploadHistory(campaignId, uploadSession);
-    const existing = _matchResultCache.get(String(campaignId));
-    if (existing) {
-      _matchResultCache.set(String(campaignId), { ...existing, uploadHistory: history });
-    }
-  } catch (err) {
-    console.error("[MatchResult] Failed to persist to DB:", err.message);
-    throw err; // re-throw so callers can handle (non-fatal in job context, logged in slow path)
-  }
-};
-
-/**
- * Load the latest upload session's match results from MongoDB.
- * Returns null if nothing is persisted yet.
- */
-const loadMatchResultFromDb = async (campaignId) => {
-  // Find the most recent session (uses chunkType index — fast)
-  const latest = await ClientMatchResult.findOne({ campaignId, dataType: "Client", chunkType: "meta" })
-    .sort({ uploadSession: -1 }).select("uploadSession").lean();
-  if (!latest) return null;
-
-  const session = latest.uploadSession;
-
-  // Fetch data chunks + history in one parallel round-trip.
-  // historySessionsDistinct: sessions OTHER than current that have real data chunks.
-  // historyMetaDocs: meta counts for those sessions — both fetched in parallel.
-  const [completeDocs, partialDocs, notMatchedDocs, duplicateDocs, historySessionsDistinct] =
-    await Promise.all([
-      ClientMatchResult.find({ campaignId, dataType: "Client", uploadSession: session, chunkType: "complete" })
-        .sort({ chunkIndex: 1 }).select("data").lean(),
-      ClientMatchResult.find({ campaignId, dataType: "Client", uploadSession: session, chunkType: "partial" })
-        .sort({ chunkIndex: 1 }).select("data").lean(),
-      ClientMatchResult.find({ campaignId, dataType: "Client", uploadSession: session, chunkType: "notMatched" })
-        .sort({ chunkIndex: 1 }).select("data").lean(),
-      ClientMatchResult.find({ campaignId, dataType: "Client", uploadSession: session, chunkType: "duplicates" })
-        .sort({ chunkIndex: 1 }).select("data").lean(),
-      ClientMatchResult.distinct("uploadSession", {
-        campaignId, dataType: "Client",
-        chunkType: { $in: ["complete", "partial", "notMatched"] },
-        uploadSession: { $ne: session },
-      }),
-    ]);
-
-  if (!completeDocs.length && !partialDocs.length && !notMatchedDocs.length) return null;
-
-  // Fetch meta counts for history sessions — parallel with nothing else to wait on
-  let uploadHistory = [];
-  if (historySessionsDistinct.length) {
-    const metaDocs = await ClientMatchResult.find({
-      campaignId, dataType: "Client",
-      chunkType: "meta",
-      uploadSession: { $in: historySessionsDistinct },
-    }).sort({ uploadSession: -1 }).select("uploadSession data").lean();
-
-    const metaBySession = Object.fromEntries(metaDocs.map((d) => [d.uploadSession, d]));
-    uploadHistory = historySessionsDistinct
-      .sort((a, b) => (b > a ? 1 : -1))
-      .map((s) => {
-        const d = metaBySession[s];
-        return {
-          uploadSession:   s,
-          uploadedAt:      s,
-          completeCount:   d?.data?.completeCount   ?? 0,
-          partialCount:    d?.data?.partialCount    ?? 0,
-          notMatchedCount: d?.data?.notMatchedCount ?? 0,
-          duplicatesCount: d?.data?.duplicatesCount ?? 0,
-        };
-      });
-  }
-
-  return {
-    uploadSession: session,
-    uploadHistory,
-    completelyMatched: completeDocs.flatMap((d) => d.data),
-    partiallyMatched:  partialDocs.flatMap((d) => d.data),
-    notMatched:        notMatchedDocs.flatMap((d) => d.data),
-    duplicates:        duplicateDocs.flatMap((d) => d.data),
-  };
-};
-
-/**
- * Load all upload sessions' metadata (counts + uploadSession key) for a campaign.
- * Returns array sorted newest-first, excluding the current session.
- */
-const loadUploadHistory = async (campaignId, currentSession) => {
-  // Only list sessions that have actual data chunks — meta-only sessions
-  // (e.g. orphaned from a crash or old deleteMany) would 404 when clicked.
-  const dataSessions = await ClientMatchResult.distinct("uploadSession", {
-    campaignId,
-    dataType: "Client",
-    chunkType: { $in: ["complete", "partial", "notMatched"] },
-    ...(currentSession ? { uploadSession: { $ne: currentSession } } : {}),
-  });
-
-  if (!dataSessions.length) return [];
-
-  const metaDocs = await ClientMatchResult.find({
-    campaignId,
-    dataType: "Client",
-    chunkType: "meta",
-    uploadSession: { $in: dataSessions },
-  }).sort({ uploadSession: -1 }).select("uploadSession data").lean();
-
-  // For sessions where meta chunk is missing, fall back to a minimal entry
-  const metaBySession = Object.fromEntries(metaDocs.map((d) => [d.uploadSession, d]));
-  return dataSessions
-    .sort((a, b) => (b > a ? 1 : -1)) // newest first
-    .map((session) => {
-      const d = metaBySession[session];
-      return {
-        uploadSession:   session,
-        uploadedAt:      session,
-        completeCount:   d?.data?.completeCount   ?? 0,
-        partialCount:    d?.data?.partialCount    ?? 0,
-        notMatchedCount: d?.data?.notMatchedCount ?? 0,
-        duplicatesCount: d?.data?.duplicatesCount ?? 0,
-      };
+    _matchResultCache.set(String(campaignId), {
+      ...existing,
+      uploadHistory: history,
     });
+  }
 };
 
 /**
@@ -1472,10 +1326,10 @@ const loadUploadHistoryFromEntry = async (campaignId, currentSession) => {
     .lean();
 
   return metaDocs.map((d) => ({
-    uploadSession:   d.uploadSession,
-    uploadedAt:      d.uploadSession,
-    completeCount:   d.counts?.completeCount   ?? 0,
-    partialCount:    d.counts?.partialCount    ?? 0,
+    uploadSession: d.uploadSession,
+    uploadedAt: d.uploadSession,
+    completeCount: d.counts?.completeCount ?? 0,
+    partialCount: d.counts?.partialCount ?? 0,
     notMatchedCount: d.counts?.notMatchedCount ?? 0,
     duplicatesCount: d.counts?.duplicatesCount ?? 0,
   }));
@@ -1483,7 +1337,7 @@ const loadUploadHistoryFromEntry = async (campaignId, currentSession) => {
 
 /**
  * Load the latest upload session from the new flat ClientMatchEntry collection.
- * Returns null when no data exists (caller should fall back to loadMatchResultFromDb).
+ * Returns null when no data exists in ClientMatchEntry.
  * Returns { tooLarge: true, counts, uploadHistory } for very large datasets.
  */
 const loadMatchResultFromEntry = async (campaignId) => {
@@ -1493,50 +1347,141 @@ const loadMatchResultFromEntry = async (campaignId) => {
     matchType: "meta",
   })
     .sort({ uploadSession: -1 })
+    .select("uploadSession counts")
     .lean();
 
   if (!meta) return null;
 
   const { uploadSession, counts = {} } = meta;
-  const uploadHistory = await loadUploadHistoryFromEntry(campaignId, uploadSession);
 
+  // Check tooLarge BEFORE running any more queries — avoids loading GBs of data
   if (isResultTooLarge(counts)) {
+    const uploadHistory = await loadUploadHistoryFromEntry(
+      campaignId,
+      uploadSession
+    );
     return {
       tooLarge: true,
       uploadSession,
-      completelyMatchedCount: counts.completeCount   ?? 0,
-      partiallyMatchedCount:  counts.partialCount    ?? 0,
-      notMatchedCount:        counts.notMatchedCount ?? 0,
-      duplicatesCount:        counts.duplicatesCount ?? 0,
+      completelyMatchedCount: counts.completeCount ?? 0,
+      partiallyMatchedCount: counts.partialCount ?? 0,
+      notMatchedCount: counts.notMatchedCount ?? 0,
+      duplicatesCount: counts.duplicatesCount ?? 0,
       uploadHistory,
     };
   }
 
-  const [completeDocs, partialDocs, notMatchedDocs, duplicateDocs] = await Promise.all([
-    ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession, matchType: "complete" }).lean(),
-    ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession, matchType: "partial" }).lean(),
-    ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession, matchType: "notMatched" }).lean(),
-    ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession, matchType: "duplicate" }).lean(),
+  // Run all queries in a single parallel round-trip.
+  // Complete: limit to MATCH_PAGE_SIZE+1 for display; if there are more, run a second
+  //   lightweight query (companyId + meta only) so the frontend can build the full
+  //   companyIds list for the filter without loading complete docs with all fields.
+  // Partial / notMatched / duplicates: limit to MATCH_PAGE_SIZE+1 to detect hasMore.
+  const PG = MATCH_PAGE_SIZE;
+  const needAllComplete = (counts.completeCount ?? 0) > PG;
+  const completeBase = {
+    campaignId,
+    dataType: "Client",
+    uploadSession,
+    matchType: "complete",
+  };
+
+  const [
+    uploadHistory,
+    completeDocs,
+    allCompleteRaw,
+    partialRaw,
+    notMatchedRaw,
+    duplicateRaw,
+  ] = await Promise.all([
+    loadUploadHistoryFromEntry(campaignId, uploadSession),
+    ClientMatchEntry.find(completeBase)
+      .select(
+        "companyId companyName matchedWith inputName companySpecificId segment"
+      )
+      .limit(PG + 1)
+      .lean(),
+    // Only when completeCount > page size — fetches minimal fields for filter/companyMetaMap
+    needAllComplete
+      ? ClientMatchEntry.find(completeBase)
+          .select("companyId companyName companySpecificId segment")
+          .lean()
+      : Promise.resolve(null),
+    ClientMatchEntry.find({
+      campaignId,
+      dataType: "Client",
+      uploadSession,
+      matchType: "partial",
+    })
+      .select("inputName companySpecificId segment suggestions")
+      .limit(PG + 1)
+      .lean(),
+    ClientMatchEntry.find({
+      campaignId,
+      dataType: "Client",
+      uploadSession,
+      matchType: "notMatched",
+    })
+      .select("inputName")
+      .limit(PG + 1)
+      .lean(),
+    ClientMatchEntry.find({
+      campaignId,
+      dataType: "Client",
+      uploadSession,
+      matchType: "duplicate",
+    })
+      .select("inputName")
+      .limit(PG + 1)
+      .lean(),
   ]);
+
+  const completeHasMore = completeDocs.length > PG;
+  const partialHasMore = partialRaw.length > PG;
+  const notMatchedHasMore = notMatchedRaw.length > PG;
+  const duplicatesHasMore = duplicateRaw.length > PG;
+
+  const mapCompleteDoc = (d) => ({
+    _id: d.companyId,
+    Company_Name: d.companyName,
+    matchedWith: d.matchedWith || d.inputName,
+    ...(d.companySpecificId ? { companySpecificId: d.companySpecificId } : {}),
+    ...(d.segment ? { segment: d.segment } : {}),
+  });
 
   return {
     uploadSession,
     uploadHistory,
-    completelyMatched: completeDocs.map((d) => ({
-      _id:         d.companyId,
-      Company_Name: d.companyName,
-      matchedWith:  d.matchedWith || d.inputName,
-      ...(d.companySpecificId ? { companySpecificId: d.companySpecificId } : {}),
-      ...(d.segment           ? { segment: d.segment }                     : {}),
-    })),
-    partiallyMatched: partialDocs.map((d) => ({
-      inputName:   d.inputName,
+    // Accurate totals from meta doc (not array lengths)
+    completeCount: counts.completeCount ?? 0,
+    partialCount: counts.partialCount ?? 0,
+    notMatchedCount: counts.notMatchedCount ?? 0,
+    duplicatesCount: counts.duplicatesCount ?? 0,
+    completeHasMore,
+    partialHasMore,
+    notMatchedHasMore,
+    duplicatesHasMore,
+    completelyMatched: completeDocs.slice(0, PG).map(mapCompleteDoc),
+    // Full complete list (minimal fields) for frontend filter — null when fits in first page
+    allCompleteEntries: allCompleteRaw
+      ? allCompleteRaw.map((d) => ({
+          _id: d.companyId,
+          Company_Name: d.companyName,
+          ...(d.companySpecificId
+            ? { companySpecificId: d.companySpecificId }
+            : {}),
+          ...(d.segment ? { segment: d.segment } : {}),
+        }))
+      : null,
+    partiallyMatched: partialRaw.slice(0, PG).map((d) => ({
+      inputName: d.inputName,
       suggestions: d.suggestions || [],
-      ...(d.companySpecificId ? { companySpecificId: d.companySpecificId } : {}),
-      ...(d.segment           ? { segment: d.segment }                     : {}),
+      ...(d.companySpecificId
+        ? { companySpecificId: d.companySpecificId }
+        : {}),
+      ...(d.segment ? { segment: d.segment } : {}),
     })),
-    notMatched: notMatchedDocs.map((d) => d.inputName),
-    duplicates: duplicateDocs.map((d) => d.inputName),
+    notMatched: notMatchedRaw.slice(0, PG).map((d) => d.inputName),
+    duplicates: duplicateRaw.slice(0, PG).map((d) => d.inputName),
   };
 };
 
@@ -1579,12 +1524,18 @@ const simplifyName = (str) => {
  */
 // Max candidates checked per input — prevents O(n²) for common words like "india/tech"
 const MAX_CANDIDATES = 300;
+// For large uploads, cap suggestions per partial-match entry at 15.
+// Keeps DB storage and browser payload small when processing lakh-scale data.
+const LARGE_DATASET_SUGGESTIONS = 15;
+const LARGE_DATASET_THRESHOLD = 5_000; // rows — above this use the small cap
 // Returns the max suggestions to include per partial-match entry.
-// Scales inversely with dataset size to keep total response under ~25MB.
-// Budget formula: assumes worst-case 50% partial matches, ~100 bytes/suggestion.
-// suggestionsLimit = 500_000 / totalNames  (min 10, max MAX_CANDIDATES)
-const getSuggestionsLimit = (totalNames) =>
-  Math.min(MAX_CANDIDATES, Math.max(10, Math.floor(500_000 / totalNames)));
+const getSuggestionsLimit = (totalNames) => {
+  if (totalNames >= LARGE_DATASET_THRESHOLD) return LARGE_DATASET_SUGGESTIONS;
+  return Math.min(
+    MAX_CANDIDATES,
+    Math.max(10, Math.floor(500_000 / totalNames))
+  );
+};
 
 async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
   // Invalidate any stale cached results for this campaign
@@ -1606,12 +1557,31 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
       return "";
     };
     const parseRow = (row) => {
-      const name = pickVal(row, ["CompanyName", "Company_Name", "company_name", "company", "companyNames"]);
+      const name = pickVal(row, [
+        "CompanyName",
+        "Company_Name",
+        "company_name",
+        "company",
+        "companyNames",
+      ]);
       if (!name) return null;
       return {
         name,
-        companySpecificId: pickVal(row, ["CompanySpecificId", "Company_Specific_Id", "company_specific_id", "companyspecificid", "SpecificId", "Specific_Id"]),
-        segment:           pickVal(row, ["Segment", "segment", "Segment_Name", "SegmentName", "segment_name"]),
+        companySpecificId: pickVal(row, [
+          "CompanySpecificId",
+          "Company_Specific_Id",
+          "company_specific_id",
+          "companyspecificid",
+          "SpecificId",
+          "Specific_Id",
+        ]),
+        segment: pickVal(row, [
+          "Segment",
+          "segment",
+          "Segment_Name",
+          "SegmentName",
+          "segment_name",
+        ]),
       };
     };
 
@@ -1625,19 +1595,38 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
     };
 
     if (ext.endsWith(".xlsx") || ext.endsWith(".xls")) {
-      const workbook = XLSX.readFile(filePath, { cellText: false, cellDates: false, raw: false }); // skip w/h/r fields → ~3-5x less memory for large files
-      const sheet = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+      const workbook = XLSX.readFile(filePath, {
+        cellText: false,
+        cellDates: false,
+        raw: false,
+      }); // skip w/h/r fields → ~3-5x less memory for large files
+      const sheet = XLSX.utils.sheet_to_json(
+        workbook.Sheets[workbook.SheetNames[0]]
+      );
       companyRows = filterAndCount(sheet.map(parseRow));
     } else {
       const rows = await csv().fromFile(filePath);
       companyRows = filterAndCount(rows.map(parseRow));
     }
   } finally {
-    try { fs.unlinkSync(filePath); } catch { /* already gone */ }
+    try {
+      fs.unlinkSync(filePath);
+    } catch {
+      /* already gone */
+    }
   }
 
   if (!companyRows.length) {
     failMatchJob(jobId, "No valid company names found in the file");
+    return;
+  }
+
+  const MAX_UPLOAD_ROWS = 50_000;
+  if (companyRows.length > MAX_UPLOAD_ROWS) {
+    failMatchJob(
+      jobId,
+      `Upload limit exceeded: your file has ${companyRows.length.toLocaleString()} rows. Maximum allowed is ${MAX_UPLOAD_ROWS.toLocaleString()}. Please split the file into batches of up to 50,000 rows.`
+    );
     return;
   }
 
@@ -1647,7 +1636,7 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
   // Deduplicate: first occurrence of each name → matchRows; extras → duplicates.
   // e.g. "ABC Corp" × 3  →  1 in matchRows, 2 in duplicates.
   const seenNameKeys = new Set();
-  const matchRows  = [];
+  const matchRows = [];
   const duplicates = []; // extra occurrences (strings) shown in Duplicates tab
   for (const row of companyRows) {
     const key = row.name.toLowerCase();
@@ -1676,17 +1665,17 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
   await yieldControl();
 
   // Stage 3 — 6-step pipeline in batches (yield every 500 rows for SSE flush)
-  const BATCH_SIZE   = 500;
+  const BATCH_SIZE = 500;
   const totalBatches = Math.ceil(matchRows.length / BATCH_SIZE);
   // Use a Map across all batches so cross-batch duplicate DB companies are caught too.
-  const completeMap   = new Map(); // _id string → entry
-  const partiallyMatched  = [];
-  const notMatchedRows    = [];
-  const sameCompanyDups   = []; // names whose DB company was already matched by another name
+  const completeMap = new Map(); // _id string → entry
+  const partiallyMatched = [];
+  const notMatchedRows = [];
+  const sameCompanyDups = []; // names whose DB company was already matched by another name
 
   for (let b = 0; b < totalBatches; b++) {
     const batch = matchRows.slice(b * BATCH_SIZE, (b + 1) * BATCH_SIZE);
-    const done  = Math.min((b + 1) * BATCH_SIZE, matchRows.length);
+    const done = Math.min((b + 1) * BATCH_SIZE, matchRows.length);
     updateMatchJob(
       jobId,
       `Matching companies... ${done.toLocaleString()} / ${matchRows.length.toLocaleString()}`,
@@ -1694,8 +1683,12 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
     );
     await yieldControl();
 
-    const { completelyMatched: bc, partiallyMatched: bp, notMatched: bn, sameCompanyDuplicates: bsd } =
-      matchBatch(batch, dbIndex, getSuggestionsLimit, MAX_CANDIDATES);
+    const {
+      completelyMatched: bc,
+      partiallyMatched: bp,
+      notMatched: bn,
+      sameCompanyDuplicates: bsd,
+    } = matchBatch(batch, dbIndex, getSuggestionsLimit, MAX_CANDIDATES);
 
     // Merge bc into completeMap — batch-level dedup already done; cross-batch dedup here
     for (const entry of bc) {
@@ -1741,8 +1734,8 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
   const allDuplicates = [...duplicates, ...sameCompanyDups];
 
   const counts = {
-    completeCount:   completelyMatched.length,
-    partialCount:    partiallyMatched.length,
+    completeCount: completelyMatched.length,
+    partialCount: partiallyMatched.length,
     notMatchedCount: notMatched.length,
     duplicatesCount: allDuplicates.length,
   };
@@ -1752,8 +1745,11 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
   // the DB persist fails. persistToEntryCollection will then backfill uploadHistory.
   if (!tooLarge) {
     setCachedMatchResult(campaignId, {
-      completelyMatched, partiallyMatched, notMatched,
-      duplicates: allDuplicates, uploadSession,
+      completelyMatched,
+      partiallyMatched,
+      notMatched,
+      duplicates: allDuplicates,
+      uploadSession,
     });
   }
 
@@ -1761,8 +1757,12 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
   updateMatchJob(jobId, "Saving to database...", 97);
   try {
     await persistToEntryCollection(campaignId, {
-      completelyMatched, partiallyMatched, notMatched,
-      duplicates: allDuplicates, uploadSession, counts,
+      completelyMatched,
+      partiallyMatched,
+      notMatched,
+      duplicates: allDuplicates,
+      uploadSession,
+      counts,
     });
   } catch (persistErr) {
     // Non-fatal: data is already in memory cache (for non-tooLarge)
@@ -1775,9 +1775,9 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
       tooLarge: true,
       uploadSession,
       completelyMatchedCount: counts.completeCount,
-      partiallyMatchedCount:  counts.partialCount,
-      notMatchedCount:        counts.notMatchedCount,
-      duplicatesCount:        counts.duplicatesCount,
+      partiallyMatchedCount: counts.partialCount,
+      notMatchedCount: counts.notMatchedCount,
+      duplicatesCount: counts.duplicatesCount,
       uploadHistory: [],
     });
   }
@@ -1885,7 +1885,7 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
       datatype = "Client",
       companyIds = [],
       companyMetaMap = {},
-      filterId,          // optional — if provided, update existing record instead of creating a new one
+      filterId, // optional — if provided, update existing record instead of creating a new one
     } = req.body;
 
     if (!campaignId) {
@@ -2052,10 +2052,14 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
     let companyNamesUsed = [];
     if (companyIds.length > 0) {
       const companiesUsed = await Company.find(
-        { _id: { $in: companyIds.map((id) => new mongoose.Types.ObjectId(id)) } },
+        {
+          _id: { $in: companyIds.map((id) => new mongoose.Types.ObjectId(id)) },
+        },
         { Company_Name: 1 }
       ).lean();
-      companyNamesUsed = companiesUsed.map((c) => c.Company_Name).filter(Boolean);
+      companyNamesUsed = companiesUsed
+        .map((c) => c.Company_Name)
+        .filter(Boolean);
     }
 
     let campaignFilter;
@@ -2084,7 +2088,9 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
     }
 
     if (!filterId) {
-      const lastFilter = await CampaignFilter.findOne({ campaignId }).sort({ revisionNo: -1 });
+      const lastFilter = await CampaignFilter.findOne({ campaignId }).sort({
+        revisionNo: -1,
+      });
       revisionNo = lastFilter ? lastFilter.revisionNo + 1 : 1;
       listName = `List${revisionNo}`;
       campaignFilter = await CampaignFilter.create({
@@ -2102,7 +2108,7 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
     }
 
     revisionNo = campaignFilter.revisionNo;
-    listName   = campaignFilter.listName;
+    listName = campaignFilter.listName;
 
     return sendResponse(
       res,
@@ -2226,7 +2232,12 @@ const assignCallingDataToCampaign = asyncHandler(async (req, res, next) => {
 const assignCallingDataToCampaignClientSuggested = asyncHandler(
   async (req, res, next) => {
     try {
-      const { campaignId, uploadedBy, dataSourceType = "Client", filterId } = req.body;
+      const {
+        campaignId,
+        uploadedBy,
+        dataSourceType = "Client",
+        filterId,
+      } = req.body;
       if (!campaignId || !uploadedBy) {
         return sendError(next, "Required fields missing", 400);
       }
@@ -2678,12 +2689,16 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
     const { campaignId } = req.params;
     if (!campaignId) return sendError(next, "Campaign ID is required", 400);
 
-    // Fire the approvedIds DB query and check memory cache simultaneously.
-    // If cache hits, latestDocPromise resolves in parallel — no serial wait.
-    const latestDocPromise = ClientCompanyList.findOne({ campaignId, dataType: "Client" })
+    // Fire the approvedIds DB query immediately so it runs in parallel with
+    // whatever path (cache / DB / slow) we end up taking below.
+    const latestDocPromise = ClientCompanyList.findOne({
+      campaignId,
+      dataType: "Client",
+    })
       .sort({ updatedAt: -1 })
       .select("approvedIds rejectedIds")
-      .lean();
+      .lean()
+      .catch(() => null); // never let this reject the whole handler
 
     // Helper: build response payload. Uses uploadHistory from the result object
     // when already cached — avoids any extra DB query on the fast path.
@@ -2692,30 +2707,40 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
       if (result.tooLarge) {
         const latestDoc = await latestDocPromise;
         const approvedIds = (latestDoc?.approvedIds || []).map((e) => ({
-          _id: String(e.companyId), Company_Name: e.Company_Name, inputName: e.inputName,
+          _id: String(e.companyId),
+          Company_Name: e.Company_Name,
+          inputName: e.inputName,
         }));
         const rejectedIds = (latestDoc?.rejectedIds || []).map((e) => ({
-          _id: String(e.companyId), Company_Name: e.Company_Name, inputName: e.inputName,
+          _id: String(e.companyId),
+          Company_Name: e.Company_Name,
+          inputName: e.inputName,
         }));
         return {
           tooLarge: true,
-          completelyMatchedCount: result.completelyMatchedCount ?? result.completeCount ?? 0,
-          partiallyMatchedCount:  result.partiallyMatchedCount  ?? result.partialCount  ?? 0,
-          notMatchedCount:        result.notMatchedCount ?? 0,
-          duplicatesCount:        result.duplicatesCount ?? 0,
+          completelyMatchedCount:
+            result.completelyMatchedCount ?? result.completeCount ?? 0,
+          partiallyMatchedCount:
+            result.partiallyMatchedCount ?? result.partialCount ?? 0,
+          notMatchedCount: result.notMatchedCount ?? 0,
+          duplicatesCount: result.duplicatesCount ?? 0,
           approvedIds,
           rejectedIds,
-          uploadSession:  result.uploadSession || null,
-          uploadHistory:  result.uploadHistory || [],
+          uploadSession: result.uploadSession || null,
+          uploadHistory: result.uploadHistory || [],
         };
       }
 
       const latestDoc = await latestDocPromise;
       const approvedIds = (latestDoc?.approvedIds || []).map((e) => ({
-        _id: String(e.companyId), Company_Name: e.Company_Name, inputName: e.inputName,
+        _id: String(e.companyId),
+        Company_Name: e.Company_Name,
+        inputName: e.inputName,
       }));
       const rejectedIds = (latestDoc?.rejectedIds || []).map((e) => ({
-        _id: String(e.companyId), Company_Name: e.Company_Name, inputName: e.inputName,
+        _id: String(e.companyId),
+        Company_Name: e.Company_Name,
+        inputName: e.inputName,
       }));
       // uploadHistory is already on the result when loaded from DB or after persist backfill.
       // Only fall back to a DB query when it's genuinely missing (rare cold start).
@@ -2724,40 +2749,114 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
         history = result.uploadHistory;
       } else if (result.uploadSession) {
         // Try new flat collection first; fall back to old chunked collection for legacy data
-        history = await loadUploadHistoryFromEntry(campaignId, result.uploadSession);
-        if (!history.length) history = await loadUploadHistory(campaignId, result.uploadSession);
+        history = await loadUploadHistoryFromEntry(
+          campaignId,
+          result.uploadSession
+        );
       } else {
         history = [];
       }
+
+      const allComplete = result.completelyMatched || [];
+      const partial = result.partiallyMatched || [];
+      const notMatch = result.notMatched || [];
+      const dups = result.duplicates || [];
+
+      // Prefer explicit counts from meta doc (DB path); fall back to array length (slow path / old cache)
+      const completeCount = result.completeCount ?? allComplete.length;
+      const partialCount = result.partialCount ?? partial.length;
+      const notMatchedCount = result.notMatchedCount ?? notMatch.length;
+      const duplicatesCount = result.duplicatesCount ?? dups.length;
+
+      // hasMore: use persisted flag (DB path) or detect by length (slow path / old cache)
+      const completeHasMore =
+        result.completeHasMore ?? allComplete.length > MATCH_PAGE_SIZE;
+      const partialHasMore =
+        result.partialHasMore ?? partial.length > MATCH_PAGE_SIZE;
+      const notMatchedHasMore =
+        result.notMatchedHasMore ?? notMatch.length > MATCH_PAGE_SIZE;
+      const duplicatesHasMore =
+        result.duplicatesHasMore ?? dups.length > MATCH_PAGE_SIZE;
+
+      // allCompleteEntries: full list with minimal fields for frontend filter/companyMetaMap.
+      // DB path: result.allCompleteEntries is already computed (null when fits in first page).
+      // Cache path: result.allCompleteEntries is undefined — derive from full cached array.
+      let allCompleteEntries;
+      if (result.allCompleteEntries !== undefined) {
+        // DB path — already set (may be null when completeCount <= MATCH_PAGE_SIZE)
+        allCompleteEntries = result.allCompleteEntries;
+      } else if (completeHasMore) {
+        // Cache path with full array — strip heavy fields for the filter payload
+        allCompleteEntries = allComplete.map((e) => ({
+          _id: e._id,
+          Company_Name: e.Company_Name,
+          ...(e.companySpecificId
+            ? { companySpecificId: e.companySpecificId }
+            : {}),
+          ...(e.segment ? { segment: e.segment } : {}),
+        }));
+      } else {
+        allCompleteEntries = null; // fits in first page — frontend uses completelyMatched directly
+      }
+
       return {
-        completelyMatched: result.completelyMatched,
-        partiallyMatched:  result.partiallyMatched,
-        notMatched:        result.notMatched,
-        duplicates:        result.duplicates || [],
-        approvedIds,
-        rejectedIds,
+        // ── Meta — always at top ──────────────────────────────────────────────
+        completeCount,
+        partialCount,
+        notMatchedCount,
+        duplicatesCount,
+        completeHasMore,
+        partialHasMore,
+        notMatchedHasMore,
+        duplicatesHasMore,
         uploadSession: result.uploadSession || null,
         uploadHistory: history,
+        approvedIds,
+        rejectedIds,
+        // ── First page of data ────────────────────────────────────────────────
+        completelyMatched: allComplete.slice(0, MATCH_PAGE_SIZE),
+        allCompleteEntries, // full list for filter (or null)
+        partiallyMatched: partial.slice(0, MATCH_PAGE_SIZE),
+        notMatched: notMatch.slice(0, MATCH_PAGE_SIZE),
+        duplicates: dups.slice(0, MATCH_PAGE_SIZE),
       };
     };
 
     // ── Fast path: return from in-memory cache ────────────────────────────────
     const cached = getCachedMatchResult(campaignId);
     if (cached) {
-      return sendResponse(res, 200, "Client match data fetched", await buildPayload(cached));
+      return sendResponse(
+        res,
+        200,
+        "Client match data fetched",
+        await buildPayload(cached)
+      );
     }
 
     // ── DB path: cache miss — try new flat collection first, then old chunks ──
-    const dbResult = await loadMatchResultFromEntry(campaignId) || await loadMatchResultFromDb(campaignId);
+    // latestDocPromise already started above — loadMatchResultFromEntry runs in parallel with it.
+    const dbResult = await loadMatchResultFromEntry(campaignId);
     if (dbResult) {
-      console.log(`[getClientMatchData] Loaded from DB for campaign ${campaignId}`);
-      if (!dbResult.tooLarge) setCachedMatchResult(campaignId, dbResult); // warm cache (skip for tooLarge — arrays too big)
-      return sendResponse(res, 200, "Client match data fetched", await buildPayload(dbResult));
+      console.log(
+        `[getClientMatchData] Loaded from DB for campaign ${campaignId}`
+      );
+      if (!dbResult.tooLarge) setCachedMatchResult(campaignId, dbResult);
+      return sendResponse(
+        res,
+        200,
+        "Client match data fetched",
+        await buildPayload(dbResult)
+      );
     }
 
     // ── Slow path: nothing persisted — read saved names and re-run matching ───
-    const docs = await ClientCompanyList.find({ campaignId, dataType: "Client" })
-      .sort({ updatedAt: -1 }).select("companyNames").lean();
+    const docs = await ClientCompanyList.find({
+      campaignId,
+      dataType: "Client",
+    })
+      .sort({ updatedAt: -1 })
+      .select("companyNames")
+      .lean();
 
     if (!docs.length || !docs.some((d) => d.companyNames?.length)) {
       return sendResponse(res, 200, "No match data found", null);
@@ -2770,21 +2869,32 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
     const duplicates = [];
     for (const name of allCompanyNames) {
       const key = name.toLowerCase();
-      if (!seenSlowKeys.has(key)) { seenSlowKeys.add(key); slowMatchRows.push({ name }); }
-      else duplicates.push(name);
+      if (!seenSlowKeys.has(key)) {
+        seenSlowKeys.add(key);
+        slowMatchRows.push({ name });
+      } else duplicates.push(name);
     }
 
     const dbIndex = await getOrBuildDbIndex();
-    const slowCompleteMap  = new Map();
+    const slowCompleteMap = new Map();
     const partiallyMatched = [];
-    const notMatchedRows   = [];
+    const notMatchedRows = [];
     const slowSameCompDups = [];
     const REMATCH_BATCH = 500;
 
     for (let i = 0; i < slowMatchRows.length; i += REMATCH_BATCH) {
       await yieldControl();
-      const { completelyMatched: bc, partiallyMatched: bp, notMatched: bn, sameCompanyDuplicates: bsd } =
-        matchBatch(slowMatchRows.slice(i, i + REMATCH_BATCH), dbIndex, getSuggestionsLimit, MAX_CANDIDATES);
+      const {
+        completelyMatched: bc,
+        partiallyMatched: bp,
+        notMatched: bn,
+        sameCompanyDuplicates: bsd,
+      } = matchBatch(
+        slowMatchRows.slice(i, i + REMATCH_BATCH),
+        dbIndex,
+        getSuggestionsLimit,
+        MAX_CANDIDATES
+      );
       for (const entry of bc) {
         const id = String(entry._id);
         if (slowCompleteMap.has(id)) slowSameCompDups.push(entry.matchedWith);
@@ -2799,23 +2909,73 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
     const allDuplicates = [...duplicates, ...slowSameCompDups];
     const uploadSession = new Date().toISOString();
 
-    setCachedMatchResult(campaignId, { completelyMatched, partiallyMatched, notMatched, duplicates: allDuplicates, uploadSession });
-
-    // Respond first (data is already in memory cache), then persist to DB so
-    // future page loads / server restarts don't need to re-run the matcher.
     const slowCounts = {
-      completeCount:   completelyMatched.length,
-      partialCount:    partiallyMatched.length,
+      completeCount: completelyMatched.length,
+      partialCount: partiallyMatched.length,
       notMatchedCount: notMatched.length,
       duplicatesCount: allDuplicates.length,
     };
-    persistToEntryCollection(campaignId, {
-      completelyMatched, partiallyMatched, notMatched,
-      duplicates: allDuplicates, uploadSession, counts: slowCounts,
-    }).catch((e) => console.error("[getClientMatchData] Background persist failed:", e.message));
+    const slowTooLarge = isResultTooLarge(slowCounts);
 
-    return sendResponse(res, 200, "Client match data fetched",
-      await buildPayload({ completelyMatched, partiallyMatched, notMatched, duplicates: allDuplicates, uploadSession })
+    if (!slowTooLarge) {
+      setCachedMatchResult(campaignId, {
+        completelyMatched,
+        partiallyMatched,
+        notMatched,
+        duplicates: allDuplicates,
+        uploadSession,
+      });
+    }
+
+    // Persist to DB in background
+    persistToEntryCollection(campaignId, {
+      completelyMatched,
+      partiallyMatched,
+      notMatched,
+      duplicates: allDuplicates,
+      uploadSession,
+      counts: slowCounts,
+    }).catch((e) =>
+      console.error(
+        "[getClientMatchData] Background persist failed:",
+        e.message
+      )
+    );
+
+    if (slowTooLarge) {
+      setCachedMatchResult(campaignId, {
+        tooLarge: true,
+        uploadSession,
+        completelyMatchedCount: slowCounts.completeCount,
+        partiallyMatchedCount: slowCounts.partialCount,
+        notMatchedCount: slowCounts.notMatchedCount,
+        duplicatesCount: slowCounts.duplicatesCount,
+        uploadHistory: [],
+      });
+      return sendResponse(
+        res,
+        200,
+        "Client match data fetched",
+        await buildPayload({
+          tooLarge: true,
+          uploadSession,
+          ...slowCounts,
+          uploadHistory: [],
+        })
+      );
+    }
+
+    return sendResponse(
+      res,
+      200,
+      "Client match data fetched",
+      await buildPayload({
+        completelyMatched,
+        partiallyMatched,
+        notMatched,
+        duplicates: allDuplicates,
+        uploadSession,
+      })
     );
   } catch (err) {
     return sendError(next, err.message, 500);
@@ -2833,7 +2993,10 @@ const getClientMatchSessionData = asyncHandler(async (req, res, next) => {
 
     // Try new flat collection first
     const entryMeta = await ClientMatchEntry.findOne({
-      campaignId, dataType: "Client", uploadSession, matchType: "meta",
+      campaignId,
+      dataType: "Client",
+      uploadSession,
+      matchType: "meta",
     }).lean();
 
     if (entryMeta) {
@@ -2842,58 +3005,91 @@ const getClientMatchSessionData = asyncHandler(async (req, res, next) => {
         return sendResponse(res, 200, "Historical session fetched", {
           uploadSession,
           tooLarge: true,
-          completelyMatchedCount: counts.completeCount   ?? 0,
-          partiallyMatchedCount:  counts.partialCount    ?? 0,
-          notMatchedCount:        counts.notMatchedCount ?? 0,
-          duplicatesCount:        counts.duplicatesCount ?? 0,
+          completelyMatchedCount: counts.completeCount ?? 0,
+          partiallyMatchedCount: counts.partialCount ?? 0,
+          notMatchedCount: counts.notMatchedCount ?? 0,
+          duplicatesCount: counts.duplicatesCount ?? 0,
         });
       }
-      const [completeDocs, partialDocs, notMatchedDocs, duplicateDocs] = await Promise.all([
-        ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession, matchType: "complete" }).lean(),
-        ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession, matchType: "partial" }).lean(),
-        ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession, matchType: "notMatched" }).lean(),
-        ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession, matchType: "duplicate" }).lean(),
+
+      const base = { campaignId, dataType: "Client", uploadSession };
+      const PG = MATCH_PAGE_SIZE;
+
+      // Partial: only inputName — no suggestions needed for history view.
+      // ClientCompanyList fetched in parallel to resolve approved/rejected status.
+      const [
+        completeDocs,
+        partialDocs,
+        notMatchedDocs,
+        duplicateDocs,
+        clientList,
+      ] = await Promise.all([
+        ClientMatchEntry.find({ ...base, matchType: "complete" })
+          .select("companyId companyName matchedWith companySpecificId segment")
+          .limit(PG + 1)
+          .lean(),
+        ClientMatchEntry.find({ ...base, matchType: "partial" })
+          .select("inputName")
+          .lean(),
+        ClientMatchEntry.find({ ...base, matchType: "notMatched" })
+          .select("inputName")
+          .limit(PG + 1)
+          .lean(),
+        ClientMatchEntry.find({ ...base, matchType: "duplicate" })
+          .select("inputName")
+          .limit(PG + 1)
+          .lean(),
+        ClientCompanyList.findOne({ campaignId, dataType: "Client" })
+          .sort({ updatedAt: -1 })
+          .select("approvedIds rejectedIds")
+          .lean(),
       ]);
+
+      // Build inputName → approved company name map and rejected set from ClientCompanyList
+      const approvedByInput = new Map();
+      const rejectedByInput = new Set();
+      for (const e of clientList?.approvedIds || []) {
+        if (e.inputName) approvedByInput.set(e.inputName, e.Company_Name || "");
+      }
+      for (const e of clientList?.rejectedIds || []) {
+        if (e.inputName) rejectedByInput.add(e.inputName);
+      }
+
       return sendResponse(res, 200, "Historical session fetched", {
         uploadSession,
-        completelyMatched: completeDocs.map((d) => ({
-          _id: d.companyId, Company_Name: d.companyName, matchedWith: d.matchedWith || d.inputName,
-          ...(d.companySpecificId ? { companySpecificId: d.companySpecificId } : {}),
-          ...(d.segment           ? { segment: d.segment }                     : {}),
+        completelyMatched: completeDocs.slice(0, PG).map((d) => ({
+          _id: d.companyId,
+          Company_Name: d.companyName,
+          matchedWith: d.matchedWith || d.inputName,
+          ...(d.companySpecificId
+            ? { companySpecificId: d.companySpecificId }
+            : {}),
+          ...(d.segment ? { segment: d.segment } : {}),
         })),
-        partiallyMatched: partialDocs.map((d) => ({
-          inputName: d.inputName, suggestions: d.suggestions || [],
-          ...(d.companySpecificId ? { companySpecificId: d.companySpecificId } : {}),
-          ...(d.segment           ? { segment: d.segment }                     : {}),
-        })),
-        notMatched: notMatchedDocs.map((d) => d.inputName),
-        duplicates: duplicateDocs.map((d)  => d.inputName),
+        completeHasMore: completeDocs.length > PG,
+        // Partial history: simplified — inputName + approval status only (no suggestions)
+        partiallyMatched: partialDocs.map((d) => {
+          const inp = d.inputName || "";
+          const approvedName = approvedByInput.get(inp);
+          const isRejected = rejectedByInput.has(inp);
+          return {
+            inputName: inp,
+            status: approvedName
+              ? "approved"
+              : isRejected
+              ? "rejected"
+              : "pending",
+            approvedCompanyName: approvedName || null,
+          };
+        }),
+        notMatched: notMatchedDocs.slice(0, PG).map((d) => d.inputName),
+        notMatchedHasMore: notMatchedDocs.length > PG,
+        duplicates: duplicateDocs.slice(0, PG).map((d) => d.inputName),
+        duplicatesHasMore: duplicateDocs.length > PG,
       });
     }
 
-    // Fall back to old chunked collection
-    const [completeDocs, partialDocs, notMatchedDocs, duplicateDocs] = await Promise.all([
-      ClientMatchResult.find({ campaignId, dataType: "Client", uploadSession, chunkType: "complete" })
-        .sort({ chunkIndex: 1 }).select("data").lean(),
-      ClientMatchResult.find({ campaignId, dataType: "Client", uploadSession, chunkType: "partial" })
-        .sort({ chunkIndex: 1 }).select("data").lean(),
-      ClientMatchResult.find({ campaignId, dataType: "Client", uploadSession, chunkType: "notMatched" })
-        .sort({ chunkIndex: 1 }).select("data").lean(),
-      ClientMatchResult.find({ campaignId, dataType: "Client", uploadSession, chunkType: "duplicates" })
-        .sort({ chunkIndex: 1 }).select("data").lean(),
-    ]);
-
-    if (!completeDocs.length && !partialDocs.length && !notMatchedDocs.length && !duplicateDocs.length) {
-      return sendError(next, "Session not found", 404);
-    }
-
-    return sendResponse(res, 200, "Historical session fetched", {
-      uploadSession,
-      completelyMatched: completeDocs.flatMap((d) => d.data),
-      partiallyMatched:  partialDocs.flatMap((d) => d.data),
-      notMatched:        notMatchedDocs.flatMap((d) => d.data),
-      duplicates:        duplicateDocs.flatMap((d) => d.data),
-    });
+    return sendError(next, "Session not found", 404);
   } catch (err) {
     return sendError(next, err.message, 500);
   }
@@ -2933,7 +3129,15 @@ const updateClientMatchAction = asyncHandler(async (req, res, next) => {
       );
       await ClientCompanyList.findOneAndUpdate(
         filter,
-        { $push: { [field]: { companyId, Company_Name: companyName, inputName: inputName || "" } } },
+        {
+          $push: {
+            [field]: {
+              companyId,
+              Company_Name: companyName,
+              inputName: inputName || "",
+            },
+          },
+        },
         sortOpt
       );
     } else {
@@ -2944,7 +3148,11 @@ const updateClientMatchAction = asyncHandler(async (req, res, next) => {
       );
     }
 
-    const updated = await ClientCompanyList.findOne(filter, "approvedIds rejectedIds", sortOpt);
+    const updated = await ClientCompanyList.findOne(
+      filter,
+      "approvedIds rejectedIds",
+      sortOpt
+    );
     return sendResponse(res, 200, "Action saved", {
       approvedCount: updated?.approvedIds?.length ?? 0,
       rejectedCount: updated?.rejectedIds?.length ?? 0,
@@ -2962,26 +3170,61 @@ const updateClientMatchAction = asyncHandler(async (req, res, next) => {
 const getClientMatchEntries = asyncHandler(async (req, res, next) => {
   try {
     const { campaignId } = req.params;
-    const { matchType = "complete", uploadSession, page = 0, limit = 100 } = req.query;
+    const {
+      matchType = "complete",
+      uploadSession,
+      page = 0,
+      limit = 100,
+    } = req.query;
     if (!campaignId) return sendError(next, "Campaign ID is required", 400);
 
     // Resolve session: use provided or fall back to latest
     let session = uploadSession;
     if (!session) {
       const meta = await ClientMatchEntry.findOne({
-        campaignId, dataType: "Client", matchType: "meta",
-      }).sort({ uploadSession: -1 }).lean();
-      if (!meta) return sendResponse(res, 200, "No data found", { entries: [], total: 0, hasMore: false });
+        campaignId,
+        dataType: "Client",
+        matchType: "meta",
+      })
+        .sort({ uploadSession: -1 })
+        .lean();
+      if (!meta)
+        return sendResponse(res, 200, "No data found", {
+          entries: [],
+          total: 0,
+          hasMore: false,
+        });
       session = meta.uploadSession;
     }
 
     const skip = parseInt(page) * Math.min(parseInt(limit), 500);
-    const lim  = Math.min(parseInt(limit), 500);
+    const lim = Math.min(parseInt(limit), 500);
+
+    const selectByType = {
+      complete: "companyId companyName matchedWith companySpecificId segment",
+      partial: "inputName companySpecificId segment suggestions",
+      notMatched: "inputName",
+      duplicate: "inputName",
+    };
+    const projection = selectByType[matchType] || "inputName";
 
     const [docs, total] = await Promise.all([
-      ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession: session, matchType })
-        .skip(skip).limit(lim + 1).lean(),
-      ClientMatchEntry.countDocuments({ campaignId, dataType: "Client", uploadSession: session, matchType }),
+      ClientMatchEntry.find({
+        campaignId,
+        dataType: "Client",
+        uploadSession: session,
+        matchType,
+      })
+        .select(projection)
+        .skip(skip)
+        .limit(lim + 1)
+        .lean(),
+      ClientMatchEntry.countDocuments({
+        campaignId,
+        dataType: "Client",
+        uploadSession: session,
+        matchType,
+      }),
     ]);
 
     const hasMore = docs.length > lim;
@@ -2990,22 +3233,31 @@ const getClientMatchEntries = asyncHandler(async (req, res, next) => {
     let entries;
     if (matchType === "complete") {
       entries = page_docs.map((d) => ({
-        _id: d.companyId, Company_Name: d.companyName, matchedWith: d.matchedWith,
-        ...(d.companySpecificId ? { companySpecificId: d.companySpecificId } : {}),
-        ...(d.segment           ? { segment: d.segment }                     : {}),
+        _id: d.companyId,
+        Company_Name: d.companyName,
+        matchedWith: d.matchedWith,
+        ...(d.companySpecificId
+          ? { companySpecificId: d.companySpecificId }
+          : {}),
+        ...(d.segment ? { segment: d.segment } : {}),
       }));
     } else if (matchType === "partial") {
       entries = page_docs.map((d) => ({
-        inputName: d.inputName, suggestions: d.suggestions || [],
-        ...(d.companySpecificId ? { companySpecificId: d.companySpecificId } : {}),
-        ...(d.segment           ? { segment: d.segment }                     : {}),
+        inputName: d.inputName,
+        suggestions: d.suggestions || [],
+        ...(d.companySpecificId
+          ? { companySpecificId: d.companySpecificId }
+          : {}),
+        ...(d.segment ? { segment: d.segment } : {}),
       }));
     } else {
       entries = page_docs.map((d) => d.inputName);
     }
 
     return sendResponse(res, 200, "Entries fetched", {
-      entries, total, hasMore,
+      entries,
+      total,
+      hasMore,
       uploadSession: session,
       page: parseInt(page),
       limit: lim,

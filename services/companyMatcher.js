@@ -80,6 +80,15 @@ const SUFFIX_SET = new Set([
   "marketing",
   "infrastructure",
   "national",
+  // Common domain TLDs — "TechCorp.com" dot is stripped to space so "com" becomes
+  // a standalone word. Adding these here makes the normalised form match "TechCorp".
+  "com",
+  "net",
+  "org",
+  "io",
+  "ai",
+  "app",
+  "in",    // .in TLD (not the preposition — stripped only when it's the sole remaining word)
 ]);
 
 const PARTIAL_THRESHOLD = 30; // min hybrid score (0–100) to include as a suggestion
