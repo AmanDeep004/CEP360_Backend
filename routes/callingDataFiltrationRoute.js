@@ -18,6 +18,7 @@ import {
   getClientMatchSessionData,
   updateClientMatchAction,
   getClientMatchEntries,
+  getCrossTab,
 } from "../controllers/callingDataFiltrationController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -92,5 +93,6 @@ router.get("/clientMatchData/:campaignId", protect, getClientMatchData);
 router.get("/clientMatchData/:campaignId/history/:uploadSession", protect, getClientMatchSessionData);
 router.get("/clientMatchEntries/:campaignId", protect, getClientMatchEntries);
 router.patch("/clientMatchData/:campaignId/action", protect, updateClientMatchAction);
+router.get("/crossTab/:campaignFilterId", protect, getCrossTab);
 
 export default router;

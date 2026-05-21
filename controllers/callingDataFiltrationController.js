@@ -3267,6 +3267,265 @@ const getClientMatchEntries = asyncHandler(async (req, res, next) => {
   }
 });
 
+// ─── Dynamic cross-tab endpoint ───────────────────────────────────────────────
+// Maps user-facing field keys → MongoDB field expressions + whether a $lookup is needed
+const CROSS_TAB_FIELD_MAP = {
+  Industry:        { expr: "$company_info.Industry",        needsLookup: true  },
+  Sub_Industry:    { expr: "$company_info.Sub_Industry",    needsLookup: true  },
+  Turnover_Range:  { expr: "$company_info.Turnover_Range",  needsLookup: true  },
+  Employees_Range: { expr: "$company_info.Employees_Range", needsLookup: true  },
+  Company_Segment: { expr: "$company_info.Company_Segment", needsLookup: true  },
+  Job_Seniority:   { expr: "$Job_Seniority",                needsLookup: false },
+  Job_Function:    { expr: "$Job_Function",                 needsLookup: false },
+  Gender:          { expr: "$Gender",                       needsLookup: false, allowedValues: ["Male", "Female"] },
+  Contact_City:    { expr: "$Contact_City",                 needsLookup: false },
+  Contact_Region:  { expr: "$Contact_Region",               needsLookup: false },
+  Contact_State:   { expr: "$Contact_State",                needsLookup: false },
+  Contact_Country: { expr: "$Contact_Country",              needsLookup: false },
+};
+
+// Wraps a field expression to always produce a string, never an object/null/array
+const toStrExpr = (fieldExpr) => ({
+  $convert: { input: fieldExpr, to: "string", onError: "Unknown", onNull: "Unknown" },
+});
+
+// Builds a $match stage filtering _addFields output to allowedValues when defined
+const buildAllowedValuesMatch = (defAndAlias) => {
+  const match = {};
+  for (const { def, alias } of defAndAlias) {
+    if (def.allowedValues?.length) match[alias] = { $in: def.allowedValues };
+  }
+  return Object.keys(match).length ? match : null;
+};
+
+/**
+ * GET /filtration/crossTab/:campaignFilterId
+ * Query: rowField=X  colField=Y  (colField can be "A+B" for combined col)
+ * Re-runs the stored filter's criteria with dynamic row/column dimensions.
+ */
+const getCrossTab = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignFilterId } = req.params;
+    const { rowField, colField } = req.query;
+
+    if (!campaignFilterId || !rowField || !colField) {
+      return sendError(
+        next,
+        "campaignFilterId, rowField and colField are required",
+        400
+      );
+    }
+
+    const rowDef = CROSS_TAB_FIELD_MAP[rowField];
+    const colKeys = colField.split("+").map((f) => f.trim());
+    const colDefs = colKeys.map((k) => CROSS_TAB_FIELD_MAP[k]);
+
+    if (!rowDef || colDefs.some((d) => !d)) {
+      return sendError(next, "Invalid rowField or colField value", 400);
+    }
+
+    const stored = await CampaignFilter.findById(campaignFilterId)
+      .select("filters exclusions companyIds")
+      .lean();
+    if (!stored) return sendError(next, "Filter not found", 404);
+
+    const preLookup = buildPreLookupMatch(
+      stored.filters || [],
+      stored.exclusions || [],
+      stored.companyIds || []
+    );
+    const postLookup = buildPostLookupMatch(
+      stored.filters || [],
+      stored.exclusions || []
+    );
+
+    const needsLookup =
+      rowDef.needsLookup || colDefs.some((d) => d.needsLookup);
+
+    const lookupStages = needsLookup
+      ? [
+          {
+            $lookup: {
+              from: "companies",
+              localField: "Company_ID",
+              foreignField: "_id",
+              as: "company_info",
+            },
+          },
+          { $unwind: { path: "$company_info", preserveNullAndEmptyArrays: true } },
+          ...(Object.keys(postLookup).length ? [{ $match: postLookup }] : []),
+        ]
+      : [];
+
+    // ── Nested (two column dimensions) ──────────────────────────────────────
+    if (colDefs.length > 1) {
+      const outerDef = colDefs[0]; // primary col picker → outer group header
+      const innerDef = colDefs[1]; // secondary col picker → inner sub-column
+
+      const allowedMatch = buildAllowedValuesMatch([
+        { def: rowDef,   alias: "_rowVal"   },
+        { def: outerDef, alias: "_outerVal" },
+        { def: innerDef, alias: "_innerVal" },
+      ]);
+
+      const pipeline = [
+        { $match: preLookup },
+        ...lookupStages,
+        {
+          $addFields: {
+            _rowVal:   toStrExpr(rowDef.expr),
+            _outerVal: toStrExpr(outerDef.expr),
+            _innerVal: toStrExpr(innerDef.expr),
+          },
+        },
+        ...(allowedMatch ? [{ $match: allowedMatch }] : []),
+        {
+          $group: {
+            _id: { row: "$_rowVal", outer: "$_outerVal", inner: "$_innerVal" },
+            count: { $sum: 1 },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            data: {
+              $push: {
+                row:   "$_id.row",
+                outer: "$_id.outer",
+                inner: "$_id.inner",
+                count: "$count",
+              },
+            },
+            totalContacts: { $sum: "$count" },
+          },
+        },
+      ];
+
+      const result = (
+        await Contact.aggregate(pipeline, { allowDiskUse: true })
+      )[0] || { data: [], totalContacts: 0 };
+      const { data, totalContacts } = result;
+
+      const rows       = [...new Set(data.map((d) => d.row))].sort();
+      const outerCols  = [...new Set(data.map((d) => d.outer))].sort();
+      const innerCols  = [...new Set(data.map((d) => d.inner))].sort();
+
+      // crossTab[row][outer][inner] = count
+      const crossTab        = {};
+      const rowTotals       = {};
+      const outerTotals     = {}; // total per outer group
+      const outerInnerTotals = {}; // total per outer+inner combo (for grand-total row)
+
+      rows.forEach((r) => {
+        crossTab[r] = {};
+        rowTotals[r] = 0;
+        outerCols.forEach((o) => {
+          crossTab[r][o] = {};
+          innerCols.forEach((i) => { crossTab[r][o][i] = 0; });
+        });
+      });
+      outerCols.forEach((o) => {
+        outerTotals[o] = 0;
+        outerInnerTotals[o] = {};
+        innerCols.forEach((i) => { outerInnerTotals[o][i] = 0; });
+      });
+
+      data.forEach(({ row, outer, inner, count }) => {
+        if (crossTab[row]?.[outer]) crossTab[row][outer][inner] = count;
+        rowTotals[row]  = (rowTotals[row]  || 0) + count;
+        outerTotals[outer] = (outerTotals[outer] || 0) + count;
+        if (outerInnerTotals[outer]) {
+          outerInnerTotals[outer][inner] = (outerInnerTotals[outer][inner] || 0) + count;
+        }
+      });
+
+      return sendResponse(res, 200, "Cross-tab generated", {
+        nested: true,
+        rows,
+        outerCols,
+        innerCols,
+        crossTab,
+        rowTotals,
+        outerTotals,
+        outerInnerTotals,
+        totalContacts,
+        rowField,
+        colField,
+      });
+    }
+
+    // ── Flat (single column dimension) ──────────────────────────────────────
+    const flatAllowedMatch = buildAllowedValuesMatch([
+      { def: rowDef,      alias: "_rowVal" },
+      { def: colDefs[0],  alias: "_colVal" },
+    ]);
+
+    const pipeline = [
+      { $match: preLookup },
+      ...lookupStages,
+      {
+        $addFields: {
+          _rowVal: toStrExpr(rowDef.expr),
+          _colVal: toStrExpr(colDefs[0].expr),
+        },
+      },
+      ...(flatAllowedMatch ? [{ $match: flatAllowedMatch }] : []),
+      {
+        $group: {
+          _id: { row: "$_rowVal", col: "$_colVal" },
+          count: { $sum: 1 },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          data: {
+            $push: { row: "$_id.row", col: "$_id.col", count: "$count" },
+          },
+          totalContacts: { $sum: "$count" },
+        },
+      },
+    ];
+
+    const result = (
+      await Contact.aggregate(pipeline, { allowDiskUse: true })
+    )[0] || { data: [], totalContacts: 0 };
+    const { data, totalContacts } = result;
+
+    const rows = [...new Set(data.map((d) => d.row))].sort();
+    const cols = [...new Set(data.map((d) => d.col))].sort();
+
+    const crossTab = {};
+    const rowTotals = {};
+    const colTotals = {};
+    rows.forEach((r) => {
+      crossTab[r] = {};
+      rowTotals[r] = 0;
+      cols.forEach((c) => { crossTab[r][c] = 0; });
+    });
+    cols.forEach((c) => { colTotals[c] = 0; });
+    data.forEach(({ row, col, count }) => {
+      crossTab[row][col] = count;
+      rowTotals[row] = (rowTotals[row] || 0) + count;
+      colTotals[col] = (colTotals[col] || 0) + count;
+    });
+
+    return sendResponse(res, 200, "Cross-tab generated", {
+      nested: false,
+      rows,
+      cols,
+      crossTab,
+      rowTotals,
+      colTotals,
+      totalContacts,
+      rowField,
+      colField,
+    });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
 export {
   callingDataFilter,
   callingDataFilterLightweight,
@@ -3285,5 +3544,6 @@ export {
   getClientMatchData,
   getClientMatchSessionData,
   updateClientMatchAction,
+  getCrossTab,
   getClientMatchEntries,
 };
