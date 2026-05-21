@@ -474,46 +474,7 @@ const callingDataFilterOld = asyncHandler(async (req, res, next) => {
           ...excludeQuery,
         },
       },
-      {
-        $addFields: {
-          normalizedIndustry: {
-            $cond: [
-              { $ifNull: ["$company_info.Industry", false] },
-              "$company_info.Industry",
-              "Unknown",
-            ],
-          },
-          normalizedSeniority: {
-            $cond: [
-              { $ifNull: ["$Job_Seniority", false] },
-              "$Job_Seniority",
-              "Unknown",
-            ],
-          },
-        },
-      },
-      {
-        $group: {
-          _id: {
-            industry: "$normalizedIndustry",
-            seniority: "$normalizedSeniority",
-          },
-          count: { $sum: 1 },
-        },
-      },
-      {
-        $group: {
-          _id: null,
-          crossTabData: {
-            $push: {
-              industry: "$_id.industry",
-              seniority: "$_id.seniority",
-              count: "$count",
-            },
-          },
-          totalContacts: { $sum: "$count" },
-        },
-      },
+      { $group: { _id: null, totalContacts: { $sum: 1 } } },
     ];
 
     const [statsResult, uniqueCompaniesCount] = await Promise.all([
@@ -542,54 +503,12 @@ const callingDataFilterOld = asyncHandler(async (req, res, next) => {
       ]),
     ]);
 
-    const stats = statsResult[0] || { crossTabData: [], totalContacts: 0 };
+    const stats = statsResult[0] || { totalContacts: 0 };
     const uniqueCompanies = uniqueCompaniesCount[0]?.uniqueCompanies || 0;
-
-    const crossTabData = stats.crossTabData || [];
-
-    const industries = [...new Set(crossTabData.map((i) => i.industry))].sort();
-    const seniorities = [
-      ...new Set(crossTabData.map((i) => i.seniority)),
-    ].sort();
-
-    const crossTabTable = {};
-    const industryTotals = {};
-    const seniorityTotals = {};
-
-    industries.forEach((ind) => {
-      crossTabTable[ind] = {};
-      industryTotals[ind] = 0;
-      seniorities.forEach((sen) => {
-        crossTabTable[ind][sen] = 0;
-      });
-    });
-
-    seniorities.forEach((sen) => {
-      seniorityTotals[sen] = 0;
-    });
-
-    crossTabData.forEach(({ industry, seniority, count }) => {
-      crossTabTable[industry][seniority] = count;
-      industryTotals[industry] += count;
-      seniorityTotals[seniority] += count;
-    });
 
     const formattedStats = {
       totalContacts: stats.totalContacts,
       uniqueCompanies,
-      crossTabulation: {
-        industries,
-        seniorities,
-        data: crossTabTable,
-        industryTotals,
-        seniorityTotals,
-      },
-      industryBreakdown: Object.entries(industryTotals)
-        .sort((a, b) => b[1] - a[1])
-        .reduce((acc, [ind, count]) => ({ ...acc, [ind]: count }), {}),
-      seniorityBreakdown: Object.entries(seniorityTotals)
-        .sort((a, b) => b[1] - a[1])
-        .reduce((acc, [sen, count]) => ({ ...acc, [sen]: count }), {}),
     };
 
     const filteredData = {
@@ -708,46 +627,7 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
           ...excludeQuery,
         },
       },
-      {
-        $addFields: {
-          normalizedIndustry: {
-            $cond: [
-              { $ifNull: ["$company_info.Industry", false] },
-              "$company_info.Industry",
-              "Unknown",
-            ],
-          },
-          normalizedSeniority: {
-            $cond: [
-              { $ifNull: ["$Job_Seniority", false] },
-              "$Job_Seniority",
-              "Unknown",
-            ],
-          },
-        },
-      },
-      {
-        $group: {
-          _id: {
-            industry: "$normalizedIndustry",
-            seniority: "$normalizedSeniority",
-          },
-          count: { $sum: 1 },
-        },
-      },
-      {
-        $group: {
-          _id: null,
-          crossTabData: {
-            $push: {
-              industry: "$_id.industry",
-              seniority: "$_id.seniority",
-              count: "$count",
-            },
-          },
-          totalContacts: { $sum: "$count" },
-        },
-      },
+      { $group: { _id: null, totalContacts: { $sum: 1 } } },
     ];
 
     // ================= EXECUTE =================
@@ -784,54 +664,13 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
       ),
     ]);
 
-    const stats = statsResult[0] || { crossTabData: [], totalContacts: 0 };
+    const stats = statsResult[0] || { totalContacts: 0 };
     const uniqueCompanies = uniqueCompaniesCount[0]?.uniqueCompanies || 0;
-
-    const crossTabData = stats.crossTabData || [];
-
-    // ================= BUILD TABLE =================
-    const industries = [...new Set(crossTabData.map((i) => i.industry))].sort();
-
-    const seniorities = [
-      ...new Set(crossTabData.map((i) => i.seniority)),
-    ].sort();
-
-    const crossTabTable = {};
-    const industryTotals = {};
-    const seniorityTotals = {};
-
-    industries.forEach((ind) => {
-      crossTabTable[ind] = {};
-      industryTotals[ind] = 0;
-
-      seniorities.forEach((sen) => {
-        crossTabTable[ind][sen] = 0;
-      });
-    });
-
-    seniorities.forEach((sen) => {
-      seniorityTotals[sen] = 0;
-    });
-
-    crossTabData.forEach(({ industry, seniority, count }) => {
-      crossTabTable[industry][seniority] = count;
-      industryTotals[industry] += count;
-      seniorityTotals[seniority] += count;
-    });
 
     // ================= FINAL FORMAT =================
     const formattedStats = {
       totalContacts: stats.totalContacts,
       uniqueCompanies,
-      crossTabulation: {
-        industries,
-        seniorities,
-        data: crossTabTable,
-        industryTotals,
-        seniorityTotals,
-      },
-      industryBreakdown: industryTotals,
-      seniorityBreakdown: seniorityTotals,
     };
 
     const filteredData = {
@@ -1723,8 +1562,12 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
       companyNames: companyNames.slice(i, i + SAVE_CHUNK),
     });
   }
-  await ClientCompanyList.deleteMany({ campaignId, dataType });
-  await ClientCompanyList.insertMany(nameChunks, { ordered: false });
+  try {
+    await ClientCompanyList.deleteMany({ campaignId, dataType });
+    await ClientCompanyList.insertMany(nameChunks, { ordered: false });
+  } catch (listErr) {
+    console.warn("[runCompanyMatchJob] ClientCompanyList persist failed:", listErr.message);
+  }
 
   // ISO timestamp used as the unique session ID for this upload
   const uploadSession = new Date().toISOString();
@@ -1920,46 +1763,7 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
       },
       // Post-lookup: filters on joined company fields (Industry, Employees_Range, etc.)
       ...(Object.keys(postLookup).length > 0 ? [{ $match: postLookup }] : []),
-      {
-        $addFields: {
-          normalizedIndustry: {
-            $cond: [
-              { $ifNull: ["$company_info.Industry", false] },
-              "$company_info.Industry",
-              "Unknown",
-            ],
-          },
-          normalizedSeniority: {
-            $cond: [
-              { $ifNull: ["$Job_Seniority", false] },
-              "$Job_Seniority",
-              "Unknown",
-            ],
-          },
-        },
-      },
-      {
-        $group: {
-          _id: {
-            industry: "$normalizedIndustry",
-            seniority: "$normalizedSeniority",
-          },
-          count: { $sum: 1 },
-        },
-      },
-      {
-        $group: {
-          _id: null,
-          crossTabData: {
-            $push: {
-              industry: "$_id.industry",
-              seniority: "$_id.seniority",
-              count: "$count",
-            },
-          },
-          totalContacts: { $sum: "$count" },
-        },
-      },
+      { $group: { _id: null, totalContacts: { $sum: 1 } } },
     ];
 
     // Parallel query for unique companies
@@ -1992,54 +1796,12 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
       ),
     ]);
 
-    const stats = statsResult[0] || { crossTabData: [], totalContacts: 0 };
+    const stats = statsResult[0] || { totalContacts: 0 };
     const uniqueCompanies = uniqueCompaniesCount[0]?.uniqueCompanies || 0;
-
-    const crossTabData = stats.crossTabData || [];
-
-    const industries = [...new Set(crossTabData.map((i) => i.industry))].sort();
-    const seniorities = [
-      ...new Set(crossTabData.map((i) => i.seniority)),
-    ].sort();
-
-    const crossTabTable = {};
-    const industryTotals = {};
-    const seniorityTotals = {};
-
-    industries.forEach((ind) => {
-      crossTabTable[ind] = {};
-      industryTotals[ind] = 0;
-      seniorities.forEach((sen) => {
-        crossTabTable[ind][sen] = 0;
-      });
-    });
-
-    seniorities.forEach((sen) => {
-      seniorityTotals[sen] = 0;
-    });
-
-    crossTabData.forEach(({ industry, seniority, count }) => {
-      crossTabTable[industry][seniority] = count;
-      industryTotals[industry] += count;
-      seniorityTotals[seniority] += count;
-    });
 
     const formattedStats = {
       totalContacts: stats.totalContacts,
       uniqueCompanies,
-      crossTabulation: {
-        industries,
-        seniorities,
-        data: crossTabTable,
-        industryTotals,
-        seniorityTotals,
-      },
-      industryBreakdown: Object.entries(industryTotals)
-        .sort((a, b) => b[1] - a[1])
-        .reduce((acc, [ind, count]) => ({ ...acc, [ind]: count }), {}),
-      seniorityBreakdown: Object.entries(seniorityTotals)
-        .sort((a, b) => b[1] - a[1])
-        .reduce((acc, [sen, count]) => ({ ...acc, [sen]: count }), {}),
     };
 
     const filteredData = {
@@ -2488,6 +2250,96 @@ const assignCallingDataToCampaignBoth = asyncHandler(async (req, res, next) => {
   }
 });
 
+// ── Helper: compute cross-tab snapshot using cf.misc.preferredFormat ──────────
+const computeCrossTabSnapshot = async (cf) => {
+  const rowFieldKey = cf.misc?.preferredFormat?.rowField || "Industry";
+  const colFieldKey = cf.misc?.preferredFormat?.colField || "Job_Seniority";
+
+  const rowDef = CROSS_TAB_FIELD_MAP[rowFieldKey];
+  const colKeys = colFieldKey.split("+").map((f) => f.trim());
+  const colDefs = colKeys.map((k) => CROSS_TAB_FIELD_MAP[k]);
+
+  // Fall back to default if saved preference has invalid keys
+  const effectiveRowDef = rowDef || CROSS_TAB_FIELD_MAP["Industry"];
+  const effectiveColDefs = colDefs.every(Boolean) ? colDefs : [CROSS_TAB_FIELD_MAP["Job_Seniority"]];
+  const effectiveRowField = rowDef ? rowFieldKey : "Industry";
+  const effectiveColField = colDefs.every(Boolean) ? colFieldKey : "Job_Seniority";
+
+  const preLookup = buildPreLookupMatch(cf.filters || [], cf.exclusions || [], cf.misc?.companyIdsUsed || []);
+  const postLookup = buildPostLookupMatch(cf.filters || [], cf.exclusions || []);
+
+  const needsLookup = effectiveRowDef.needsLookup || effectiveColDefs.some((d) => d.needsLookup);
+  const lookupStages = needsLookup
+    ? [
+        { $lookup: { from: "companies", localField: "Company_ID", foreignField: "_id", as: "company_info" } },
+        { $unwind: { path: "$company_info", preserveNullAndEmptyArrays: true } },
+        ...(Object.keys(postLookup).length ? [{ $match: postLookup }] : []),
+      ]
+    : [];
+
+  if (effectiveColDefs.length > 1) {
+    // ── Nested ──────────────────────────────────────────────────────────────
+    const outerDef = effectiveColDefs[0];
+    const innerDef = effectiveColDefs[1];
+    const allowedMatch = buildAllowedValuesMatch([
+      { def: effectiveRowDef, alias: "_rowVal" },
+      { def: outerDef, alias: "_outerVal" },
+      { def: innerDef, alias: "_innerVal" },
+    ]);
+    const pipeline = [
+      { $match: preLookup },
+      ...lookupStages,
+      { $addFields: { _rowVal: toStrExpr(effectiveRowDef.expr), _outerVal: toStrExpr(outerDef.expr), _innerVal: toStrExpr(innerDef.expr) } },
+      ...(allowedMatch ? [{ $match: allowedMatch }] : []),
+      { $group: { _id: { row: "$_rowVal", outer: "$_outerVal", inner: "$_innerVal" }, count: { $sum: 1 } } },
+      { $group: { _id: null, data: { $push: { row: "$_id.row", outer: "$_id.outer", inner: "$_id.inner", count: "$count" } }, totalContacts: { $sum: "$count" } } },
+    ];
+    const result = (await Contact.aggregate(pipeline, { allowDiskUse: true }))[0] || { data: [], totalContacts: 0 };
+    const { data, totalContacts } = result;
+    const rows = [...new Set(data.map((d) => d.row))].sort();
+    const outerCols = [...new Set(data.map((d) => d.outer))].sort();
+    const innerCols = [...new Set(data.map((d) => d.inner))].sort();
+    const crossTab = {};
+    const rowTotals = {};
+    const outerTotals = {};
+    const outerInnerTotals = {};
+    rows.forEach((r) => { crossTab[r] = {}; rowTotals[r] = 0; outerCols.forEach((o) => { crossTab[r][o] = {}; innerCols.forEach((i) => { crossTab[r][o][i] = 0; }); }); });
+    outerCols.forEach((o) => { outerTotals[o] = 0; outerInnerTotals[o] = {}; innerCols.forEach((i) => { outerInnerTotals[o][i] = 0; }); });
+    data.forEach(({ row, outer, inner, count }) => {
+      if (crossTab[row]?.[outer]) crossTab[row][outer][inner] = count;
+      rowTotals[row] = (rowTotals[row] || 0) + count;
+      outerTotals[outer] = (outerTotals[outer] || 0) + count;
+      if (outerInnerTotals[outer]) outerInnerTotals[outer][inner] = (outerInnerTotals[outer][inner] || 0) + count;
+    });
+    return { nested: true, rows, outerCols, innerCols, crossTab, rowTotals, outerTotals, outerInnerTotals, totalContacts, rowField: effectiveRowField, colField: effectiveColField };
+  }
+
+  // ── Flat ────────────────────────────────────────────────────────────────────
+  const allowedMatch = buildAllowedValuesMatch([
+    { def: effectiveRowDef, alias: "_rowVal" },
+    { def: effectiveColDefs[0], alias: "_colVal" },
+  ]);
+  const pipeline = [
+    { $match: preLookup },
+    ...lookupStages,
+    { $addFields: { _rowVal: toStrExpr(effectiveRowDef.expr), _colVal: toStrExpr(effectiveColDefs[0].expr) } },
+    ...(allowedMatch ? [{ $match: allowedMatch }] : []),
+    { $group: { _id: { row: "$_rowVal", col: "$_colVal" }, count: { $sum: 1 } } },
+    { $group: { _id: null, data: { $push: { row: "$_id.row", col: "$_id.col", count: "$count" } }, totalContacts: { $sum: "$count" } } },
+  ];
+  const result = (await Contact.aggregate(pipeline, { allowDiskUse: true }))[0] || { data: [], totalContacts: 0 };
+  const { data, totalContacts } = result;
+  const rows = [...new Set(data.map((d) => d.row))].sort();
+  const cols = [...new Set(data.map((d) => d.col))].sort();
+  const crossTab = {};
+  const rowTotals = {};
+  const colTotals = {};
+  rows.forEach((r) => { crossTab[r] = {}; rowTotals[r] = 0; cols.forEach((c) => { crossTab[r][c] = 0; }); });
+  cols.forEach((c) => { colTotals[c] = 0; });
+  data.forEach(({ row, col, count }) => { crossTab[row][col] = count; rowTotals[row] = (rowTotals[row] || 0) + count; colTotals[col] = (colTotals[col] || 0) + count; });
+  return { nested: false, rows, cols, crossTab, rowTotals, colTotals, totalContacts, rowField: effectiveRowField, colField: effectiveColField };
+};
+
 //sharable magic link
 const generateMagicLink = asyncHandler(async (req, res, next) => {
   try {
@@ -2498,16 +2350,34 @@ const generateMagicLink = asyncHandler(async (req, res, next) => {
       return sendError(next, "Campaign Filter ID is required", 400);
     }
 
+    // Always recompute cross-tab snapshot using the filter's preferred format
+    let crossTabSnapshot = null;
+    try {
+      const cf = await CampaignFilter.findById(campaignFilterId)
+        .select("filters exclusions misc")
+        .lean();
+      if (cf) {
+        crossTabSnapshot = await computeCrossTabSnapshot(cf);
+      }
+    } catch (e) {
+      console.error("[generateMagicLink CrossTab]", e.message);
+    }
+
+    // If a link already exists for this filter, update its snapshot and return it
     const existingLink = await SharedFilter.findOne({
       campaignFilterId,
       isActive: true,
     });
 
     if (existingLink) {
+      if (crossTabSnapshot) {
+        existingLink.misc = { ...(existingLink.misc || {}), crossTabSnapshot };
+        existingLink.markModified("misc");
+        await existingLink.save();
+      }
       const magicLink = `${
         process.env.FRONTEND_URL || req.get("origin")
       }/shared-stats/${existingLink.filterId}`;
-
       return sendResponse(res, 200, "Magic link already exists", {
         magicLink,
         filterId: existingLink.filterId,
@@ -2530,6 +2400,7 @@ const generateMagicLink = asyncHandler(async (req, res, next) => {
       allowedDevices: allowedDevices || 3,
       accessDevices: [],
       isActive: true,
+      misc: crossTabSnapshot ? { crossTabSnapshot } : undefined,
     });
 
     const magicLink = `${
@@ -2552,70 +2423,66 @@ const getSharedFilterStats = asyncHandler(async (req, res, next) => {
   try {
     const { filterId } = req.params;
 
+    // Single query — populate everything needed in one round-trip
     const sharedFilter = await SharedFilter.findOne({
       filterId,
       isActive: true,
     }).populate({
       path: "campaignFilterId",
-      select: "filteredData",
+      select: "filteredData filters exclusions misc",
     });
 
-    const limitedData = await SharedFilter.findOne({
-      filterId,
-      isActive: true,
-    })
-      .select("campaignFilterId expiresAt  revisionNo -_id ")
-      .populate({
-        path: "campaignFilterId",
-        select: "filteredData expiresAt ",
-      });
-
-    if (!sharedFilter) {
-      return sendError(next, "Link not found", 404);
-    }
-
-    if (new Date() > sharedFilter.expiresAt) {
-      return sendError(next, "Link expired", 410);
-    }
+    if (!sharedFilter) return sendError(next, "Link not found", 404);
+    if (new Date() > sharedFilter.expiresAt) return sendError(next, "Link expired", 410);
 
     // ===== DEVICE + IP TRACKING =====
-    const ip =
-      req.headers["x-forwarded-for"] || req.socket?.remoteAddress || req.ip;
-
+    const ip = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || req.ip;
     const userAgent = req.headers["user-agent"] || "unknown";
-
     const deviceId = `${ip}_${userAgent}`;
 
-    const existingDevice = sharedFilter.accessDevices.find(
-      (d) => d.deviceId === deviceId
-    );
-
+    const existingDevice = sharedFilter.accessDevices.find((d) => d.deviceId === deviceId);
     if (!existingDevice) {
       if (sharedFilter.accessDevices.length >= sharedFilter.allowedDevices) {
         return sendError(next, "You do not have access to open this link", 403);
       }
-
       sharedFilter.accessDevices.push({
-        deviceId,
-        ip,
-        userAgent,
+        deviceId, ip, userAgent,
         firstAccessAt: new Date(),
         lastAccessAt: new Date(),
       });
     } else {
       existingDevice.lastAccessAt = new Date();
     }
-
     sharedFilter.views += 1;
     sharedFilter.lastViewedAt = new Date();
 
+    // ===== CROSS-TAB — return cached snapshot; recompute if missing or format changed =====
+    const cf = sharedFilter.campaignFilterId;
+
+    // Use the snapshot saved at generation time — only updates when "Generate & Share Link" is clicked
+    let crossTabData = sharedFilter.misc?.crossTabSnapshot || null;
+
+    if (!crossTabData && cf) {
+      // First-time fallback: compute and cache if no snapshot exists
+      try {
+        crossTabData = await computeCrossTabSnapshot(cf);
+        sharedFilter.misc = { ...(sharedFilter.misc || {}), crossTabSnapshot: crossTabData };
+        sharedFilter.markModified("misc");
+      } catch (e) {
+        console.error("[SharedStats CrossTab]", e.message);
+      }
+    }
+
+    // Save tracking + optional cache update in one write
     await sharedFilter.save();
 
     return sendResponse(res, 200, "Success", {
-      data: limitedData,
-      // filterId: sharedFilter.filterId,
-      // revisionNo: sharedFilter.revisionNo,
-      // views: sharedFilter.views,
+      data: {
+        campaignFilterId: { filteredData: cf?.filteredData },
+        expiresAt: sharedFilter.expiresAt,
+        revisionNo: sharedFilter.revisionNo,
+        crossTabData,
+      },
     });
   } catch (error) {
     console.error(error);
@@ -3138,7 +3005,7 @@ const updateClientMatchAction = asyncHandler(async (req, res, next) => {
             },
           },
         },
-        sortOpt
+        { ...sortOpt, upsert: true }
       );
     } else {
       await ClientCompanyList.findOneAndUpdate(
@@ -3306,14 +3173,27 @@ const buildAllowedValuesMatch = (defAndAlias) => {
 const getCrossTab = asyncHandler(async (req, res, next) => {
   try {
     const { campaignFilterId } = req.params;
-    const { rowField, colField } = req.query;
+    const { rowField: qRowField, colField: qColField } = req.query;
 
-    if (!campaignFilterId || !rowField || !colField) {
-      return sendError(
-        next,
-        "campaignFilterId, rowField and colField are required",
-        400
-      );
+    if (!campaignFilterId) {
+      return sendError(next, "campaignFilterId is required", 400);
+    }
+
+    const stored = await CampaignFilter.findById(campaignFilterId)
+      .select("filters exclusions misc")
+      .lean();
+    if (!stored) return sendError(next, "Filter not found", 404);
+
+    // Resolve format: explicit params > saved preference > default
+    const rowField = qRowField || stored.misc?.preferredFormat?.rowField || "Industry";
+    const colField = qColField || stored.misc?.preferredFormat?.colField || "Job_Seniority";
+
+    // If explicit params provided, persist as preferred format (fire-and-forget)
+    if (qRowField || qColField) {
+      CampaignFilter.updateOne(
+        { _id: campaignFilterId },
+        { $set: { "misc.preferredFormat": { rowField, colField } } }
+      ).exec().catch(() => {});
     }
 
     const rowDef = CROSS_TAB_FIELD_MAP[rowField];
@@ -3324,15 +3204,10 @@ const getCrossTab = asyncHandler(async (req, res, next) => {
       return sendError(next, "Invalid rowField or colField value", 400);
     }
 
-    const stored = await CampaignFilter.findById(campaignFilterId)
-      .select("filters exclusions companyIds")
-      .lean();
-    if (!stored) return sendError(next, "Filter not found", 404);
-
     const preLookup = buildPreLookupMatch(
       stored.filters || [],
       stored.exclusions || [],
-      stored.companyIds || []
+      stored.misc?.companyIdsUsed || []
     );
     const postLookup = buildPostLookupMatch(
       stored.filters || [],
