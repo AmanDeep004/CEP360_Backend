@@ -154,6 +154,13 @@ const CallingDataSchema = new mongoose.Schema(
       setAt: { type: Date, default: null },
       note: { type: String, trim: true, default: "" },
     },
+    // Campaign-level priority group assigned by presales
+    priorityGroup: {
+      no:         { type: Number, default: null },  // 1, 2, 3…
+      label:      { type: String, default: null },  // "P-1", "P-2"…
+      assignedAt: { type: Date,   default: null },
+      filters:    { type: Object, default: null },  // snapshot of filters used
+    },
     clientInfo: {
       companySpecificId: { type: String, trim: true, default: "" },
       segment: { type: String, trim: true, default: "" },
@@ -181,5 +188,8 @@ CallingDataSchema.index({
   "priority.isActive": 1,
   "priority.priorityDate": 1,
 });
+
+// Campaign-level priority group sorting
+CallingDataSchema.index({ CampaignId: 1, "priorityGroup.no": 1 });
 
 export default getPrimaryConnection().model("CallingData", CallingDataSchema);

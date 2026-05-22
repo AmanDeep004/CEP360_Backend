@@ -14,6 +14,15 @@ import {
   setPriority,
   getPriorityList,
   closePriority,
+  priorityFilterOptions,
+  priorityPreview,
+  assignPriorityGroup,
+  getPriorityGroups,
+  deletePriorityGroup,
+  swapPriorityGroups,
+  getPrioritySlots,
+  createPrioritySlot,
+  deletePrioritySlotDef,
 } from "../controllers/callingDataController.js";
 import {
   uploadExternalDataController,
@@ -76,5 +85,18 @@ router.get(
 router.put("/setPriority/:id", protect, setPriority);
 router.get("/getPriorityList/:agentId", protect, getPriorityList);
 router.put("/closePriority/:id", protect, closePriority);
+
+// ── Campaign-level priority groups (presales) ──────────────────────────────
+router.get("/:campaignId/priorityFilterOptions", protect, priorityFilterOptions);
+router.get("/:campaignId/priorityPreview",        protect, priorityPreview);
+router.get("/:campaignId/priorityGroups",         protect, getPriorityGroups);
+router.post("/:campaignId/assignPriorityGroup",   protect, assignPriorityGroup);
+router.delete("/:campaignId/priorityGroup/:groupNo", protect, deletePriorityGroup);
+router.patch("/:campaignId/swapPriorityGroups",   protect, swapPriorityGroups);
+
+// ── Priority slot definitions (persisted) ──────────────────────────────────
+router.get("/:campaignId/prioritySlots",          protect, getPrioritySlots);
+router.post("/:campaignId/prioritySlots",         protect, createPrioritySlot);
+router.delete("/:campaignId/prioritySlots/:no",   protect, deletePrioritySlotDef);
 
 export default router;

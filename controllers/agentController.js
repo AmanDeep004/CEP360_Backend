@@ -525,6 +525,7 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
       registered,
       callRemarks,
       lastDateOfTelecalling,
+      priorityGroup,
       search = "",
       page = 1,
       limit = 20,
@@ -541,6 +542,8 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
     if (batch) filter.batch = { $regex: new RegExp(batch.trim(), "i") };
     if (registered !== undefined && registered !== "")
       filter.isRegistered = registered === "true";
+    if (priorityGroup === "unassigned") filter["priorityGroup.no"] = null;
+    else if (priorityGroup) filter["priorityGroup.label"] = priorityGroup;
 
     let searchFilter = {};
 
@@ -580,6 +583,7 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
           model: "CallHistory",
         },
       })
+      .sort({ "priorityGroup.no": 1 })
       .lean();
 
     // ================================
