@@ -3401,6 +3401,33 @@ const getCrossTab = asyncHandler(async (req, res, next) => {
   }
 });
 
+/**
+ * PATCH /filtration/:filterId/tag
+ * Saves a user-defined tag label onto misc.tag — no other fields touched.
+ */
+const updateFilterTag = asyncHandler(async (req, res, next) => {
+  try {
+    const { filterId } = req.params;
+    const { tag } = req.body;
+
+    if (!filterId) return sendError(next, "filterId is required", 400);
+
+    const updated = await CampaignFilter.findByIdAndUpdate(
+      filterId,
+      { $set: { "misc.tag": typeof tag === "string" ? tag.trim() : "" } },
+      { new: true, select: "_id misc" }
+    );
+
+    if (!updated) return sendError(next, "Filter not found", 404);
+
+    return sendResponse(res, 200, "Tag updated", {
+      tag: updated.misc?.tag ?? "",
+    });
+  } catch (err) {
+    return sendError(next, err.message || "Failed to update tag", 500);
+  }
+});
+
 export {
   callingDataFilter,
   callingDataFilterLightweight,
@@ -3421,4 +3448,5 @@ export {
   updateClientMatchAction,
   getCrossTab,
   getClientMatchEntries,
+  updateFilterTag,
 };
