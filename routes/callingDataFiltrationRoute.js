@@ -27,7 +27,7 @@ import { UserRoleEnum } from "../utils/enum.js";
 
 const { ADMIN, PROGRAM_MANAGER, PRESALES_MANAGER, AGENT } = UserRoleEnum;
 const router = Router();
-const upload = multer({ dest: "uploads/" });
+const upload = multer({ dest: "uploads/", limits: { fileSize: 100 * 1024 * 1024 } }); // 100 MB
 
 router.get(
   "/getCampaignFilters/:campaignId",
