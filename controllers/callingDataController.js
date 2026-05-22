@@ -374,9 +374,16 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
       ];
     }
 
-    // dedicated Source Type filter — exact match
+    // dedicated Source Type filter
     if (req.query.dataSourceType && req.query.dataSourceType.trim()) {
-      filter.dataSourceType = req.query.dataSourceType.trim();
+      const dst = req.query.dataSourceType.trim();
+      if (dst === "Kestone") {
+        filter.dataSourceType = { $in: ["Kestone", "Both"] };
+      } else if (dst === "Client") {
+        filter.dataSourceType = { $in: ["Client", "Both"] };
+      } else {
+        filter.dataSourceType = dst;
+      }
     }
 
     // dedicated Batch filter — case-insensitive contains
@@ -584,7 +591,7 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
       assignment,
       agentId,
       remark,
-      source,
+      dataSourceType,
       range,
       batch,
       priorityGroup,   // "P-1","P-2",... or "unassigned"
@@ -603,8 +610,14 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
 
     if (agentId) filter.agentId = agentId;
 
-    if (source) {
-      filter.source = { $regex: new RegExp(escapeStringRegexp(source), "i") };
+    if (dataSourceType) {
+      if (dataSourceType === "Kestone") {
+        filter.dataSourceType = { $in: ["Kestone", "Both"] };
+      } else if (dataSourceType === "Client") {
+        filter.dataSourceType = { $in: ["Client", "Both"] };
+      } else {
+        filter.dataSourceType = dataSourceType;
+      }
     }
 
     if (batch) {

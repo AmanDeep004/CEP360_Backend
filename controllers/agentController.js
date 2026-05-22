@@ -538,7 +538,15 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
     const filter = { agentId };
 
     // Basic filters
-    if (dataSourceType) filter.dataSourceType = dataSourceType;
+    if (dataSourceType) {
+      if (dataSourceType === "Kestone") {
+        filter.dataSourceType = { $in: ["Kestone", "Both"] };
+      } else if (dataSourceType === "Client") {
+        filter.dataSourceType = { $in: ["Client", "Both"] };
+      } else {
+        filter.dataSourceType = dataSourceType; // "Both", "IndividualSearchKestone" — exact
+      }
+    }
     if (batch) filter.batch = { $regex: new RegExp(batch.trim(), "i") };
     if (registered !== undefined && registered !== "")
       filter.isRegistered = registered === "true";
@@ -662,6 +670,7 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
     const paginatedData = callingData.slice(skip, skip + limNum);
     const maskedData = paginatedData.map((row) => ({
       ...row,
+      priorityGroup: row.priorityGroup ?? { no: null, label: null },
       Contact_Direct_Phone1: maskPhone(row.Contact_Direct_Phone1),
       Contact_Direct_Phone2: maskPhone(row.Contact_Direct_Phone2),
       Mobile_No: maskPhone(row.Mobile_No),
