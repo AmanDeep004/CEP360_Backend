@@ -91,7 +91,7 @@ const SUFFIX_SET = new Set([
   "in",    // .in TLD (not the preposition — stripped only when it's the sole remaining word)
 ]);
 
-const PARTIAL_THRESHOLD = 30; // min hybrid score (0–100) to include as a suggestion
+const PARTIAL_THRESHOLD = 50; // min hybrid score (0–100) to include as a suggestion
 
 // ── Pre-processing ────────────────────────────────────────────────────────────
 
@@ -223,7 +223,7 @@ function bigramSim(a, b) {
 // ── Hybrid scorer (Steps 5a + 5b) ────────────────────────────────────────────
 
 /**
- * final_score = max(TF-IDF cosine × 100, F1-bigram × 100)
+ * final_score = 0.5 * TF-IDF cosine + 0.5 * F1-bigram  (both signals must agree)
  *
  * F1-bigram: harmonic mean of recall and precision on per-word bigram similarity.
  *   recall    = avg over input words  of (best bigram-sim against any candidate word)
@@ -232,6 +232,12 @@ function bigramSim(a, b) {
  * Pure recall would give "assam" vs "assam rifles" a score of 100 because the
  * single input word "assam" perfectly matches — precision brings it down to ~67
  * because "rifles" has no match in the input.
+ *
+ * Using weighted average instead of max() ensures both metrics must agree —
+ * a single high metric can no longer carry a weak candidate to threshold.
+ *
+ * Anchor gate: if no word pair has bigram similarity > 0.60, the candidate is
+ * skipped entirely (returns -1) so the caller can discard it cheaply.
  */
 function hybridScore(inputNorm, candNorm, inputVec, candVec) {
   const cosScore = inputVec && candVec ? cosineSim(inputVec, candVec) * 100 : 0;
@@ -239,6 +245,17 @@ function hybridScore(inputNorm, candNorm, inputVec, candVec) {
   const aWords = inputNorm.split(/\s+/).filter((w) => w);
   const bWords = candNorm.split(/\s+/).filter((w) => w);
   if (!aWords.length) return cosScore;
+
+  // ── Anchor gate: require at least one strong word-pair match ──────────────
+  // Eliminates candidates that only reach threshold through many mediocre pairs.
+  let hasAnchor = false;
+  for (const aw of aWords) {
+    for (const bw of bWords) {
+      if (bigramSim(aw, bw) > 0.60) { hasAnchor = true; break; }
+    }
+    if (hasAnchor) break;
+  }
+  if (!hasAnchor) return -1; // caller skips this candidate
 
   // Recall: how well input words are covered by candidate words
   let totalRecall = 0;
@@ -270,7 +287,8 @@ function hybridScore(inputNorm, candNorm, inputVec, candVec) {
       ? ((2 * recall * precision) / (recall + precision)) * 100
       : 0;
 
-  return Math.max(cosScore, f1Score);
+  // Weighted average — both signals must agree (no longer dominated by one high metric)
+  return cosScore * 0.5 + f1Score * 0.5;
 }
 
 // ── DB index builder ──────────────────────────────────────────────────────────
@@ -318,7 +336,7 @@ export function buildDbIndex(companies) {
     if (!normToMeta.has(norm)) {
       normToMeta.set(norm, { ...meta, norm, canon });
     }
-    for (const w of norm.split(/\s+/).filter((w) => w.length > 1)) {
+    for (const w of norm.split(/\s+/).filter((w) => w.length >= 3)) {
       if (!invertedIndex.has(w)) invertedIndex.set(w, new Set());
       invertedIndex.get(w).add(norm);
     }
@@ -393,7 +411,7 @@ function matchOne(inputName, dbIndex, maxCandidates) {
   const norm = normalize(inputName);
   if (!norm) return { type: "none" };
 
-  const inputWords = norm.split(/\s+/).filter((w) => w.length > 1);
+  const inputWords = norm.split(/\s+/).filter((w) => w.length >= 3);
   // Rarest words first — stops common words from filling the candidate cap
   inputWords.sort(
     (a, b) =>
@@ -416,6 +434,7 @@ function matchOne(inputName, dbIndex, maxCandidates) {
     const meta = normToMeta.get(candNorm);
     if (!meta) continue;
     const score = hybridScore(norm, candNorm, inputVec, tfVecMap.get(candNorm));
+    // score === -1 means anchor gate failed — no strong word pair found, skip
     if (score >= PARTIAL_THRESHOLD) scored.push({ meta, candNorm, score });
   }
 
