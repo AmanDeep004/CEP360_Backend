@@ -17,6 +17,7 @@ import {
   jobStore,
   processExcelInBackground,
 } from "../../services/excelStreamProcessor.js";
+import { cacheGet, cacheSet, cacheInvalidatePattern } from "../../services/cache.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
 function parseDate(value) {
@@ -405,6 +406,9 @@ const batchCreateFromExcel = asyncHandler(async (req, res, next) => {
       error: null,
       completedAt: null,
     });
+
+    // Invalidate dropdown cache — new data is about to be added to masterDB
+    cacheInvalidatePattern("dropdown:*");
 
     // Respond immediately — don't wait for processing to finish
     res.status(202).json({
@@ -1667,101 +1671,122 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
       return Infinity;
     };
 
-    // ── Run all queries in parallel ──────────────────────────────────────────
-    const [
-      staticCompanyFilters,
-      countries,
-      regions,
-      states,
-      cities,
-      industries,
-      subIndustries,
-      jobFunctions,
-      jobSeniorities,
-    ] = await Promise.all([
-      // Static company fields (segments, employeeRanges, turnovers — no parent filter)
-      Company.aggregate([
-        {
-          $group: {
-            _id: null,
-            segments: { $addToSet: "$Company_Segment" },
-            employeeRanges: { $addToSet: "$Employees_Range" },
-            turnovers: { $addToSet: "$Turnover_Range" },
-          },
-        },
-        {
-          $project: {
-            _id: 0,
-            segments: {
-              $filter: {
-                input: "$segments",
-                as: "v",
-                cond: {
-                  $and: [
-                    { $ne: ["$$v", null] },
-                    { $ne: ["$$v", ""] },
-                    { $ne: ["$$v", "Blank"] },
-                  ],
-                },
-              },
-            },
-            employeeRanges: {
-              $filter: {
-                input: "$employeeRanges",
-                as: "v",
-                cond: {
-                  $and: [
-                    { $ne: ["$$v", null] },
-                    { $ne: ["$$v", ""] },
-                    { $ne: ["$$v", "Blank"] },
-                  ],
-                },
-              },
-            },
-            turnovers: {
-              $filter: {
-                input: "$turnovers",
-                as: "v",
-                cond: {
-                  $and: [
-                    { $ne: ["$$v", null] },
-                    { $ne: ["$$v", ""] },
-                    { $ne: ["$$v", "Blank"] },
-                  ],
-                },
-              },
+    // ── Cache key: built from all cascading query params (not campaignId) ─────
+    const cacheKey = `dropdown:${JSON.stringify({
+      country: selectedCountries,
+      region: selectedRegions,
+      state: selectedStates,
+      industry: selectedIndustries,
+      jobFunction: selectedJobFunctions,
+    })}`;
+
+    // ── Try Redis cache first ─────────────────────────────────────────────────
+    let dropdownData = await cacheGet(cacheKey);
+
+    if (!dropdownData) {
+      // ── Cache miss — run all queries in parallel ────────────────────────────
+      const [
+        staticCompanyFilters,
+        countries,
+        regions,
+        states,
+        cities,
+        industries,
+        subIndustries,
+        jobFunctions,
+        jobSeniorities,
+      ] = await Promise.all([
+        // Static company fields (segments, employeeRanges, turnovers — no parent filter)
+        Company.aggregate([
+          {
+            $group: {
+              _id: null,
+              segments: { $addToSet: "$Company_Segment" },
+              employeeRanges: { $addToSet: "$Employees_Range" },
+              turnovers: { $addToSet: "$Turnover_Range" },
             },
           },
-        },
-      ]),
-      // Geo
-      distinctContactValues(countryMatchStage, "Contact_Country"),
-      distinctContactValues(regionMatchStage, "Contact_Region"),
-      distinctContactValues(stateMatchStage, "Contact_State"),
-      distinctContactValues(cityMatchStage, "Contact_City"),
-      // Industry hierarchy
-      distinctCompanyValues(industryMatchStage, "Industry"),
-      distinctCompanyValues(subIndustryMatchStage, "Sub_Industry"),
-      // Job hierarchy
-      distinctContactValues(jobFunctionMatchStage, "Job_Function"),
-      distinctContactValues(jobSeniorityMatchStage, "Job_Seniority"),
-    ]);
+          {
+            $project: {
+              _id: 0,
+              segments: {
+                $filter: {
+                  input: "$segments",
+                  as: "v",
+                  cond: {
+                    $and: [
+                      { $ne: ["$$v", null] },
+                      { $ne: ["$$v", ""] },
+                      { $ne: ["$$v", "Blank"] },
+                    ],
+                  },
+                },
+              },
+              employeeRanges: {
+                $filter: {
+                  input: "$employeeRanges",
+                  as: "v",
+                  cond: {
+                    $and: [
+                      { $ne: ["$$v", null] },
+                      { $ne: ["$$v", ""] },
+                      { $ne: ["$$v", "Blank"] },
+                    ],
+                  },
+                },
+              },
+              turnovers: {
+                $filter: {
+                  input: "$turnovers",
+                  as: "v",
+                  cond: {
+                    $and: [
+                      { $ne: ["$$v", null] },
+                      { $ne: ["$$v", ""] },
+                      { $ne: ["$$v", "Blank"] },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        ]),
+        // Geo
+        distinctContactValues(countryMatchStage, "Contact_Country"),
+        distinctContactValues(regionMatchStage, "Contact_Region"),
+        distinctContactValues(stateMatchStage, "Contact_State"),
+        distinctContactValues(cityMatchStage, "Contact_City"),
+        // Industry hierarchy
+        distinctCompanyValues(industryMatchStage, "Industry"),
+        distinctCompanyValues(subIndustryMatchStage, "Sub_Industry"),
+        // Job hierarchy
+        distinctContactValues(jobFunctionMatchStage, "Job_Function"),
+        distinctContactValues(jobSeniorityMatchStage, "Job_Seniority"),
+      ]);
 
-    const staticData = staticCompanyFilters[0] || {
-      segments: [],
-      employeeRanges: [],
-      turnovers: [],
-    };
+      const sd = staticCompanyFilters[0] || { segments: [], employeeRanges: [], turnovers: [] };
+      sd.turnovers = sd.turnovers.sort((a, b) => parseRange(a) - parseRange(b));
+      sd.employeeRanges = sd.employeeRanges.sort((a, b) => parseRange(a) - parseRange(b));
+      sd.segments = sd.segments.sort();
 
-    staticData.turnovers = staticData.turnovers.sort(
-      (a, b) => parseRange(a) - parseRange(b)
-    );
-    staticData.employeeRanges = staticData.employeeRanges.sort(
-      (a, b) => parseRange(a) - parseRange(b)
-    );
-    staticData.segments = staticData.segments.sort();
+      dropdownData = {
+        ...sd,
+        industries,
+        subIndustries,
+        jobFunctions,
+        jobSeniorities,
+        countries,
+        regions,
+        states,
+        cities,
+        genders: ["Male", "Female"],
+      };
 
-    // Fetch applied filters for the campaign if campaignId is provided
+      // Cache for 2 hours — invalidated when new batch is uploaded to masterDB
+      await cacheSet(cacheKey, dropdownData, 2 * 60 * 60);
+    }
+
+    // Fetch applied filters fresh — changes when user saves filters for a campaign
     let appliedFilters = [];
     let appliedExclusions = [];
     if (campaignId) {
@@ -1779,16 +1804,7 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
     }
 
     return sendResponse(res, 200, "Dynamic filters fetched successfully", {
-      ...staticData,
-      industries,
-      subIndustries,
-      jobFunctions,
-      jobSeniorities,
-      countries,
-      regions,
-      states,
-      cities,
-      genders: ["Male", "Female"],
+      ...dropdownData,
       appliedFilters,
       appliedExclusions,
     });

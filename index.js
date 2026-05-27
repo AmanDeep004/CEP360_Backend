@@ -6,6 +6,7 @@ import rateLimit from "express-rate-limit";
 import expressWinston from "express-winston";
 import cookieParser from "cookie-parser";
 import { connectDB } from "./config/db.js";
+import { connectRedis, getRedis, isRedisAvailable } from "./config/redis.js";
 import { getJob } from "./utils/jobTracker.js";
 import cron from "node-cron";
 import { errorHandler } from "./middleware/errorMiddleware.js";
@@ -16,6 +17,7 @@ const startServer = async () => {
   try {
     console.log("Starting server initialization...");
     await connectDB();
+    await connectRedis();
     console.log("Loading routes...");
     const userRoutes = (await import("./routes/userRoutes.js")).default;
     const campaignRoutes = (await import("./routes/campaignRoutes.js")).default;
@@ -127,6 +129,39 @@ const startServer = async () => {
         message: "Welcome to MERN API",
         status: "healthy",
         timestamp: new Date().toISOString(),
+      });
+    });
+
+    app.get("/api/health", async (req, res) => {
+      // MongoDB check
+      let mongoStatus = "connected";
+      try {
+        const { primaryConnection, secondaryConnection } = await import("./config/db.js");
+        if (!primaryConnection || primaryConnection.readyState !== 1) mongoStatus = "disconnected";
+        if (!secondaryConnection || secondaryConnection.readyState !== 1) mongoStatus = "secondary-disconnected";
+      } catch {
+        mongoStatus = "error";
+      }
+
+      // Redis check
+      let redisStatus = "unavailable";
+      let redisPing = null;
+      if (isRedisAvailable()) {
+        try {
+          redisPing = await getRedis().ping();
+          redisStatus = redisPing === "PONG" ? "connected" : "error";
+        } catch {
+          redisStatus = "error";
+        }
+      }
+
+      res.json({
+        status: "ok",
+        timestamp: new Date().toISOString(),
+        services: {
+          mongodb: mongoStatus,
+          redis: redisStatus,
+        },
       });
     });
 
