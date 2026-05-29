@@ -1116,6 +1116,15 @@ const updateData = asyncHandler(async (req, res, next) => {
         runValidators: true,
       }).populate("Company_ID", "Company_Name Website Industry");
 
+      // Invalidate dropdown cache if geo or job fields changed
+      const CONTACT_DROPDOWN_FIELDS = [
+        "Contact_Country", "Contact_Region", "Contact_State", "Contact_City",
+        "Job_Function", "Job_Seniority",
+      ];
+      if (changedFieldNames.some((f) => CONTACT_DROPDOWN_FIELDS.includes(f))) {
+        cacheInvalidatePattern("dropdown:*");
+      }
+
       return sendResponse(
         res,
         200,
@@ -1162,6 +1171,15 @@ const updateData = asyncHandler(async (req, res, next) => {
         new: true,
         runValidators: true,
       });
+
+      // Invalidate dropdown cache if company dropdown fields changed
+      const COMPANY_DROPDOWN_FIELDS = [
+        "Industry", "Sub_Industry", "Company_Segment",
+        "Employees_Range", "Turnover_Range",
+      ];
+      if (changedFieldNames.some((f) => COMPANY_DROPDOWN_FIELDS.includes(f))) {
+        cacheInvalidatePattern("dropdown:*");
+      }
 
       return sendResponse(
         res,

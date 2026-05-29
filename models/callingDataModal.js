@@ -192,4 +192,7 @@ CallingDataSchema.index({
 // Campaign-level priority group sorting
 CallingDataSchema.index({ CampaignId: 1, "priorityGroup.no": 1 });
 
+// Agent calling list sorted by priority group (agent page query)
+CallingDataSchema.index({ agentId: 1, "priorityGroup.no": 1 });
+
 export default getPrimaryConnection().model("CallingData", CallingDataSchema);

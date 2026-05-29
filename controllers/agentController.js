@@ -592,6 +592,7 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
         },
       })
       .sort({ "priorityGroup.no": 1 })
+      .allowDiskUse(true)
       .lean();
 
     // ================================

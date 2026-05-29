@@ -165,6 +165,69 @@ const startServer = async () => {
       });
     });
 
+    // Redis inspect — Resource Manager only
+    const { protect, authorize } = await import("./middleware/authMiddleware.js");
+    const { UserRoleEnum: RoleEnum } = await import("./utils/enum.js");
+
+    app.get("/api/redis/inspect", protect, authorize(RoleEnum.RESOURCE_MANAGER, RoleEnum.ADMIN), async (req, res) => {
+      if (!isRedisAvailable()) {
+        return res.status(503).json({ success: false, message: "Redis unavailable" });
+      }
+      try {
+        const redis = getRedis();
+        const keys = await redis.keys("*");
+
+        if (keys.length === 0) {
+          return res.json({ success: true, totalKeys: 0, cache: {} });
+        }
+
+        const pipeline = redis.pipeline();
+        keys.forEach((key) => { pipeline.get(key); pipeline.ttl(key); });
+        const results = await pipeline.exec();
+
+        const cache = {};
+        keys.forEach((key, i) => {
+          const value = results[i * 2][1];
+          const ttl = results[i * 2 + 1][1];
+          let parsed;
+          try { parsed = JSON.parse(value); } catch { parsed = value; }
+          cache[key] = {
+            ttl_seconds: ttl,
+            expires_in: ttl > 0 ? `${Math.floor(ttl / 60)}m ${ttl % 60}s` : "no expiry",
+            value: parsed,
+          };
+        });
+
+        res.json({ success: true, totalKeys: keys.length, cache });
+      } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+      }
+    });
+
+    app.delete("/api/redis/inspect/:key", protect, authorize(RoleEnum.RESOURCE_MANAGER, RoleEnum.ADMIN), async (req, res) => {
+      if (!isRedisAvailable()) {
+        return res.status(503).json({ success: false, message: "Redis unavailable" });
+      }
+      try {
+        const deleted = await getRedis().del(req.params.key);
+        res.json({ success: true, deleted: deleted === 1 });
+      } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+      }
+    });
+
+    app.delete("/api/redis/flush", protect, authorize(RoleEnum.RESOURCE_MANAGER, RoleEnum.ADMIN), async (req, res) => {
+      if (!isRedisAvailable()) {
+        return res.status(503).json({ success: false, message: "Redis unavailable" });
+      }
+      try {
+        await getRedis().flushdb();
+        res.json({ success: true, message: "All cache cleared" });
+      } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+      }
+    });
+
     app.use("/api/auth", userRoutes);
     app.use("/api/campaign", campaignRoutes);
     app.use("/api/callingData", callingDataRoutes);
