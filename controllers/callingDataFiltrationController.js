@@ -11,6 +11,7 @@ import XLSX from "xlsx";
 import csv from "csvtojson";
 import fs from "fs";
 import mongoose from "mongoose";
+import { cacheGet, cacheSet, cacheDel } from "../services/cache.js";
 import {
   createMatchJob,
   updateMatchJob,
@@ -1014,27 +1015,41 @@ const getOrBuildDbIndex = async () => {
 const _matchResultCache = new Map(); // campaignId (string) → { result, approvedIds, rejectedIds, cachedAt }
 const RESULT_CACHE_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 
-const getCachedMatchResult = (campaignId) => {
+const REDIS_MATCH_KEY = (campaignId) => `clientMatch:${campaignId}`;
+const REDIS_MATCH_TTL = 2 * 60 * 60; // 2 hours — same as in-memory TTL
+
+const getCachedMatchResult = async (campaignId) => {
+  // 1. In-memory first (fastest)
   const entry = _matchResultCache.get(String(campaignId));
-  if (!entry) return null;
-  if (Date.now() - entry.cachedAt > RESULT_CACHE_TTL_MS) {
-    _matchResultCache.delete(String(campaignId));
-    return null;
+  if (entry) {
+    if (Date.now() - entry.cachedAt > RESULT_CACHE_TTL_MS) {
+      _matchResultCache.delete(String(campaignId));
+    } else {
+      return entry;
+    }
   }
-  return entry;
+  // 2. Redis fallback (survives restarts)
+  const redisEntry = await cacheGet(REDIS_MATCH_KEY(campaignId));
+  if (redisEntry) {
+    // Restore to in-memory so next call is instant
+    _matchResultCache.set(String(campaignId), { ...redisEntry, cachedAt: Date.now() });
+    return redisEntry;
+  }
+  return null;
 };
 
 const setCachedMatchResult = (campaignId, result) => {
-  _matchResultCache.set(String(campaignId), {
-    ...result,
-    cachedAt: Date.now(),
-  });
+  const entry = { ...result, cachedAt: Date.now() };
+  _matchResultCache.set(String(campaignId), entry);
+  // Write to Redis async — non-blocking, failure is safe
+  cacheSet(REDIS_MATCH_KEY(campaignId), entry, REDIS_MATCH_TTL);
 };
 
 const invalidateMatchResultCache = (campaignId) => {
-  // Only clear the in-memory cache. Never delete DB records here — that would
+  // Only clear caches. Never delete DB records here — that would
   // wipe all history before the new session is even persisted.
   _matchResultCache.delete(String(campaignId));
+  cacheDel(REDIS_MATCH_KEY(campaignId));
 };
 
 // ── Persistent DB helpers (survive server restarts) ───────────────────────────
@@ -2689,8 +2704,8 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
       };
     };
 
-    // ── Fast path: return from in-memory cache ────────────────────────────────
-    const cached = getCachedMatchResult(campaignId);
+    // ── Fast path: return from in-memory or Redis cache ──────────────────────
+    const cached = await getCachedMatchResult(campaignId);
     if (cached) {
       return sendResponse(
         res,
