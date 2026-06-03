@@ -7,6 +7,7 @@ import {
 
 import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
+
 const { ADMIN, PROGRAM_MANAGER, PRESALES_MANAGER, AGENT, RESOURCE_MANAGER } =
   UserRoleEnum;
 
@@ -20,7 +21,7 @@ router.get(
 router.post(
   "/createAndLinkTemplate",
   protect,
-  authorize(ADMIN, PRESALES_MANAGER),
+  authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER),
   createTemplate
 );
 router.put("/updateTemplate", updateTemplate);

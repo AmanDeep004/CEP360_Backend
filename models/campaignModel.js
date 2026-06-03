@@ -19,7 +19,7 @@ const campaignSchema = new mongoose.Schema(
     type: {
       type: String,
       required: true,
-      // enum: { values: ALL, message: "Invalid Program Type" },
+      enum: { values: ALL, message: "Invalid Program Type" },
     },
 
     category: {
@@ -119,6 +119,13 @@ const campaignSchema = new mongoose.Schema(
       },
     },
     isCallingDataAssigned: { type: Boolean, default: false },
+
+    // Set when this campaign is a reconfirmation of another campaign
+    parentCampaignId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Campaign",
+      default: null,
+    },
     filterBatches: [
       {
         filterBatchId: {
@@ -135,5 +142,14 @@ const campaignSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+// Filter active/inactive/completed campaigns (most common dashboard query)
+campaignSchema.index({ status: 1, createdAt: -1 });
+
+// Find campaigns assigned to a specific program manager
+campaignSchema.index({ programManager: 1 });
+
+// Filter by campaign stage (pipeline view queries)
+campaignSchema.index({ stage: 1 });
 
 export default getPrimaryConnection().model("Campaign", campaignSchema);

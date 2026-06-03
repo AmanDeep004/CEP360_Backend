@@ -1,8 +1,10 @@
 import XLSX from "xlsx";
 import fs from "fs";
+import mongoose from "mongoose";
 import errorHandler from "../../utils/index.js";
 import Company from "../../models/MasterDBModel/companyModel.js";
 import Contact from "../../models/MasterDBModel/contactModel.js";
+import CampaignFilter from "../../models/CallingDataFiltrationModel.js";
 import CompanyHistory from "../../models/MasterDBModel/companyHistory.js";
 import ContactHistory from "../../models/MasterDBModel/contactHistory.js";
 import CallHistory from "../../models/callHistoryModel.js";
@@ -10,10 +12,12 @@ import CallingData from "../../models/callingDataModal.js";
 import Campaign from "../../models/campaignModel.js";
 import dumpHistoryData from "../../models/MasterDBModel/dumpHistoryDataModel.js";
 import EngagementHistory from "../../models/MasterDBModel/enagagementHistoryModel.js";
+import CompanyMerge from "../../models/MasterDBModel/companyMergeModel.js";
 import {
   jobStore,
   processExcelInBackground,
 } from "../../services/excelStreamProcessor.js";
+import { cacheGet, cacheSet, cacheInvalidatePattern } from "../../services/cache.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
 function parseDate(value) {
@@ -403,6 +407,9 @@ const batchCreateFromExcel = asyncHandler(async (req, res, next) => {
       completedAt: null,
     });
 
+    // Invalidate dropdown cache — new data is about to be added to masterDB
+    cacheInvalidatePattern("dropdown:*");
+
     // Respond immediately — don't wait for processing to finish
     res.status(202).json({
       success: true,
@@ -452,6 +459,7 @@ const getBatchJobStatus = asyncHandler(async (req, res, next) => {
       companyNotFound: progress.failReasons?.companyNotFound ?? 0,
     },
     error: job.error || null,
+    reportUrl: job.reportUrl || null,
   });
 });
 
@@ -800,26 +808,8 @@ const getAllData = asyncHandler(async (req, res, next) => {
 
     let searchFilter = {};
     if (search && search.trim()) {
-      const regex = new RegExp(search.trim(), "i");
-      searchFilter = {
-        $or: [
-          { First_Name: regex },
-          { Last_Name: regex },
-          { Full_Name: regex },
-
-          { Job_Title: regex },
-          { Office_Email_1: regex },
-          { Office_Email_2: regex },
-          { Personal_Email1: regex },
-          { Personal_Email2: regex },
-          { Contact_Direct_Phone1: regex },
-          { Contact_Direct_Phone2: regex },
-          { Mobile_No: regex },
-          { Contact_City: regex },
-          { Contact_State: regex },
-          { Contact_Country: regex },
-        ],
-      };
+      // Use MongoDB text index for fast full-text search (replaces slow $or regex scan)
+      searchFilter = { $text: { $search: search.trim() } };
     }
 
     const finalFilter = Object.keys(searchFilter).length
@@ -905,13 +895,30 @@ const getAllCompanyData = asyncHandler(async (req, res, next) => {
 
 const getAllCompanyName = asyncHandler(async (req, res, next) => {
   try {
-    const companies = await Company.find(
-      {},
-      { _id: 1, Company_Name: 1 }
-    ).lean();
+    const search = req.query.search?.trim();
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
+    const skip = (page - 1) * limit;
+
+    const filter = {};
+    if (search) {
+      filter.Company_Name = new RegExp(search, "i");
+    }
+
+    const [total, companies] = await Promise.all([
+      Company.countDocuments(filter),
+      Company.find(filter, { _id: 1, Company_Name: 1 })
+        .sort({ Company_Name: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
 
     return sendResponse(res, 200, "Companies fetched successfully", {
-      total: companies.length,
+      total,
+      page,
+      limit,
+      hasMore: skip + companies.length < total,
       data: companies,
     });
   } catch (err) {
@@ -1040,27 +1047,56 @@ const getCompanyDataById = asyncHandler(async (req, res, next) => {
 //     return sendError(next, err.message || "Update failed", 500);
 //   }
 // });
+// Fields that must never be overwritten via the update API
+const CONTACT_READONLY_FIELDS = [
+  "Contact_ID", // unique identifier — must never change
+  "EngagementPoints",
+  "DND_Flag",
+  "DND_Account_Tag",
+  "Last_Engagement",
+  "Last_Engagement_Date",
+  "Last_Engagement_Campaign",
+  "Telecalling_Remarks",
+  "Unsubscribe_Account_Tag",
+  "Unsubscribe_Flag",
+  "discrepencyInData",
+  "isRegisteredInAnyCampaign",
+  "totalTelecallingRemarks",
+  "totalWhatsappMessages",
+  "totalEmailSent",
+  "totalEngagements",
+  "hasEngagements",
+];
+
 const updateData = asyncHandler(async (req, res, next) => {
   try {
     const { id } = req.params;
-    const payload = req.body;
     const user = req.user;
+
+    // Strip system-managed / read-only fields before any update
+    const payload = { ...req.body };
+    CONTACT_READONLY_FIELDS.forEach((field) => delete payload[field]);
 
     // 1️⃣ Try to find in Contact Collection
     let existingContact = await Contact.findById(id);
 
     if (existingContact) {
       // Create history: compare changed fields
-      const changedFields = Object.keys(payload).filter(
+      const changedFieldNames = Object.keys(payload).filter(
         (key) =>
           String(existingContact[key] ?? "") !== String(payload[key] ?? "")
       );
 
-      if (changedFields.length > 0) {
+      if (changedFieldNames.length > 0) {
         await ContactHistory.create({
           contact_id: existingContact._id,
           snapshot: existingContact.toObject(),
-          updatedFields: changedFields,
+          updatedFields: changedFieldNames,
+          changedFields: changedFieldNames.map((field) => ({
+            field,
+            oldValue: existingContact[field] ?? "",
+            newValue: payload[field] ?? "",
+          })),
           updatedBy: {
             id: user._id,
             name: user.employeeName,
@@ -1080,6 +1116,15 @@ const updateData = asyncHandler(async (req, res, next) => {
         runValidators: true,
       }).populate("Company_ID", "Company_Name Website Industry");
 
+      // Invalidate dropdown cache if geo or job fields changed
+      const CONTACT_DROPDOWN_FIELDS = [
+        "Contact_Country", "Contact_Region", "Contact_State", "Contact_City",
+        "Job_Function", "Job_Seniority",
+      ];
+      if (changedFieldNames.some((f) => CONTACT_DROPDOWN_FIELDS.includes(f))) {
+        cacheInvalidatePattern("dropdown:*");
+      }
+
       return sendResponse(
         res,
         200,
@@ -1093,16 +1138,21 @@ const updateData = asyncHandler(async (req, res, next) => {
 
     if (existingCompany) {
       // Create history: compare changed fields
-      const changedFields = Object.keys(payload).filter(
+      const changedFieldNames = Object.keys(payload).filter(
         (key) =>
           String(existingCompany[key] ?? "") !== String(payload[key] ?? "")
       );
 
-      if (changedFields.length > 0) {
+      if (changedFieldNames.length > 0) {
         await CompanyHistory.create({
           company_id: existingCompany._id,
           snapshot: existingCompany.toObject(),
-          updatedFields: changedFields,
+          updatedFields: changedFieldNames,
+          changedFields: changedFieldNames.map((field) => ({
+            field,
+            oldValue: existingCompany[field] ?? "",
+            newValue: payload[field] ?? "",
+          })),
           updatedBy: {
             id: user._id,
             name: user.employeeName,
@@ -1121,6 +1171,15 @@ const updateData = asyncHandler(async (req, res, next) => {
         new: true,
         runValidators: true,
       });
+
+      // Invalidate dropdown cache if company dropdown fields changed
+      const COMPANY_DROPDOWN_FIELDS = [
+        "Industry", "Sub_Industry", "Company_Segment",
+        "Employees_Range", "Turnover_Range",
+      ];
+      if (changedFieldNames.some((f) => COMPANY_DROPDOWN_FIELDS.includes(f))) {
+        cacheInvalidatePattern("dropdown:*");
+      }
 
       return sendResponse(
         res,
@@ -1260,8 +1319,10 @@ const updateCompany = asyncHandler(async (req, res, next) => {
   }
 });
 
-const getDropdownFilters = asyncHandler(async (req, res, next) => {
+const getDropdownFiltersOld = asyncHandler(async (req, res, next) => {
   try {
+    const { campaignId } = req.query;
+
     const [companyFilters, contactFilters] = await Promise.all([
       Company.aggregate([
         {
@@ -1493,12 +1554,284 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
     contactData.jobSeniorities = contactData.jobSeniorities.sort();
     contactData.jobFunctions = contactData.jobFunctions.sort();
 
+    // Fetch applied filters for the campaign if campaignId is provided
+    let appliedFilters = [];
+    let appliedExclusions = [];
+    if (campaignId) {
+      const latestFilter = await CampaignFilter.findOne(
+        { campaignId, dataType: "Client" },
+        { filters: 1, exclusions: 1 }
+      )
+        .sort({ revisionNo: -1 })
+        .lean();
+
+      if (latestFilter) {
+        appliedFilters = latestFilter.filters || [];
+        appliedExclusions = latestFilter.exclusions || [];
+      }
+    }
+
     return sendResponse(res, 200, "Unique filters fetched successfully", {
       ...companyData,
       ...contactData,
+      appliedFilters,
+      appliedExclusions,
     });
   } catch (err) {
     return sendError(next, err.message || "Failed to fetch filters", 500);
+  }
+});
+
+// ─── Dynamic Dropdown Filters ────────────────────────────────────────────────
+// Hierarchies:
+//   Country → Region → State → City
+//   Industry → Sub Industry
+//   Job Function → Job Seniority
+//
+// Query params (all optional, accept comma-separated or repeated array keys):
+//   campaignId, country, region, state, industry, jobFunction
+const getDropdownFilters = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.query;
+
+    // Normalise a query param to an array (handles string, array, undefined)
+    const toArray = (val) => {
+      if (!val) return null;
+      const arr = Array.isArray(val)
+        ? val
+        : val.split(",").map((s) => s.trim());
+      return arr.filter(Boolean).length ? arr.filter(Boolean) : null;
+    };
+
+    const selectedCountries = toArray(req.query.country);
+    const selectedRegions = toArray(req.query.region);
+    const selectedStates = toArray(req.query.state);
+    const selectedIndustries = toArray(req.query.industry);
+    const selectedJobFunctions = toArray(req.query.jobFunction);
+
+    const BLANK_FILTER = { $nin: [null, "", "Blank"] };
+
+    // Helper: distinct values from the Contact collection with a given match
+    const distinctContactValues = async (matchStage, field) => {
+      const results = await Contact.aggregate([
+        { $match: matchStage },
+        { $group: { _id: `$${field}` } },
+        { $match: { _id: { $nin: [null, "", "Blank"] } } },
+        { $sort: { _id: 1 } },
+        { $project: { _id: 0, value: "$_id" } },
+      ]);
+      return results.map((r) => r.value);
+    };
+
+    // Helper: distinct values from the Company collection with a given match
+    const distinctCompanyValues = async (matchStage, field) => {
+      const results = await Company.aggregate([
+        { $match: matchStage },
+        { $group: { _id: `$${field}` } },
+        { $match: { _id: { $nin: [null, "", "Blank"] } } },
+        { $sort: { _id: 1 } },
+        { $project: { _id: 0, value: "$_id" } },
+      ]);
+      return results.map((r) => r.value);
+    };
+
+    // ── Geo match stages ─────────────────────────────────────────────────────
+    const countryMatchStage = { Contact_Country: BLANK_FILTER };
+    const regionMatchStage = {
+      Contact_Region: BLANK_FILTER,
+      ...(selectedCountries
+        ? { Contact_Country: { $in: selectedCountries } }
+        : {}),
+    };
+    const stateMatchStage = {
+      Contact_State: BLANK_FILTER,
+      ...(selectedCountries
+        ? { Contact_Country: { $in: selectedCountries } }
+        : {}),
+      ...(selectedRegions ? { Contact_Region: { $in: selectedRegions } } : {}),
+    };
+    const cityMatchStage = {
+      Contact_City: BLANK_FILTER,
+      ...(selectedCountries
+        ? { Contact_Country: { $in: selectedCountries } }
+        : {}),
+      ...(selectedRegions ? { Contact_Region: { $in: selectedRegions } } : {}),
+      ...(selectedStates ? { Contact_State: { $in: selectedStates } } : {}),
+    };
+
+    // ── Industry / Sub Industry match stages ─────────────────────────────────
+    // Industries are always unfiltered (parent selector)
+    const industryMatchStage = { Industry: BLANK_FILTER };
+    // Sub industries filtered by selected industries
+    const subIndustryMatchStage = {
+      Sub_Industry: BLANK_FILTER,
+      ...(selectedIndustries ? { Industry: { $in: selectedIndustries } } : {}),
+    };
+
+    // ── Job Function / Job Seniority match stages ────────────────────────────
+    // Job functions are always unfiltered (parent selector)
+    const jobFunctionMatchStage = { Job_Function: BLANK_FILTER };
+    // Job seniorities filtered by selected job functions
+    const jobSeniorityMatchStage = {
+      Job_Seniority: BLANK_FILTER,
+      ...(selectedJobFunctions
+        ? { Job_Function: { $in: selectedJobFunctions } }
+        : {}),
+    };
+
+    const parseRange = (str) => {
+      if (!str) return Infinity;
+      const plusMatch = str.match(/^(\d+)[\s&+A-Za-z]*/);
+      if (plusMatch) return parseInt(plusMatch[1], 10);
+      if (str.includes("B")) return 10_000_000;
+      const rangeMatch = str.match(/(\d+)\s*to\s*(\d+)/);
+      if (rangeMatch) return parseInt(rangeMatch[1], 10);
+      return Infinity;
+    };
+
+    // ── Cache key: built from all cascading query params (not campaignId) ─────
+    const cacheKey = `dropdown:${JSON.stringify({
+      country: selectedCountries,
+      region: selectedRegions,
+      state: selectedStates,
+      industry: selectedIndustries,
+      jobFunction: selectedJobFunctions,
+    })}`;
+
+    // ── Try Redis cache first ─────────────────────────────────────────────────
+    let dropdownData = await cacheGet(cacheKey);
+
+    if (!dropdownData) {
+      // ── Cache miss — run all queries in parallel ────────────────────────────
+      const [
+        staticCompanyFilters,
+        countries,
+        regions,
+        states,
+        cities,
+        industries,
+        subIndustries,
+        jobFunctions,
+        jobSeniorities,
+      ] = await Promise.all([
+        // Static company fields (segments, employeeRanges, turnovers — no parent filter)
+        Company.aggregate([
+          {
+            $group: {
+              _id: null,
+              segments: { $addToSet: "$Company_Segment" },
+              employeeRanges: { $addToSet: "$Employees_Range" },
+              turnovers: { $addToSet: "$Turnover_Range" },
+            },
+          },
+          {
+            $project: {
+              _id: 0,
+              segments: {
+                $filter: {
+                  input: "$segments",
+                  as: "v",
+                  cond: {
+                    $and: [
+                      { $ne: ["$$v", null] },
+                      { $ne: ["$$v", ""] },
+                      { $ne: ["$$v", "Blank"] },
+                    ],
+                  },
+                },
+              },
+              employeeRanges: {
+                $filter: {
+                  input: "$employeeRanges",
+                  as: "v",
+                  cond: {
+                    $and: [
+                      { $ne: ["$$v", null] },
+                      { $ne: ["$$v", ""] },
+                      { $ne: ["$$v", "Blank"] },
+                    ],
+                  },
+                },
+              },
+              turnovers: {
+                $filter: {
+                  input: "$turnovers",
+                  as: "v",
+                  cond: {
+                    $and: [
+                      { $ne: ["$$v", null] },
+                      { $ne: ["$$v", ""] },
+                      { $ne: ["$$v", "Blank"] },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        ]),
+        // Geo
+        distinctContactValues(countryMatchStage, "Contact_Country"),
+        distinctContactValues(regionMatchStage, "Contact_Region"),
+        distinctContactValues(stateMatchStage, "Contact_State"),
+        distinctContactValues(cityMatchStage, "Contact_City"),
+        // Industry hierarchy
+        distinctCompanyValues(industryMatchStage, "Industry"),
+        distinctCompanyValues(subIndustryMatchStage, "Sub_Industry"),
+        // Job hierarchy
+        distinctContactValues(jobFunctionMatchStage, "Job_Function"),
+        distinctContactValues(jobSeniorityMatchStage, "Job_Seniority"),
+      ]);
+
+      const sd = staticCompanyFilters[0] || { segments: [], employeeRanges: [], turnovers: [] };
+      sd.turnovers = sd.turnovers.sort((a, b) => parseRange(a) - parseRange(b));
+      sd.employeeRanges = sd.employeeRanges.sort((a, b) => parseRange(a) - parseRange(b));
+      sd.segments = sd.segments.sort();
+
+      dropdownData = {
+        ...sd,
+        industries,
+        subIndustries,
+        jobFunctions,
+        jobSeniorities,
+        countries,
+        regions,
+        states,
+        cities,
+        genders: ["Male", "Female"],
+      };
+
+      // Cache for 2 hours — invalidated when new batch is uploaded to masterDB
+      await cacheSet(cacheKey, dropdownData, 2 * 60 * 60);
+    }
+
+    // Fetch applied filters fresh — changes when user saves filters for a campaign
+    let appliedFilters = [];
+    let appliedExclusions = [];
+    if (campaignId) {
+      const latestFilter = await CampaignFilter.findOne(
+        { campaignId, dataType: "Client" },
+        { filters: 1, exclusions: 1 }
+      )
+        .sort({ revisionNo: -1 })
+        .lean();
+
+      if (latestFilter) {
+        appliedFilters = latestFilter.filters || [];
+        appliedExclusions = latestFilter.exclusions || [];
+      }
+    }
+
+    return sendResponse(res, 200, "Dynamic filters fetched successfully", {
+      ...dropdownData,
+      appliedFilters,
+      appliedExclusions,
+    });
+  } catch (err) {
+    return sendError(
+      next,
+      err.message || "Failed to fetch dynamic filters",
+      500
+    );
   }
 });
 
@@ -2709,6 +3042,379 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
   }
 });
 
+const mergeCompanies = asyncHandler(async (req, res, next) => {
+  try {
+    const { parentCompanyId, companyIdsToMerge } = req.body;
+
+    if (!parentCompanyId)
+      return sendError(next, "Parent company ID is required", 400);
+    if (!Array.isArray(companyIdsToMerge) || companyIdsToMerge.length === 0)
+      return sendError(next, "Select at least one company to merge", 400);
+
+    // Prevent merging a company into itself
+    const filteredIds = companyIdsToMerge.filter(
+      (id) => id.toString() !== parentCompanyId.toString()
+    );
+    if (filteredIds.length === 0)
+      return sendError(next, "Cannot merge a company into itself", 400);
+
+    const parentCompany = await Company.findById(parentCompanyId).lean();
+    if (!parentCompany) return sendError(next, "Parent company not found", 404);
+
+    // Fetch full company data (snapshot) before deletion for revert capability
+    const mergedCompaniesSnapshot = await Company.find({
+      _id: { $in: filteredIds },
+    }).lean();
+
+    if (!mergedCompaniesSnapshot.length)
+      return sendError(next, "No valid companies found to merge", 404);
+
+    const mergedIds = mergedCompaniesSnapshot.map((c) => c._id);
+    const mergedCompanies = mergedCompaniesSnapshot.map((c) => ({
+      id: c._id,
+      name: c.Company_Name,
+    }));
+
+    // Capture contact IDs before relinking (needed for revert)
+    const contactsToRelink = await Contact.find(
+      { Company_ID: { $in: mergedIds } },
+      { _id: 1 }
+    ).lean();
+    const relinkedContactIds = contactsToRelink.map((c) => c._id);
+
+    // Re-link all contacts from merged companies → parent company
+    const updateResult = await Contact.updateMany(
+      { Company_ID: { $in: mergedIds } },
+      { $set: { Company_ID: parentCompanyId } }
+    );
+
+    // Delete the merged (duplicate) companies
+    await Company.deleteMany({ _id: { $in: mergedIds } });
+
+    // Save merge record with full backup for future revert
+    const user = req.user;
+    await CompanyMerge.create({
+      parentCompany: { id: parentCompanyId, name: parentCompany.Company_Name },
+      mergedCompanies,
+      mergedCompaniesSnapshot,
+      relinkedContactIds,
+      contactsRelinked: updateResult.modifiedCount,
+      mergedBy: user
+        ? {
+            id: user._id,
+            name: user.name,
+            employeeName: user.employeeName,
+            email: user.email,
+            role: user.role,
+          }
+        : undefined,
+    });
+
+    return sendResponse(res, 200, "Companies merged successfully", {
+      contactsRelinked: updateResult.modifiedCount,
+      companiesMerged: mergedCompanies.length,
+    });
+  } catch (err) {
+    return sendError(next, err.message || "Merge failed", 500);
+  }
+});
+
+/**
+ * GET /api/masterdb/individualSearch
+ * Search Contact by name, designation (Job_Title), and/or company name.
+ * All provided fields are ANDed; each uses a case-insensitive regex.
+ */
+async function individualSearch(req, res, next) {
+  try {
+    const {
+      name,
+      designation,
+      company,
+      email,
+      page = 1,
+      limit = 20,
+    } = req.query;
+
+    if (!name && !designation && !company && !email) {
+      return sendError(next, "At least one search field is required", 400);
+    }
+
+    const andConditions = [];
+
+    if (name?.trim()) {
+      const r = new RegExp(name.trim(), "i");
+      andConditions.push({
+        $or: [{ Full_Name: r }, { First_Name: r }, { Last_Name: r }],
+      });
+    }
+
+    if (designation?.trim()) {
+      andConditions.push({ Job_Title: new RegExp(designation.trim(), "i") });
+    }
+
+    if (email?.trim()) {
+      const r = new RegExp(email.trim(), "i");
+      andConditions.push({
+        $or: [
+          { Office_Email_1: r },
+          { Office_Email_2: r },
+          { Personal_Email1: r },
+          { Personal_Email2: r },
+        ],
+      });
+    }
+
+    // Company is on the same secondary connection — resolve IDs first, then filter Contact
+    if (company?.trim()) {
+      const matchingCompanies = await Company.find(
+        { Company_Name: new RegExp(company.trim(), "i") },
+        { _id: 1 }
+      ).lean();
+      if (!matchingCompanies.length) {
+        return sendResponse(res, 200, "No contacts found", {
+          contacts: [],
+          total: 0,
+        });
+      }
+      andConditions.push({
+        Company_ID: { $in: matchingCompanies.map((c) => c._id) },
+      });
+    }
+
+    const query =
+      andConditions.length > 1 ? { $and: andConditions } : andConditions[0];
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const [rawContacts, total] = await Promise.all([
+      Contact.find(query)
+        .populate(
+          "Company_ID",
+          "Company_Name Industry Company_Segment Employees_Range Turnover_Range Website Company_ID_Kestone Company_Source Company_Phone1 Company_Phone2 Year_Founded Sub_Industry Company_LinkedIn_Profile"
+        )
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      Contact.countDocuments(query),
+    ]);
+
+    const maskEmail = (email) => {
+      if (!email) return "";
+      const [local, domain] = email.split("@");
+      if (!domain) return email;
+      return `${local.slice(0, 2)}${"*".repeat(
+        Math.max(4, local.length - 2)
+      )}@${domain}`;
+    };
+
+    const maskPhone = (phone) => {
+      if (!phone) return "";
+      const digits = phone.replace(/\D/g, "");
+      if (digits.length < 4) return phone;
+      return `${"*".repeat(digits.length - 4)}${digits.slice(-4)}`;
+    };
+
+    const contacts = rawContacts.map((c) => ({
+      ...c,
+      Office_Email_1: maskEmail(c.Office_Email_1),
+      Office_Email_2: maskEmail(c.Office_Email_2),
+      Personal_Email1: maskEmail(c.Personal_Email1),
+      Personal_Email2: maskEmail(c.Personal_Email2),
+      Mobile_No: maskPhone(c.Mobile_No),
+      Contact_Direct_Phone1: maskPhone(c.Contact_Direct_Phone1),
+      Contact_Direct_Phone2: maskPhone(c.Contact_Direct_Phone2),
+    }));
+
+    return sendResponse(res, 200, "Search results", {
+      contacts,
+      total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+    });
+  } catch (err) {
+    return sendError(next, err.message || "Search failed", 500);
+  }
+}
+
+/**
+ * POST /api/masterdb/assignIndividualSearch
+ * Assign selected contacts (by Contact._id) directly to a campaign as CallingData.
+ * Batch logic: reuse the batch if any record with dataSourceType "individualSearchKestone"
+ * was added to this campaign within the last 3 hours; otherwise create a new sequential batch.
+ */
+async function assignIndividualSearch(req, res, next) {
+  try {
+    const { contactIds, campaignId } = req.body;
+    if (!contactIds?.length || !campaignId) {
+      return sendError(next, "contactIds and campaignId are required", 400);
+    }
+
+    // 1. Validate campaign (primary DB)
+    const campaign = await Campaign.findById(campaignId).lean();
+    if (!campaign) return sendError(next, "Campaign not found", 404);
+
+    // 2. Determine batch label
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    const recentEntry = await CallingData.findOne({
+      CampaignId: new mongoose.Types.ObjectId(campaignId),
+      dataSourceType: "IndividualSearchKestone",
+      createdAt: { $gte: threeHoursAgo },
+    })
+      .sort({ createdAt: -1 })
+      .select("batch")
+      .lean();
+
+    let batchLabel;
+    if (recentEntry?.batch) {
+      batchLabel = recentEntry.batch;
+    } else {
+      // Pick next sequential batch number across all batches in this campaign
+      const existingBatches = await CallingData.distinct("batch", {
+        CampaignId: new mongoose.Types.ObjectId(campaignId),
+      });
+      let maxNum = 0;
+      for (const b of existingBatches) {
+        const m = String(b || "").match(/Batch-(\d+)/i);
+        if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
+      }
+      batchLabel = `Batch-${maxNum + 1}`;
+    }
+
+    // 3. Fetch contacts from secondary DB with company details
+    const validIds = contactIds
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+
+    const contacts = await Contact.find({ _id: { $in: validIds } })
+      .populate(
+        "Company_ID",
+        "Company_Name Company_ID_Kestone Company_Source Year_Founded Turnover_Range Employees_Range Industry Sub_Industry Company_Segment Website Company_LinkedIn_Profile Company_Phone1 Company_Phone2"
+      )
+      .lean();
+
+    // 4. Dedup — skip contacts already assigned to this campaign
+    const contactIdStrings = contacts.map((c) => c.Contact_ID).filter(Boolean);
+    const alreadyIn = new Set(
+      (
+        await CallingData.find(
+          {
+            CampaignId: new mongoose.Types.ObjectId(campaignId),
+            Contact_ID: { $in: contactIdStrings },
+          },
+          { Contact_ID: 1 }
+        ).lean()
+      ).map((c) => c.Contact_ID)
+    );
+
+    const newContacts = contacts.filter((c) => !alreadyIn.has(c.Contact_ID));
+    const duplicates = contacts.length - newContacts.length;
+
+    if (!newContacts.length) {
+      return sendResponse(
+        res,
+        200,
+        "All selected contacts are already assigned to this campaign",
+        {
+          inserted: 0,
+          duplicates,
+          batch: batchLabel,
+          isWarning: true,
+        }
+      );
+    }
+
+    // 5. Map Contact → CallingData
+    const entries = newContacts.map((c) => ({
+      CampaignId: new mongoose.Types.ObjectId(campaignId),
+      UploadedBy: req.user._id,
+      source: "Individual Search",
+      batch: batchLabel,
+      dataSourceType: "IndividualSearchKestone",
+      Contact_ID: c.Contact_ID,
+      Contact_Source: c.Contact_Source,
+      Contact_Create_Date: c.Contact_Create_Date,
+      Salutation: c.Salutation,
+      First_Name: c.First_Name,
+      Last_Name: c.Last_Name,
+      Full_Name: c.Full_Name,
+      Gender: c.Gender,
+      Job_Title: c.Job_Title,
+      Job_Seniority: c.Job_Seniority,
+      Job_Function: c.Job_Function,
+      Contact_Address_1: c.Contact_Address_1,
+      Contact_Address_2: c.Contact_Address_2,
+      Contact_Address_3: c.Contact_Address_3,
+      Contact_City: c.Contact_City,
+      Contact_Pin: c.Contact_Pin,
+      Contact_State: c.Contact_State,
+      Contact_Region: c.Contact_Region,
+      Contact_Country: c.Contact_Country,
+      Contact_STD_ISD_Code: c.Contact_STD_ISD_Code,
+      Contact_Location_Tier: c.Contact_Location_Tier,
+      Contact_Direct_Phone1: c.Contact_Direct_Phone1,
+      Contact_Direct_Phone2: c.Contact_Direct_Phone2,
+      Contact_Extn_No: c.Contact_Extn_No,
+      Mobile_No: c.Mobile_No,
+      Office_Email_1: c.Office_Email_1,
+      Office_Email_2: c.Office_Email_2,
+      Personal_Email1: c.Personal_Email1,
+      Personal_Email2: c.Personal_Email2,
+      Contact_LinkedIn_Profile: c.Contact_LinkedIn_Profile,
+      Unsubscribe_Flag: c.Unsubscribe_Flag,
+      Unsubscribe_Account_Tag: c.Unsubscribe_Account_Tag,
+      DND_Flag: c.DND_Flag,
+      DND_Account_Tag: c.DND_Account_Tag,
+      Last_Engagement: c.Last_Engagement,
+      Last_Engagement_Date: c.Last_Engagement_Date,
+      Last_Engagement_Campaign: c.Last_Engagement_Campaign,
+      Telecalling_Remarks: c.Telecalling_Remarks,
+      EngagementPoints: c.EngagementPoints,
+      Company_ID: c.Company_ID?._id || null,
+      Company_Name: c.Company_ID?.Company_Name || "",
+      Company_ID_Kestone: c.Company_ID?.Company_ID_Kestone || "",
+      Company_Source: c.Company_ID?.Company_Source || "",
+      Year_Founded: c.Company_ID?.Year_Founded || "",
+      Turnover_Range: c.Company_ID?.Turnover_Range || "",
+      Employees_Range: c.Company_ID?.Employees_Range || "",
+      Industry: c.Company_ID?.Industry || "",
+      Sub_Industry: c.Company_ID?.Sub_Industry || "",
+      Company_Segment: c.Company_ID?.Company_Segment || "",
+      Website: c.Company_ID?.Website || "",
+      Company_LinkedIn_Profile: c.Company_ID?.Company_LinkedIn_Profile || "",
+      Company_Phone1: c.Company_ID?.Company_Phone1 || "",
+      Company_Phone2: c.Company_ID?.Company_Phone2 || "",
+    }));
+
+    // 6. Insert in chunks of 500
+    const CHUNK = 500;
+    let inserted = 0;
+    for (let i = 0; i < entries.length; i += CHUNK) {
+      const result = await CallingData.insertMany(entries.slice(i, i + CHUNK), {
+        ordered: false,
+      });
+      inserted += result.length;
+    }
+
+    // 7. Mark campaign as having calling data assigned
+    await Campaign.findByIdAndUpdate(campaignId, {
+      isCallingDataAssigned: true,
+    });
+
+    return sendResponse(
+      res,
+      200,
+      "Contacts assigned to campaign successfully",
+      {
+        inserted,
+        duplicates,
+        batch: batchLabel,
+        campaignName: campaign.name,
+      }
+    );
+  } catch (err) {
+    return sendError(next, err.message || "Assignment failed", 500);
+  }
+}
+
 export {
   batchCreateFromExcel,
   getBatchJobStatus,
@@ -2717,6 +3423,7 @@ export {
   updateData,
   createANewCompany,
   getAllCompanyName,
+  getDropdownFiltersOld,
   getDropdownFilters,
   getFiltersStats,
   updateCompany,
@@ -2724,4 +3431,7 @@ export {
   dumpAllHistoryData,
   migrateToEngagementHistory,
   getContactsWithEngagements,
+  mergeCompanies,
+  individualSearch,
+  assignIndividualSearch,
 };

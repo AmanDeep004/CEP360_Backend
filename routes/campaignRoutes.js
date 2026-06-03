@@ -8,6 +8,8 @@ import {
   getCampaignsByUserId,
   updateCampaignDataSourceType,
   updateCampaignStage,
+  createReconfirmationCampaign,
+  getReconfirmationCampaigns,
 } from "../controllers/campaignController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -64,6 +66,22 @@ router.put(
   protect,
   authorize(ADMIN, PRESALES_MANAGER),
   updateCampaignStage
+);
+
+// Create reconfirmation campaign from an existing campaign
+router.post(
+  "/createReconfirmation/:campaignId",
+  protect,
+  authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER),
+  createReconfirmationCampaign
+);
+
+// Get all reconfirmation campaigns derived from a parent campaign
+router.get(
+  "/getReconfirmationCampaigns/:campaignId",
+  protect,
+  authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER),
+  getReconfirmationCampaigns
 );
 
 // Delete campaign

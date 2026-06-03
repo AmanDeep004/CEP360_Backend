@@ -21,7 +21,6 @@ const createCallHistory = asyncHandler(async (req, res, next) => {
       !campaign_id ||
       !contactNo ||
       !remarks ||
-      !reason ||
       !agent_id ||
       !agentName
     ) {

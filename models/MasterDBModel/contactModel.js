@@ -75,4 +75,25 @@ const ContactSchema = new mongoose.Schema(
 // Index for default sort by createdAt
 ContactSchema.index({ createdAt: -1 });
 
+// Compound text index for fast full-text search across key contact fields
+ContactSchema.index(
+  {
+    First_Name: "text",
+    Last_Name: "text",
+    Full_Name: "text",
+    Job_Title: "text",
+    Office_Email_1: "text",
+    Office_Email_2: "text",
+    Personal_Email1: "text",
+    Personal_Email2: "text",
+    Contact_Direct_Phone1: "text",
+    Contact_Direct_Phone2: "text",
+    Mobile_No: "text",
+    Contact_City: "text",
+    Contact_State: "text",
+    Contact_Country: "text",
+  },
+  { name: "contact_text_search" }
+);
+
 export default getSecondaryConnection().model("Contact", ContactSchema);

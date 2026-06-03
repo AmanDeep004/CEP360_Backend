@@ -8,7 +8,7 @@ const chatEntrySchema = new mongoose.Schema(
       type: String,
       required: true,
     },
-    reason: { type: String, required: true },
+    reason: { type: String },
     callingDate: { type: Date, default: Date.now },
     isRegistered: { type: Boolean, default: false },
     agent_id: {
@@ -29,16 +29,25 @@ const callHistorySchema = new mongoose.Schema(
       ref: "CallingData",
       required: true,
     },
-    campaign_id: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Campaign",
-      required: true,
-    },
+    // campaign_id: {
+    //   type: mongoose.Schema.Types.ObjectId,
+    //   ref: "Campaign",
+    //   required: true,
+    // },
     isRegistered: { type: Boolean, default: false },
     registrationDate: { type: Date },
     chatHistory: [chatEntrySchema],
   },
   { timestamps: true }
 );
+
+// Fetch all call histories for a specific contact (most common query)
+callHistorySchema.index({ callingData_id: 1 });
+
+// Fetch all call histories for a campaign (reporting, dashboards)
+callHistorySchema.index({ campaign_id: 1, createdAt: -1 });
+
+// Compound: filter by campaign + contact (upsert / update patterns)
+callHistorySchema.index({ callingData_id: 1, campaign_id: 1 });
 
 export default getPrimaryConnection().model("CallHistory", callHistorySchema);

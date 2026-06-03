@@ -14,6 +14,8 @@
  */
 
 import fs from "fs";
+import path from "path";
+import XLSX from "xlsx";
 import Company from "../models/MasterDBModel/companyModel.js";
 import Contact from "../models/MasterDBModel/contactModel.js";
 
@@ -166,6 +168,7 @@ async function processChunk(rows, batchName, lastNumber, job) {
     if (!companyName) {
       job.progress.failed++;
       job.progress.failReasons.missingCompanyName++;
+      if (job.skippedRows) job.skippedRows.push({ ...r, Skip_Reason: "Missing Company_Name" });
       continue;
     }
 
@@ -199,6 +202,10 @@ async function processChunk(rows, batchName, lastNumber, job) {
 
     if (isDbDuplicate || isChunkDuplicate) {
       job.progress.duplicates++;
+      if (job.skippedRows) {
+        const reason = isDbDuplicate ? "Duplicate (already in DB)" : "Duplicate (within file)";
+        job.skippedRows.push({ ...r, Skip_Reason: reason });
+      }
       continue; // company is NOT touched
     }
 
@@ -245,8 +252,8 @@ async function processChunk(rows, batchName, lastNumber, job) {
         update: {
           $set: {
             Company_ID_Kestone:      cr.Company_ID_Kestone      || "",
-            Affinity_ID_Dell:        cr.Affinity_ID_Dell        || "",
-            Company_ID_Google:       cr.Company_ID_Google       || "",
+            // Affinity_ID_Dell:        cr.Affinity_ID_Dell        || "",
+            // Company_ID_Google:       cr.Company_ID_Google       || "",
             Company_Source:          cr.Company_Source          || "",
             Company_Name:            cn,
             Year_Founded:            cr.Year_Founded            || "",
@@ -293,14 +300,14 @@ async function processChunk(rows, batchName, lastNumber, job) {
       // Company upsert succeeded but _id fetch failed (very rare edge case)
       job.progress.failed++;
       job.progress.failReasons.companyNotFound++;
+      if (job.skippedRows) job.skippedRows.push({ ...r, Skip_Reason: "Company not found after upsert" });
       continue;
     }
 
-    // Auto-generate Contact_ID if missing
-    if (!r.Contact_ID || safeStr(r.Contact_ID) === "") {
-      lastNumber++;
-      r.Contact_ID = `CEP-A-${String(lastNumber).padStart(6, "0")}`;
-    }
+    // Always generate Contact_ID server-side — ignore any value from Excel
+    lastNumber++;
+    const year = new Date().getFullYear();
+    r.Contact_ID = `CEP${year}-A-${String(lastNumber).padStart(10, "0")}`;
 
     const p1  = safeStr(r.Contact_Direct_Phone1);
     const p2  = safeStr(r.Contact_Direct_Phone2);
@@ -383,6 +390,7 @@ async function processChunk(rows, batchName, lastNumber, job) {
  */
 export async function processExcelInBackground(jobId, filePath, batchName) {
   const job = jobStore.get(jobId);
+  job.skippedRows = [];
   try {
     const ExcelJS = (await import("exceljs")).default;
 
@@ -393,14 +401,15 @@ export async function processExcelInBackground(jobId, filePath, batchName) {
       formulae:      "ignore",
     });
 
-    // Get current max Contact_ID number once before streaming
-    const lastContact = await Contact.findOne({}, { Contact_ID: 1 })
-      .sort({ _id: -1 })
-      .lean();
+    // Get current max Contact_ID sequence number — handles old (CEP-A-) and new (CEP{YEAR}-A-) formats
+    const lastContact = await Contact.findOne(
+      { Contact_ID: { $regex: /^CEP/ } },
+      { Contact_ID: 1 }
+    ).sort({ Contact_ID: -1 }).lean();
     let lastNumber = 0;
     if (lastContact?.Contact_ID) {
-      const m = lastContact.Contact_ID.match(/CEP-A-(\d+)/);
-      if (m) lastNumber = parseInt(m[1]);
+      const m = lastContact.Contact_ID.match(/CEP(?:\d{4})?-A-(\d+)/);
+      if (m) lastNumber = parseInt(m[1], 10);
     }
 
     let headers   = null;
@@ -443,7 +452,6 @@ export async function processExcelInBackground(jobId, filePath, batchName) {
       await processChunk(rowBuffer, batchName, lastNumber, job);
     }
 
-    fs.unlink(filePath, () => {});
     job.status      = "completed";
     job.completedAt = new Date();
     console.log(
@@ -451,11 +459,30 @@ export async function processExcelInBackground(jobId, filePath, batchName) {
       `Inserted: ${job.progress.inserted}, Updated: ${job.progress.updated}, ` +
       `Duplicates: ${job.progress.duplicates}, Failed: ${job.progress.failed}`
     );
+
+    // Write skipped-rows report if any rows were skipped
+    if (job.skippedRows.length > 0) {
+      try {
+        const reportDir = path.join(process.cwd(), "public", "reports");
+        fs.mkdirSync(reportDir, { recursive: true });
+        const fileName = `skipped_${jobId}.xlsx`;
+        const ws = XLSX.utils.json_to_sheet(job.skippedRows);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Skipped Rows");
+        XLSX.writeFile(wb, path.join(reportDir, fileName));
+        job.reportUrl = `/reports/${fileName}`;
+        console.log(`[Job ${jobId}] Skipped-rows report: ${fileName} (${job.skippedRows.length} rows)`);
+      } catch (reportErr) {
+        console.error(`[Job ${jobId}] Failed to write skipped report:`, reportErr);
+      }
+    }
   } catch (err) {
     job.status      = "failed";
     job.error       = err.message;
     job.completedAt = new Date();
     console.error(`[Job ${jobId}] Failed:`, err);
+  } finally {
+    job.skippedRows = []; // free memory
     fs.unlink(filePath, () => {});
   }
 }
