@@ -27,22 +27,20 @@ const ProgramType = Object.freeze({
   ACADEMIC_PROGRAM: "Academic Program",
   ASSOCIATION_PROGRAM: "Association Program",
   AUDIENCE_GENERATION: "Audience Generation",
-  CHANNEL_PROGRAM: "Channel Program",
   LEAD_GENERATION: "Lead Generation",
   PROFILING_ACTIVITY: "Profiling Activity",
-  REDEMPTION: "Redemption",
-  REWARD: "REWARD",
-  VIRTUAL_EVENT: "Virtual Event",
+  REDEMPTION_PROGRAM: "Redemption Program",
+  REWARD_PROGRAM: "Reward Program",
+  CXO_EVENT: "CXO Event",
   ALL: [
     "Academic Program",
     "Association Program",
     "Audience Generation",
-    "Channel Program",
     "Lead Generation",
     "Profiling Activity",
-    "Redemption",
-    "Reward",
-    "Virtual Event",
+    "Redemption Program",
+    "Reward Program",
+    "CXO Event",
   ],
 });
 
@@ -55,12 +53,19 @@ const ProgramStatus = Object.freeze({
 const HTTPLOG = false; //true, false
 
 const EmailTrigger = Object.freeze({
-  CAMPAIGN_ASSIGNED_TO_PM:         "CAMPAIGN_ASSIGNED_TO_PM",
-  AGENT_ASSIGNED_TO_CAMPAIGN:      "AGENT_ASSIGNED_TO_CAMPAIGN",
-  CALLING_DATA_UPLOADED:           "CALLING_DATA_UPLOADED",
-  CALLING_DATA_ASSIGNED_TO_AGENT:  "CALLING_DATA_ASSIGNED_TO_AGENT",
-  CALLING_DATA_REASSIGNED_TO_AGENT:"CALLING_DATA_REASSIGNED_TO_AGENT",
+  CAMPAIGN_ASSIGNED_TO_PM: "CAMPAIGN_ASSIGNED_TO_PM",
+  AGENT_ASSIGNED_TO_CAMPAIGN: "AGENT_ASSIGNED_TO_CAMPAIGN",
+  CALLING_DATA_UPLOADED: "CALLING_DATA_UPLOADED",
+  CALLING_DATA_ASSIGNED_TO_AGENT: "CALLING_DATA_ASSIGNED_TO_AGENT",
+  CALLING_DATA_REASSIGNED_TO_AGENT: "CALLING_DATA_REASSIGNED_TO_AGENT",
 });
 
 // Export the enums
-export { UserRoleEnum, HTTPLOG, Constants, ProgramType, ProgramStatus, EmailTrigger };
+export {
+  UserRoleEnum,
+  HTTPLOG,
+  Constants,
+  ProgramType,
+  ProgramStatus,
+  EmailTrigger,
+};

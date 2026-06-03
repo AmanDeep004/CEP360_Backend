@@ -3,10 +3,9 @@ import CallingData from "../models/callingDataModal.js";
 import errorHandler from "../utils/index.js";
 import User from "../models/userModel.js";
 import AgentAssigned from "../models/agentAssigned.js";
-import { UserRoleEnum } from "../utils/enum.js";
+import { UserRoleEnum, ProgramType, EmailTrigger } from "../utils/enum.js";
 import { sendEmail } from "../services/microsoftGraphMailer.js";
 import { campaignAssignedToPMTemplate } from "../services/notificationEmailTemplates.js";
-import { EmailTrigger } from "../utils/enum.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 const {
   SUPERADMIN,

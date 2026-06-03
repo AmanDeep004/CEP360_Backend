@@ -2,7 +2,7 @@ import { Schema, model } from "mongoose";
 import pkg from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { createCipheriv, createDecipheriv, randomBytes } from "crypto";
-import { UserRoleEnum } from "../utils/enum.js";
+import { UserRoleEnum, ProgramType } from "../utils/enum.js";
 import { getPrimaryConnection } from "../config/db.js";
 const { genSalt, hash, compare } = pkg;
 const { sign } = jwt;
@@ -113,7 +113,10 @@ const userSchema = new Schema(
     },
     programType: {
       type: String,
-      // required: [true, "Program type is required"],
+      enum: {
+        values: ProgramType.ALL,
+        message: "{VALUE} is not a valid program type",
+      },
       trim: true,
     },
     signature: {
@@ -135,6 +138,10 @@ const userSchema = new Schema(
       type: String,
       // required: [true, "Program manager is required"],
       trim: true,
+    },
+    associatedProgramManager: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
     },
     location: {
       type: String,

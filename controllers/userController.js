@@ -3,7 +3,7 @@ import Campaign from "../models/campaignModel.js";
 import Attendence from "../models/attendenceModel.js";
 import errorHandler from "../utils/index.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
-import { UserRoleEnum } from "../utils/enum.js";
+import { UserRoleEnum, ProgramType } from "../utils/enum.js";
 import XLSX from "xlsx";
 
 const { SUPERADMIN, ADMIN, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT, DATABASE_MANAGER } =
@@ -30,6 +30,7 @@ const registerUser = asyncHandler(async (req, res, next) => {
       programType,
       signature,
       programManager,
+      associatedProgramManager,
       location,
       status,
       doj,
@@ -77,6 +78,7 @@ const registerUser = asyncHandler(async (req, res, next) => {
       programType,
       signature,
       programManager,
+      associatedProgramManager: associatedProgramManager || undefined,
       location,
       status: status || "active",
       doj,
@@ -226,6 +228,7 @@ const updateUserProfile = asyncHandler(async (req, res, next) => {
       "programType",
       "signature",
       "programManager",
+      "associatedProgramManager",
       "location",
       "status",
       "pan",
@@ -285,6 +288,7 @@ const getAllUsers = asyncHandler(async (req, res, next) => {
     if (!page) {
       const users = await User.find(filter)
         .select("-password")
+        .populate("associatedProgramManager", "employeeName email employeeCode _id")
         .sort({ createdAt: -1 });
       return sendResponse(res, 200, "Users retrieved successfully", users);
     }
@@ -294,6 +298,7 @@ const getAllUsers = asyncHandler(async (req, res, next) => {
       User.countDocuments(filter),
       User.find(filter)
         .select("-password")
+        .populate("associatedProgramManager", "employeeName email employeeCode _id")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit),
@@ -568,6 +573,23 @@ const changeOwnPassword = asyncHandler(async (req, res, next) => {
   }
 });
 
+/**
+ * @desc    Get all program managers for dropdown
+ * @route   GET /api/users/program-managers
+ * @access  Private
+ */
+const getProgramManagers = asyncHandler(async (req, res, next) => {
+  try {
+    const managers = await User.find({ role: UserRoleEnum.PROGRAM_MANAGER })
+      .select("employeeName email employeeCode _id")
+      .sort({ employeeName: 1 })
+      .lean();
+    return sendResponse(res, 200, "Program managers retrieved successfully", managers);
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
 export {
   resetUserPassword,
   registerUser,
@@ -580,4 +602,5 @@ export {
   logout,
   getAllUsers,
   changeOwnPassword,
+  getProgramManagers,
 };

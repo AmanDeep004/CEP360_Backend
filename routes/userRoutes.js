@@ -12,6 +12,7 @@ import {
   resetUserPassword,
   bulkCreateAgents,
   changeOwnPassword,
+  getProgramManagers,
   // getUsers,
 } from "../controllers/userController.js";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -75,6 +76,7 @@ router.put(
 );
 
 router.get("/users-by-role", protect, authorize(...ALL), getUsersByRole);
+router.get("/program-managers", protect, authorize(...ALL), getProgramManagers);
 router.delete("/:id", protect, authorize(ADMIN, RESOURCE_MANAGER), deleteUser);
 router.post("/logout", protect, logout);
 router.put("/change-password", protect, authorize(...ALL), changeOwnPassword);
