@@ -21,7 +21,7 @@ router.get(
 router.post(
   "/createAndLinkTemplate",
   protect,
-  authorize(ADMIN, PRESALES_MANAGER),
+  authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER),
   createTemplate
 );
 router.put("/updateTemplate", updateTemplate);

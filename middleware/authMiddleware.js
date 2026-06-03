@@ -58,6 +58,11 @@ export const authorize = (...roles) => {
       return sendError(next, "User not authenticated", 400);
     }
 
+    // Superadmin bypasses all role restrictions
+    if (req.user.role === "superadmin") {
+      return next();
+    }
+
     if (!roles.includes(req.user.role)) {
       return sendError(
         next,

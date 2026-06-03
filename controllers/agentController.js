@@ -6,6 +6,10 @@ import { UserRoleEnum } from "../utils/enum.js";
 import campaignModel from "../models/campaignModel.js";
 import callingDataModal from "../models/callingDataModal.js";
 import { maskEmail, maskPhone } from "../utils/mobileEmailMasking.js";
+import EngagementHistory from "../models/MasterDBModel/enagagementHistoryModel.js";
+import { sendEmail } from "../services/microsoftGraphMailer.js";
+import { agentAssignedToCampaignTemplate } from "../services/notificationEmailTemplates.js";
+import { EmailTrigger } from "../utils/enum.js";
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
@@ -20,11 +24,6 @@ const assignAgentsToCampaign = asyncHandler(async (req, res, next) => {
         400
       );
     }
-
-    // const campaignExists = await Campaign.exists({ _id: campaignId });
-    // if (!campaignExists) {
-    //   return sendError(next, "Campaign not found", 404);
-    // }
 
     const existingAssignments = await AgentAssigned.find({
       campaign_id: campaignId,
@@ -65,6 +64,47 @@ const assignAgentsToCampaign = asyncHandler(async (req, res, next) => {
 
     if (newAssignments.length > 0) {
       await AgentAssigned.insertMany(newAssignments);
+    }
+
+    // Fire-and-forget: notify ALL agents being assigned (new + re-activated)
+    if (agentIds.length > 0) {
+      Promise.all([
+        User.find({ _id: { $in: agentIds } })
+          .select("employeeName email")
+          .lean(),
+        campaignModel
+          .findById(campaignId)
+          .select("name clientName brandName startDate endDate")
+          .lean(),
+      ])
+        .then(([agents, campaign]) => {
+          if (!campaign) return;
+          agents.forEach((agent) => {
+            if (!agent.email) return;
+            sendEmail(
+              agent.email,
+              `You have been added to campaign: ${campaign.name}`,
+              agentAssignedToCampaignTemplate({
+                agentName: agent.employeeName,
+                campaignName: campaign.name,
+                clientName: campaign.clientName,
+                brandName: campaign.brandName,
+                startDate: campaign.startDate,
+                endDate: campaign.endDate,
+              }),
+              {
+                trigger: EmailTrigger.AGENT_ASSIGNED_TO_CAMPAIGN,
+                campaignId: campaign._id,
+                recipientUserId: agent._id,
+              }
+            );
+          });
+        })
+        .catch((err) =>
+          console.error(
+            `[Email] Agent campaign assignment notification failed: ${err.message}`
+          )
+        );
     }
 
     return sendResponse(res, 200, "Agents assigned successfully", {
@@ -480,10 +520,12 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
   try {
     const { agentId } = req.params;
     const {
-      source,
+      dataSourceType,
+      batch,
       registered,
       callRemarks,
       lastDateOfTelecalling,
+      priorityGroup,
       search = "",
       page = 1,
       limit = 20,
@@ -496,8 +538,20 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
     const filter = { agentId };
 
     // Basic filters
-    if (source) filter.source = { $regex: new RegExp(source, "i") };
-    if (registered !== undefined && registered !== "") filter.isRegistered = registered === "true";
+    if (dataSourceType) {
+      if (dataSourceType === "Kestone") {
+        filter.dataSourceType = { $in: ["Kestone", "Both"] };
+      } else if (dataSourceType === "Client") {
+        filter.dataSourceType = { $in: ["Client", "Both"] };
+      } else {
+        filter.dataSourceType = dataSourceType; // "Both", "IndividualSearchKestone" — exact
+      }
+    }
+    if (batch) filter.batch = { $regex: new RegExp(batch.trim(), "i") };
+    if (registered !== undefined && registered !== "")
+      filter.isRegistered = registered === "true";
+    if (priorityGroup === "unassigned") filter["priorityGroup.no"] = null;
+    else if (priorityGroup) filter["priorityGroup.label"] = priorityGroup;
 
     let searchFilter = {};
 
@@ -537,6 +591,8 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
           model: "CallHistory",
         },
       })
+      .sort({ "priorityGroup.no": 1 })
+      .allowDiskUse(true)
       .lean();
 
     // ================================
@@ -557,11 +613,10 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
     // ================================
     if (lastDateOfTelecalling) {
       const trimmedDate = lastDateOfTelecalling.trim();
-      const startOfDay = new Date(trimmedDate);
-      startOfDay.setUTCHours(0, 0, 0, 0);
-
-      const endOfDay = new Date(trimmedDate);
-      endOfDay.setUTCHours(23, 59, 59, 999);
+      // Use IST (UTC+5:30) day boundaries so the filter matches the date
+      // as seen by users in India, regardless of server timezone
+      const startOfDay = new Date(trimmedDate + "T00:00:00+05:30");
+      const endOfDay = new Date(trimmedDate + "T23:59:59.999+05:30");
 
       callingData = callingData.filter((data) => {
         const chatHist = data.callHistory?.chatHistory;
@@ -570,9 +625,11 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
           const lastEntry = chatHist.reduce(
             (latest, item) => {
               const callDate = new Date(item.callingDate || "1970-01-01");
-              return callDate > latest.callingDate ? item : latest;
+              return callDate > new Date(latest.callingDate || "1970-01-01")
+                ? item
+                : latest;
             },
-            { callingDate: new Date("1970-01-01") }
+            { callingDate: "1970-01-01" }
           );
 
           if (!lastEntry.callingDate) return false;
@@ -614,6 +671,7 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
     const paginatedData = callingData.slice(skip, skip + limNum);
     const maskedData = paginatedData.map((row) => ({
       ...row,
+      priorityGroup: row.priorityGroup ?? { no: null, label: null },
       Contact_Direct_Phone1: maskPhone(row.Contact_Direct_Phone1),
       Contact_Direct_Phone2: maskPhone(row.Contact_Direct_Phone2),
       Mobile_No: maskPhone(row.Mobile_No),
@@ -637,6 +695,25 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
   }
 });
 
+const getEngagementHistoryByContactId = asyncHandler(async (req, res, next) => {
+  try {
+    const { contactId } = req.params;
+    if (!contactId) return sendError(next, "contactId is required", 400);
+
+    const records = await EngagementHistory.find({ contact_id: contactId })
+      .sort({ last_engagement_date: -1, createdAt: -1 })
+      .lean();
+
+    return sendResponse(res, 200, "Engagement history fetched", { records });
+  } catch (err) {
+    return sendError(
+      next,
+      err.message || "Failed to fetch engagement history",
+      500
+    );
+  }
+});
+
 export {
   assignAgentsToCampaign,
   getAllocAndUnalloclist,
@@ -646,4 +723,5 @@ export {
   getCallingDataByAgentAndCampaign,
   getAllAssignedAgents,
   getCallingDataByAgentData,
+  getEngagementHistoryByContactId,
 };

@@ -2,12 +2,22 @@ import Campaign from "../models/campaignModel.js";
 import errorHandler from "../utils/index.js";
 import User from "../models/userModel.js";
 import CallingData from "../models/callingDataModal.js";
+import PrioritySlot from "../models/prioritySlotModel.js";
+import CallHistory from "../models/callHistoryModel.js";
 import CallingDataEditApproval from "../models/callingDataEditApprovalModel.js";
 import { UserRoleEnum } from "../utils/enum.js";
 import XLSX from "xlsx";
 import mongoose from "mongoose";
 import escapeStringRegexp from "escape-string-regexp";
 import { maskPhone, maskEmail } from "../utils/mobileEmailMasking.js";
+import EngagementHistory from "../models/MasterDBModel/enagagementHistoryModel.js";
+import { sendEmail } from "../services/microsoftGraphMailer.js";
+import {
+  callingDataUploadedToPMTemplate,
+  callingDataAssignedToAgentTemplate,
+  callingDataReassignedToAgentTemplate,
+} from "../services/notificationEmailTemplates.js";
+import { EmailTrigger } from "../utils/enum.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 const {
   ADMIN,
@@ -97,8 +107,8 @@ const uploadcallingData = asyncHandler(async (req, res, next) => {
       DND_Flag: row.DND_Flag || "",
       DND_Account_Tag: row.DND_Account_Tag || "",
       Company_ID_Kestone: row.Company_ID_Kestone || "",
-      Affinity_ID_Dell: row.Affinity_ID_Dell || "",
-      Company_ID_Google: row.Company_ID_Google || "",
+      // Affinity_ID_Dell: row.Affinity_ID_Dell || "",
+      // Company_ID_Google: row.Company_ID_Google || "",
       Company_Source: row.Company_Source || "",
       Company_Name: row.Company_Name || "",
       Year_Founded: row.Year_Founded || "",
@@ -133,6 +143,34 @@ const uploadcallingData = asyncHandler(async (req, res, next) => {
 
     await CallingData.insertMany(dbEntries);
 
+    // Fire-and-forget: notify campaign PM(s) about new data upload
+    Campaign.findById(CampaignId)
+      .populate({ path: "programManager", select: "employeeName email" })
+      .lean()
+      .then((campaign) => {
+        if (!campaign?.programManager?.length) return;
+        const uploadedByName = req.user?.employeeName || "";
+        campaign.programManager.forEach((pm) => {
+          if (!pm.email) return;
+          sendEmail(
+            pm.email,
+            `New calling data added to campaign: ${campaign.name}`,
+            callingDataUploadedToPMTemplate({
+              pmName: pm.employeeName,
+              campaignName: campaign.name,
+              count: dbEntries.length,
+              uploadedByName,
+            }),
+            {
+              trigger: EmailTrigger.CALLING_DATA_UPLOADED,
+              campaignId: campaign._id,
+              recipientUserId: pm._id,
+            }
+          );
+        });
+      })
+      .catch((err) => console.error(`[Email] Calling data upload notification failed: ${err.message}`));
+
     return sendResponse(res, 200, "Database uploaded successfully", {
       count: dbEntries.length,
     });
@@ -143,23 +181,33 @@ const uploadcallingData = asyncHandler(async (req, res, next) => {
 const getCallingDataById = asyncHandler(async (req, res, next) => {
   try {
     const { id } = req.params;
-    const data = await CallingData.findById(id)
-      .populate({ path: "CampaignId" })
-      .populate({
-        path: "agentId",
-        select: "employeeName email",
-      })
-      .populate({
-        path: "callHistory",
-        populate: {
-          path: "chatHistory",
-          model: "CallHistory",
-        },
-      })
-      .lean();
-    if (!data) {
-      return sendError(next, "Entry not found", 404);
+
+    const [data, allHistories] = await Promise.all([
+      CallingData.findById(id)
+        .populate({ path: "CampaignId" })
+        .populate({ path: "agentId", select: "employeeName email" })
+        .lean(),
+      CallHistory.find({ callingData_id: id }).lean(),
+    ]);
+
+    if (!data) return sendError(next, "Entry not found", 404);
+
+    // Merge chatHistory from ALL CallHistory docs (across all campaigns), newest first
+    const combinedChatHistory = allHistories
+      .flatMap((h) => h.chatHistory || [])
+      .sort((a, b) => new Date(b.callingDate) - new Date(a.callingDate));
+
+    data.callHistory = { chatHistory: combinedChatHistory };
+
+    // Fetch previous campaign engagements from master DB by Contact_ID
+    if (data.Contact_ID) {
+      data.engagementHistory = await EngagementHistory.find({ contact_id: data.Contact_ID })
+        .sort({ last_engagement_date: -1, createdAt: -1 })
+        .lean();
+    } else {
+      data.engagementHistory = [];
     }
+
     return sendResponse(res, 200, "Data fetched successfully", data);
   } catch (err) {
     return sendError(next, err.message, 500);
@@ -203,6 +251,13 @@ const editcallingData = asyncHandler(async (req, res, next) => {
       status: "Pending",
       requestedAt: new Date(),
     });
+
+    // Immediately apply changes to CallingData without waiting for approval
+    const immediateUpdate = {};
+    changedFields.forEach(({ field, newValue }) => {
+      immediateUpdate[field] = newValue;
+    });
+    await CallingData.findByIdAndUpdate(_id, { $set: immediateUpdate });
 
     return sendResponse(res, 200, "Edit request submitted for approval", {
       callingDataId: _id,
@@ -300,11 +355,10 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
 
     const filter = { CampaignId, "discrepencyInData.status": { $ne: true } };
 
-    // search on multiple fields
+    // text search across name / contact / company fields
     if (req.query.search && req.query.search.trim() !== "") {
       const search = req.query.search.trim();
       const regex = new RegExp(escapeStringRegexp(search), "i");
-
       filter.$or = [
         { Full_Name: regex },
         { First_Name: regex },
@@ -320,6 +374,23 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
       ];
     }
 
+    // dedicated Source Type filter
+    if (req.query.dataSourceType && req.query.dataSourceType.trim()) {
+      const dst = req.query.dataSourceType.trim();
+      if (dst === "Kestone") {
+        filter.dataSourceType = { $in: ["Kestone", "Both"] };
+      } else if (dst === "Client") {
+        filter.dataSourceType = { $in: ["Client", "Both"] };
+      } else {
+        filter.dataSourceType = dst;
+      }
+    }
+
+    // dedicated Batch filter — case-insensitive contains
+    if (req.query.batch && req.query.batch.trim()) {
+      filter.batch = new RegExp(escapeStringRegexp(req.query.batch.trim()), "i");
+    }
+
     // filter registered
     if (req.query.isRegistered !== undefined) {
       const val = req.query.isRegistered.toLowerCase();
@@ -328,10 +399,20 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
       }
     }
 
+    // priority group filter
+    if (req.query.priorityGroup && req.query.priorityGroup.trim()) {
+      const pg = req.query.priorityGroup.trim();
+      if (pg === "unassigned") {
+        filter["priorityGroup.no"] = null;
+      } else {
+        filter["priorityGroup.label"] = pg;
+      }
+    }
+
     // fetch data and count
     const [total, data] = await Promise.all([
       CallingData.countDocuments(filter),
-      CallingData.find(filter).skip(skip).limit(limit).lean(),
+      CallingData.find(filter).sort({ "priorityGroup.no": 1 }).skip(skip).limit(limit).lean(),
     ]);
 
     const maskedData = data.map((row) => ({
@@ -510,8 +591,10 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
       assignment,
       agentId,
       remark,
-      source,
+      dataSourceType,
       range,
+      batch,
+      priorityGroup,   // "P-1","P-2",... or "unassigned"
       page = 1,
       limit = 20,
     } = req.query;
@@ -527,8 +610,24 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
 
     if (agentId) filter.agentId = agentId;
 
-    if (source) {
-      filter.source = { $regex: new RegExp(escapeStringRegexp(source), "i") };
+    if (dataSourceType) {
+      if (dataSourceType === "Kestone") {
+        filter.dataSourceType = { $in: ["Kestone", "Both"] };
+      } else if (dataSourceType === "Client") {
+        filter.dataSourceType = { $in: ["Client", "Both"] };
+      } else {
+        filter.dataSourceType = dataSourceType;
+      }
+    }
+
+    if (batch) {
+      filter.batch = { $regex: new RegExp(escapeStringRegexp(batch), "i") };
+    }
+
+    if (priorityGroup === "unassigned") {
+      filter["priorityGroup.no"] = null;
+    } else if (priorityGroup) {
+      filter["priorityGroup.label"] = priorityGroup;
     }
 
     const applyMask = (row) => ({
@@ -549,6 +648,7 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
         CallingData.find(filter)
           .populate({ path: "agentId", select: "employeeName email" })
           .populate({ path: "callHistory" })
+          .sort({ "priorityGroup.no": 1 })  // P-1 first; nulls sort last in MongoDB asc
           .skip(skip)
           .limit(limNum)
           .lean(),
@@ -695,6 +795,36 @@ const assignCallingDataToAgents = asyncHandler(async (req, res, next) => {
       { $set: { agentId, pmId, pmName } }
     );
 
+    // Fire-and-forget: notify the assigned agent
+    if (result.modifiedCount > 0) {
+      Promise.all([
+        User.findById(agentId).select("employeeName email").lean(),
+        // Get campaign name from one of the assigned records
+        CallingData.findOne({ _id: { $in: finalCallingDataIds } })
+          .populate({ path: "CampaignId", select: "name" })
+          .lean(),
+      ])
+        .then(([agent, sampleRecord]) => {
+          if (!agent?.email) return;
+          sendEmail(
+            agent.email,
+            `Calling data assigned to you`,
+            callingDataAssignedToAgentTemplate({
+              agentName: agent.employeeName,
+              campaignName: sampleRecord?.CampaignId?.name || "—",
+              count: result.modifiedCount,
+              pmName,
+            }),
+            {
+              trigger: EmailTrigger.CALLING_DATA_ASSIGNED_TO_AGENT,
+              campaignId: sampleRecord?.CampaignId?._id || null,
+              recipientUserId: agent._id,
+            }
+          );
+        })
+        .catch((err) => console.error(`[Email] Calling data assignment notification failed: ${err.message}`));
+    }
+
     return sendResponse(
       res,
       200,
@@ -784,6 +914,34 @@ const reassignCallingDatatoAgents = asyncHandler(async (req, res, next) => {
     }));
 
     const result = await CallingData.bulkWrite(bulkOps);
+
+    // Fire-and-forget: notify the newly assigned agent
+    if (result.modifiedCount > 0) {
+      Promise.all([
+        User.findById(newAgentId).select("employeeName email").lean(),
+        CallingData.findOne({ _id: { $in: callingDataIds } })
+          .populate({ path: "CampaignId", select: "name" })
+          .lean(),
+      ])
+        .then(([agent, sampleRecord]) => {
+          if (!agent?.email) return;
+          sendEmail(
+            agent.email,
+            `Calling data reassigned to you`,
+            callingDataReassignedToAgentTemplate({
+              agentName: agent.employeeName,
+              campaignName: sampleRecord?.CampaignId?.name || "—",
+              count: result.modifiedCount,
+            }),
+            {
+              trigger: EmailTrigger.CALLING_DATA_REASSIGNED_TO_AGENT,
+              campaignId: sampleRecord?.CampaignId?._id || null,
+              recipientUserId: agent._id,
+            }
+          );
+        })
+        .catch((err) => console.error(`[Email] Calling data reassignment notification failed: ${err.message}`));
+    }
 
     return sendResponse(
       res,
@@ -915,6 +1073,403 @@ const closePriority = asyncHandler(async (req, res, next) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PRIORITY GROUP FEATURE
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Filterable fields exposed to presales for building priority filter queries
+const PRIORITY_FILTER_FIELDS = [
+  "Contact_City",
+  "Contact_State",
+  "Contact_Region",
+  "Contact_Country",
+  "Industry",
+  "Sub_Industry",
+  "Company_Segment",
+  "Job_Seniority",
+  "Job_Function",
+  "Employees_Range",
+  "Turnover_Range",
+  "Gender",
+];
+
+/**
+ * Build a MongoDB match object from a filters map.
+ * filters: { Contact_City: ["Delhi","Mumbai"], Industry: ["IT"] }
+ * → { Contact_City: { $in: [...] }, Industry: { $in: [...] } }
+ */
+function buildPriorityMatchFromFilters(filters = {}) {
+  const match = {};
+  for (const [field, values] of Object.entries(filters)) {
+    if (!PRIORITY_FILTER_FIELDS.includes(field)) continue;
+    const arr = Array.isArray(values) ? values : [values];
+    const realVals = arr.filter((v) => v && v !== "__blank__");
+    const includeBlank = arr.includes("__blank__");
+
+    if (realVals.length > 0 && includeBlank) {
+      // match records that have a value in the list OR have null/empty
+      match.$or = [
+        ...(match.$or || []),
+        { [field]: { $in: realVals } },
+        { [field]: null },
+        { [field]: "" },
+        { [field]: { $exists: false } },
+      ];
+    } else if (includeBlank) {
+      match.$or = [
+        ...(match.$or || []),
+        { [field]: null },
+        { [field]: "" },
+        { [field]: { $exists: false } },
+      ];
+    } else if (realVals.length > 0) {
+      match[field] = { $in: realVals };
+    }
+  }
+  return match;
+}
+
+/**
+ * GET /callingData/:campaignId/priorityFilterOptions
+ * Returns distinct values for each filterable field from this campaign's data.
+ */
+const priorityFilterOptions = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    if (!campaignId) return sendError(next, "campaignId is required", 400);
+
+    const results = await Promise.all(
+      PRIORITY_FILTER_FIELDS.map(async (field) => {
+        const vals = await CallingData.distinct(field, { CampaignId: campaignId });
+        const filled = vals.filter((v) => v && String(v).trim()).sort();
+        // Check if any records have null / empty for this field
+        const hasBlank = await CallingData.exists({
+          CampaignId: campaignId,
+          $or: [{ [field]: null }, { [field]: "" }, { [field]: { $exists: false } }],
+        });
+        return { field, values: hasBlank ? [...filled, "__blank__"] : filled };
+      })
+    );
+
+    const options = {};
+    results.forEach(({ field, values }) => { options[field] = values; });
+
+    return sendResponse(res, 200, "Priority filter options fetched", options);
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+/**
+ * GET /callingData/:campaignId/priorityPreview
+ * Query params: filters (JSON string)
+ * Returns count of records matching the given filters + overlap with already-assigned records.
+ */
+const priorityPreview = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    if (!campaignId) return sendError(next, "campaignId is required", 400);
+
+    let filters = {};
+    try {
+      filters = req.query.filters ? JSON.parse(req.query.filters) : {};
+    } catch {
+      return sendError(next, "Invalid filters JSON", 400);
+    }
+
+    const fieldMatch = buildPriorityMatchFromFilters(filters);
+    // If contactIds also provided for individual mode
+    const contactIds = req.query.contactIds
+      ? req.query.contactIds.split(",").filter(Boolean)
+      : [];
+
+    let baseQuery = { CampaignId: campaignId };
+
+    if (contactIds.length > 0 && Object.keys(fieldMatch).length > 0) {
+      // union: matches filter OR is in contactIds list
+      baseQuery.$or = [
+        fieldMatch,
+        { _id: { $in: contactIds.map((id) => new mongoose.Types.ObjectId(id)) } },
+      ];
+    } else if (contactIds.length > 0) {
+      baseQuery._id = { $in: contactIds.map((id) => new mongoose.Types.ObjectId(id)) };
+    } else {
+      Object.assign(baseQuery, fieldMatch);
+    }
+
+    const [total, overlap] = await Promise.all([
+      CallingData.countDocuments(baseQuery),
+      CallingData.countDocuments({ ...baseQuery, "priorityGroup.no": { $ne: null } }),
+    ]);
+
+    return sendResponse(res, 200, "Preview count fetched", { total, overlap });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+/**
+ * POST /callingData/:campaignId/assignPriorityGroup
+ * Body: { filters: {}, contactIds: [], overwriteExisting: false }
+ * Assigns the next P-N label to matching records.
+ */
+const assignPriorityGroup = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    if (!campaignId) return sendError(next, "campaignId is required", 400);
+
+    const { filters = {}, contactIds = [], overwriteExisting = false, groupNo } = req.body;
+
+    const fieldMatch = buildPriorityMatchFromFilters(filters);
+    const hasContactIds = Array.isArray(contactIds) && contactIds.length > 0;
+    const hasFilters = Object.keys(fieldMatch).length > 0;
+
+    if (!hasFilters && !hasContactIds) {
+      return sendError(next, "Provide at least one filter or contactIds", 400);
+    }
+
+    // Use explicit groupNo if provided, otherwise auto-increment
+    let assignedNo;
+    if (groupNo && Number.isInteger(Number(groupNo)) && Number(groupNo) > 0) {
+      assignedNo = Number(groupNo);
+    } else {
+      const maxDoc = await CallingData.findOne(
+        { CampaignId: campaignId, "priorityGroup.no": { $ne: null } },
+        { "priorityGroup.no": 1 }
+      )
+        .sort({ "priorityGroup.no": -1 })
+        .lean();
+      assignedNo = (maxDoc?.priorityGroup?.no ?? 0) + 1;
+    }
+
+    const nextNo = assignedNo;
+    const label = `P-${nextNo}`;
+    const assignedAt = new Date();
+
+    // Build query
+    let baseQuery = { CampaignId: campaignId };
+    if (hasContactIds && hasFilters) {
+      baseQuery.$or = [
+        fieldMatch,
+        { _id: { $in: contactIds.map((id) => new mongoose.Types.ObjectId(id)) } },
+      ];
+    } else if (hasContactIds) {
+      baseQuery._id = { $in: contactIds.map((id) => new mongoose.Types.ObjectId(id)) };
+    } else {
+      Object.assign(baseQuery, fieldMatch);
+    }
+
+    // Skip already-assigned records unless overwrite is requested
+    if (!overwriteExisting) {
+      baseQuery["priorityGroup.no"] = null;
+    }
+
+    const result = await CallingData.updateMany(baseQuery, {
+      $set: {
+        "priorityGroup.no":         nextNo,
+        "priorityGroup.label":      label,
+        "priorityGroup.assignedAt": assignedAt,
+        "priorityGroup.filters":    filters,
+      },
+    });
+
+    return sendResponse(res, 200, `Assigned ${label} to ${result.modifiedCount} records`, {
+      label,
+      no: nextNo,
+      modifiedCount: result.modifiedCount,
+    });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+/**
+ * GET /callingData/:campaignId/priorityGroups
+ * Returns all priority groups with record counts and filter snapshots.
+ */
+const getPriorityGroups = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    if (!campaignId) return sendError(next, "campaignId is required", 400);
+
+    const [groups, unassignedCount] = await Promise.all([
+      CallingData.aggregate([
+        { $match: { CampaignId: campaignId, "priorityGroup.no": { $ne: null } } },
+        {
+          $group: {
+            _id:        "$priorityGroup.no",
+            label:      { $first: "$priorityGroup.label" },
+            filters:    { $first: "$priorityGroup.filters" },
+            assignedAt: { $first: "$priorityGroup.assignedAt" },
+            count:      { $sum: 1 },
+          },
+        },
+        { $sort: { _id: 1 } },
+        {
+          $project: {
+            _id:        0,
+            no:         "$_id",
+            label:      1,
+            filters:    1,
+            assignedAt: 1,
+            count:      1,
+          },
+        },
+      ]),
+      CallingData.countDocuments({ CampaignId: campaignId, "priorityGroup.no": null }),
+    ]);
+
+    return sendResponse(res, 200, "Priority groups fetched", { groups, unassignedCount });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+/**
+ * DELETE /callingData/:campaignId/priorityGroup/:groupNo
+ * Resets priorityGroup to null for all records in this group.
+ * Does NOT re-number other groups (gaps are left intentionally).
+ */
+const deletePriorityGroup = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId, groupNo } = req.params;
+    const no = parseInt(groupNo, 10);
+    if (!campaignId || isNaN(no)) return sendError(next, "campaignId and groupNo are required", 400);
+
+    const result = await CallingData.updateMany(
+      { CampaignId: campaignId, "priorityGroup.no": no },
+      {
+        $set: {
+          "priorityGroup.no":         null,
+          "priorityGroup.label":      null,
+          "priorityGroup.assignedAt": null,
+          "priorityGroup.filters":    null,
+        },
+      }
+    );
+
+    return sendResponse(res, 200, `Removed priority group P-${no}`, {
+      modifiedCount: result.modifiedCount,
+    });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+/**
+ * PATCH /callingData/:campaignId/swapPriorityGroups
+ * Body: { groupNoA: 1, groupNoB: 2 }
+ * Swaps the no+label of two groups without touching other fields.
+ */
+const swapPriorityGroups = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    const { groupNoA, groupNoB } = req.body;
+    const noA = parseInt(groupNoA, 10);
+    const noB = parseInt(groupNoB, 10);
+    if (!campaignId || isNaN(noA) || isNaN(noB) || noA === noB) {
+      return sendError(next, "campaignId, groupNoA and groupNoB (different) are required", 400);
+    }
+
+    // Use a temp number to avoid unique-constraint clashes during swap
+    const TEMP = -1;
+    await CallingData.updateMany(
+      { CampaignId: campaignId, "priorityGroup.no": noA },
+      { $set: { "priorityGroup.no": TEMP, "priorityGroup.label": `P-${TEMP}` } }
+    );
+    await CallingData.updateMany(
+      { CampaignId: campaignId, "priorityGroup.no": noB },
+      { $set: { "priorityGroup.no": noA, "priorityGroup.label": `P-${noA}` } }
+    );
+    await CallingData.updateMany(
+      { CampaignId: campaignId, "priorityGroup.no": TEMP },
+      { $set: { "priorityGroup.no": noB, "priorityGroup.label": `P-${noB}` } }
+    );
+
+    return sendResponse(res, 200, `Swapped P-${noA} and P-${noB}`, {});
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+// ── Priority Slot Definitions (persisted per campaign) ─────────────────────
+
+/**
+ * GET /callingData/:campaignId/prioritySlots
+ * Returns all defined slot definitions for a campaign, sorted by no asc.
+ */
+const getPrioritySlots = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    const slots = await PrioritySlot.find({ campaignId }).sort({ no: 1 }).lean();
+    return sendResponse(res, 200, "Priority slots fetched", { slots });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+/**
+ * POST /callingData/:campaignId/prioritySlots
+ * Body: { no, label }  — creates a new slot definition.
+ * Auto-increments `no` if not supplied.
+ */
+const createPrioritySlot = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    let { no, label } = req.body;
+
+    if (!no) {
+      const last = await PrioritySlot.findOne({ campaignId }).sort({ no: -1 }).lean();
+      no = (last?.no ?? 0) + 1;
+    }
+    no = parseInt(no, 10);
+    if (!label) label = `P-${no}`;
+
+    const slot = await PrioritySlot.findOneAndUpdate(
+      { campaignId, no },
+      { campaignId, no, label },
+      { upsert: true, new: true }
+    );
+    return sendResponse(res, 201, "Priority slot created", { slot });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+/**
+ * DELETE /callingData/:campaignId/prioritySlots/:no
+ * Removes the slot definition AND resets any CallingData records assigned to this group.
+ */
+const deletePrioritySlotDef = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId, no: noParam } = req.params;
+    const no = parseInt(noParam, 10);
+    if (isNaN(no)) return sendError(next, "Invalid slot number", 400);
+
+    // Remove slot definition
+    await PrioritySlot.deleteOne({ campaignId, no });
+
+    // Clear CallingData records for this group
+    const result = await CallingData.updateMany(
+      { CampaignId: campaignId, "priorityGroup.no": no },
+      {
+        $set: {
+          "priorityGroup.no":         null,
+          "priorityGroup.label":      null,
+          "priorityGroup.assignedAt": null,
+          "priorityGroup.filters":    null,
+        },
+      }
+    );
+
+    return sendResponse(res, 200, `Deleted slot P-${no}`, { modifiedCount: result.modifiedCount });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+
 export {
   uploadcallingData,
   getCallingDataById,
@@ -930,4 +1485,13 @@ export {
   setPriority,
   getPriorityList,
   closePriority,
+  priorityFilterOptions,
+  priorityPreview,
+  assignPriorityGroup,
+  getPriorityGroups,
+  deletePriorityGroup,
+  swapPriorityGroups,
+  getPrioritySlots,
+  createPrioritySlot,
+  deletePrioritySlotDef,
 };

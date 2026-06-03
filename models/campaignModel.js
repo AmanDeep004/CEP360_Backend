@@ -19,7 +19,7 @@ const campaignSchema = new mongoose.Schema(
     type: {
       type: String,
       required: true,
-      // enum: { values: ALL, message: "Invalid Program Type" },
+      enum: { values: ALL, message: "Invalid Program Type" },
     },
 
     category: {

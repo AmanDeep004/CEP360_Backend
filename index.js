@@ -6,6 +6,7 @@ import rateLimit from "express-rate-limit";
 import expressWinston from "express-winston";
 import cookieParser from "cookie-parser";
 import { connectDB } from "./config/db.js";
+import { connectRedis, getRedis, isRedisAvailable } from "./config/redis.js";
 import { getJob } from "./utils/jobTracker.js";
 import cron from "node-cron";
 import { errorHandler } from "./middleware/errorMiddleware.js";
@@ -16,6 +17,7 @@ const startServer = async () => {
   try {
     console.log("Starting server initialization...");
     await connectDB();
+    await connectRedis();
     console.log("Loading routes...");
     const userRoutes = (await import("./routes/userRoutes.js")).default;
     const campaignRoutes = (await import("./routes/campaignRoutes.js")).default;
@@ -51,6 +53,8 @@ const startServer = async () => {
     const whatsappRoute = (
       await import("./routes/whatsapp/doubleTickRoutes.js")
     ).default;
+    const tataCallingRoutes = (await import("./routes/tataCallingRoutes.js"))
+      .default;
     const checkEndedCampaigns = await import("./utils/endedCampaign.js");
 
     const app = express();
@@ -109,6 +113,7 @@ const startServer = async () => {
 
     app.use(express.json({ limit: "50mb" }));
     app.use(express.urlencoded({ extended: false, limit: "50mb" }));
+    app.use("/reports", express.static("public/reports"));
 
     const corsOptions = {
       origin: process.env.CLIENT_URL || "http://localhost:4021",
@@ -125,6 +130,102 @@ const startServer = async () => {
         status: "healthy",
         timestamp: new Date().toISOString(),
       });
+    });
+
+    app.get("/api/health", async (req, res) => {
+      // MongoDB check
+      let mongoStatus = "connected";
+      try {
+        const { primaryConnection, secondaryConnection } = await import("./config/db.js");
+        if (!primaryConnection || primaryConnection.readyState !== 1) mongoStatus = "disconnected";
+        if (!secondaryConnection || secondaryConnection.readyState !== 1) mongoStatus = "secondary-disconnected";
+      } catch {
+        mongoStatus = "error";
+      }
+
+      // Redis check
+      let redisStatus = "unavailable";
+      let redisPing = null;
+      if (isRedisAvailable()) {
+        try {
+          redisPing = await getRedis().ping();
+          redisStatus = redisPing === "PONG" ? "connected" : "error";
+        } catch {
+          redisStatus = "error";
+        }
+      }
+
+      res.json({
+        status: "ok",
+        timestamp: new Date().toISOString(),
+        services: {
+          mongodb: mongoStatus,
+          redis: redisStatus,
+        },
+      });
+    });
+
+    // Redis inspect — Resource Manager only
+    const { protect, authorize } = await import("./middleware/authMiddleware.js");
+    const { UserRoleEnum: RoleEnum } = await import("./utils/enum.js");
+
+    app.get("/api/redis/inspect", protect, authorize(RoleEnum.RESOURCE_MANAGER, RoleEnum.ADMIN), async (req, res) => {
+      if (!isRedisAvailable()) {
+        return res.status(503).json({ success: false, message: "Redis unavailable" });
+      }
+      try {
+        const redis = getRedis();
+        const keys = await redis.keys("*");
+
+        if (keys.length === 0) {
+          return res.json({ success: true, totalKeys: 0, cache: {} });
+        }
+
+        const pipeline = redis.pipeline();
+        keys.forEach((key) => { pipeline.get(key); pipeline.ttl(key); });
+        const results = await pipeline.exec();
+
+        const cache = {};
+        keys.forEach((key, i) => {
+          const value = results[i * 2][1];
+          const ttl = results[i * 2 + 1][1];
+          let parsed;
+          try { parsed = JSON.parse(value); } catch { parsed = value; }
+          cache[key] = {
+            ttl_seconds: ttl,
+            expires_in: ttl > 0 ? `${Math.floor(ttl / 60)}m ${ttl % 60}s` : "no expiry",
+            value: parsed,
+          };
+        });
+
+        res.json({ success: true, totalKeys: keys.length, cache });
+      } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+      }
+    });
+
+    app.delete("/api/redis/inspect/:key", protect, authorize(RoleEnum.RESOURCE_MANAGER, RoleEnum.ADMIN), async (req, res) => {
+      if (!isRedisAvailable()) {
+        return res.status(503).json({ success: false, message: "Redis unavailable" });
+      }
+      try {
+        const deleted = await getRedis().del(req.params.key);
+        res.json({ success: true, deleted: deleted === 1 });
+      } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+      }
+    });
+
+    app.delete("/api/redis/flush", protect, authorize(RoleEnum.RESOURCE_MANAGER, RoleEnum.ADMIN), async (req, res) => {
+      if (!isRedisAvailable()) {
+        return res.status(503).json({ success: false, message: "Redis unavailable" });
+      }
+      try {
+        await getRedis().flushdb();
+        res.json({ success: true, message: "All cache cleared" });
+      } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+      }
     });
 
     app.use("/api/auth", userRoutes);
@@ -144,6 +245,7 @@ const startServer = async () => {
     app.use("/api/linkedin", linkedinDataScrapingRoute);
     app.use("/api/mailercloud", mailerCloudRoute);
     app.use("/api/whatsapp", whatsappRoute);
+    app.use("/api/tataCalling", tataCallingRoutes);
 
     // Job status endpoint — poll progress of bulk email/whatsapp sends
     app.get("/api/jobs/:jobId", async (req, res) => {
@@ -159,8 +261,8 @@ const startServer = async () => {
 
     // Schedule: At 23:00 on day-of-month 25 for expected salary generation
     cron.schedule(
-      "30 23 25 * *", // 11:00 PM on 25th of every month
-      // "56 11 6 * *", // 11:30 AM on 6th of every month
+      "0 07 26 * *", // 7:00 AM on 26th of every month (IST) — runs after 6 PM salary generation
+      // "30 23 25 * *", // 11:00 PM on 25th of every month
       async () => {
         const now = new Date().toLocaleString("en-IN", {
           timeZone: "Asia/Kolkata",

@@ -6,6 +6,7 @@ import {
   getPrevCampFiltersByCampaignId,
   assignCallingDataToCampaign,
   companiesMatchedDataWithExcel,
+  getMatchJobStatus,
   clientCallingDataFilter,
   assignCallingDataToCampaignClientSuggested,
   assignCallingDataToCampaignBoth,
@@ -14,7 +15,11 @@ import {
   deactivateSharedLink,
   extendLinkExpiry,
   getClientMatchData,
+  getClientMatchSessionData,
   updateClientMatchAction,
+  getClientMatchEntries,
+  getCrossTab,
+  updateFilterTag,
 } from "../controllers/callingDataFiltrationController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -22,7 +27,7 @@ import { UserRoleEnum } from "../utils/enum.js";
 
 const { ADMIN, PROGRAM_MANAGER, PRESALES_MANAGER, AGENT } = UserRoleEnum;
 const router = Router();
-const upload = multer({ dest: "uploads/" });
+const upload = multer({ dest: "uploads/", limits: { fileSize: 100 * 1024 * 1024 } }); // 100 MB
 
 router.get(
   "/getCampaignFilters/:campaignId",
@@ -64,6 +69,9 @@ router.post(
   companiesMatchedDataWithExcel
 );
 
+// SSE endpoint — streams matching progress until complete/error
+router.get("/matchJobStatus/:jobId", protect, getMatchJobStatus);
+
 router.post(
   "/assignCallingDataToCampaignClientSuggested",
   protect,
@@ -83,6 +91,10 @@ router.patch("/:filterId/deactivate", protect, deactivateSharedLink);
 router.patch("/:filterId/extend", protect, extendLinkExpiry);
 
 router.get("/clientMatchData/:campaignId", protect, getClientMatchData);
+router.get("/clientMatchData/:campaignId/history/:uploadSession", protect, getClientMatchSessionData);
+router.get("/clientMatchEntries/:campaignId", protect, getClientMatchEntries);
 router.patch("/clientMatchData/:campaignId/action", protect, updateClientMatchAction);
+router.get("/crossTab/:campaignFilterId", protect, getCrossTab);
+router.patch("/:filterId/tag", protect, updateFilterTag);
 
 export default router;

@@ -5,6 +5,7 @@ const companyEntrySchema = {
   _id: false,
   companyId: { type: mongoose.Schema.Types.ObjectId },
   Company_Name: { type: String },
+  inputName: { type: String }, // which uploaded row this approval/rejection belongs to
 };
 
 const clientCompanyListSchema = new mongoose.Schema(
@@ -28,6 +29,8 @@ const clientCompanyListSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+clientCompanyListSchema.index({ campaignId: 1, dataType: 1 });
 
 export default getPrimaryConnection().model(
   "ClientCompanyList",
