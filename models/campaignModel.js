@@ -12,7 +12,7 @@ const campaignSchema = new mongoose.Schema(
       type: String,
       required: [true, "Program Name is required"],
       trim: true,
-      maxlength: [50, "Program Name cannot be more than 50 characters"],
+      maxlength: [150, "Program Name cannot be more than 150 characters"],
       unique: [true, "Campaign name must be unique"],
     },
 

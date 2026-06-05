@@ -149,6 +149,12 @@ const getAllCampaigns = asyncHandler(async (req, res, next) => {
     const search = req.query.search?.trim();
 
     const filter = {};
+
+    // PM can only see their own campaigns
+    if (req.user.role === PROGRAM_MANAGER) {
+      filter.programManager = req.user._id;
+    }
+
     if (search) {
       const regex = new RegExp(search, "i");
       filter.$or = [

@@ -32,6 +32,7 @@ const ProgramType = Object.freeze({
   REDEMPTION_PROGRAM: "Redemption Program",
   REWARD_PROGRAM: "Reward Program",
   CXO_EVENT: "CXO Event",
+  VIRTUAL_EVENT: "Virtual Event",
   ALL: [
     "Academic Program",
     "Association Program",
@@ -41,6 +42,7 @@ const ProgramType = Object.freeze({
     "Redemption Program",
     "Reward Program",
     "CXO Event",
+    "Virtual Event",
   ],
 });
 
