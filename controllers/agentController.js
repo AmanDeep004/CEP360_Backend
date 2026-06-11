@@ -520,6 +520,7 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
   try {
     const { agentId } = req.params;
     const {
+      campaignId,
       dataSourceType,
       batch,
       registered,
@@ -531,11 +532,15 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
       limit = 20,
     } = req.query;
 
+    if (!campaignId) {
+      return sendError(next, "campaignId is required", 400);
+    }
+
     const pageNum = parseInt(page, 10);
     const limNum = parseInt(limit, 10);
     const skip = (pageNum - 1) * limNum;
 
-    const filter = { agentId };
+    const filter = { agentId, CampaignId: campaignId };
 
     // Basic filters
     if (dataSourceType) {
@@ -544,7 +549,7 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
       } else if (dataSourceType === "Client") {
         filter.dataSourceType = { $in: ["Client", "Both"] };
       } else {
-        filter.dataSourceType = dataSourceType; // "Both", "IndividualSearchKestone" — exact
+        filter.dataSourceType = dataSourceType;
       }
     }
     if (batch) filter.batch = { $regex: new RegExp(batch.trim(), "i") };
@@ -553,101 +558,94 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
     if (priorityGroup === "unassigned") filter["priorityGroup.no"] = null;
     else if (priorityGroup) filter["priorityGroup.label"] = priorityGroup;
 
-    let searchFilter = {};
-
     if (search.trim()) {
       const regex = new RegExp(search.trim(), "i");
-
-      searchFilter = {
-        $or: [
-          { Full_Name: regex },
-          { First_Name: regex },
-          { Last_Name: regex },
-          { Mobile_No: regex },
-          { Office_Email_1: regex },
-          { Office_Email_2: regex },
-          { Personal_Email1: regex },
-          { Personal_Email2: regex },
-          { Contact_Direct_Phone1: regex },
-          { Contact_Direct_Phone2: regex },
-          { Company_Name: regex },
-        ],
-      };
+      filter.$or = [
+        { Full_Name: regex },
+        { First_Name: regex },
+        { Last_Name: regex },
+        { Mobile_No: regex },
+        { Office_Email_1: regex },
+        { Office_Email_2: regex },
+        { Personal_Email1: regex },
+        { Personal_Email2: regex },
+        { Contact_Direct_Phone1: regex },
+        { Contact_Direct_Phone2: regex },
+        { Company_Name: regex },
+      ];
     }
 
-    let callingData = await callingDataModal
-      .find({
-        ...filter,
-        ...(search ? searchFilter : {}),
-      })
-      .populate({
-        path: "agentId",
-        select: "employeeName email",
-      })
-      .populate({
-        path: "callHistory",
-        populate: {
-          path: "chatHistory",
-          model: "CallHistory",
-        },
-      })
-      .sort({ "priorityGroup.no": 1 })
-      .allowDiskUse(true)
-      .lean();
+    // callRemarks and lastDateOfTelecalling require post-population filtering —
+    // fetch all matching records for those filters, otherwise paginate at DB level.
+    const needsPostFilter = !!(callRemarks || lastDateOfTelecalling);
 
-    // ================================
-    // 3) FILTER BY CALL REMARK
-    // ================================
-    if (callRemarks) {
-      callingData = callingData.filter((data) => {
-        const chatHist = data.callHistory?.chatHistory;
-        return (
-          Array.isArray(chatHist) &&
-          chatHist.some((entry) => entry.remarks === callRemarks)
-        );
-      });
-    }
+    let callingData;
+    let total;
 
-    // ================================
-    // 4) FILTER BY LAST DATE CALLING
-    // ================================
-    if (lastDateOfTelecalling) {
-      const trimmedDate = lastDateOfTelecalling.trim();
-      // Use IST (UTC+5:30) day boundaries so the filter matches the date
-      // as seen by users in India, regardless of server timezone
-      const startOfDay = new Date(trimmedDate + "T00:00:00+05:30");
-      const endOfDay = new Date(trimmedDate + "T23:59:59.999+05:30");
+    if (needsPostFilter) {
+      callingData = await callingDataModal
+        .find(filter)
+        .populate({ path: "agentId", select: "employeeName email" })
+        .populate({ path: "callHistory" })
+        .sort({ "priorityGroup.no": 1 })
+        .allowDiskUse(true)
+        .lean();
 
-      callingData = callingData.filter((data) => {
-        const chatHist = data.callHistory?.chatHistory;
-
-        if (Array.isArray(chatHist) && chatHist.length > 0) {
-          const lastEntry = chatHist.reduce(
-            (latest, item) => {
-              const callDate = new Date(item.callingDate || "1970-01-01");
-              return callDate > new Date(latest.callingDate || "1970-01-01")
-                ? item
-                : latest;
-            },
-            { callingDate: "1970-01-01" }
+      if (callRemarks) {
+        callingData = callingData.filter((data) => {
+          const chatHist = data.callHistory?.chatHistory;
+          return (
+            Array.isArray(chatHist) &&
+            chatHist.some((entry) => entry.remarks === callRemarks)
           );
+        });
+      }
 
-          if (!lastEntry.callingDate) return false;
+      if (lastDateOfTelecalling) {
+        const trimmedDate = lastDateOfTelecalling.trim();
+        const startOfDay = new Date(trimmedDate + "T00:00:00+05:30");
+        const endOfDay = new Date(trimmedDate + "T23:59:59.999+05:30");
 
-          const callDate = new Date(lastEntry.callingDate);
-          return callDate >= startOfDay && callDate <= endOfDay;
-        }
+        callingData = callingData.filter((data) => {
+          const chatHist = data.callHistory?.chatHistory;
+          if (Array.isArray(chatHist) && chatHist.length > 0) {
+            const lastEntry = chatHist.reduce(
+              (latest, item) => {
+                const callDate = new Date(item.callingDate || "1970-01-01");
+                return callDate > new Date(latest.callingDate || "1970-01-01")
+                  ? item
+                  : latest;
+              },
+              { callingDate: "1970-01-01" }
+            );
+            if (!lastEntry.callingDate) return false;
+            const callDate = new Date(lastEntry.callingDate);
+            return callDate >= startOfDay && callDate <= endOfDay;
+          }
+          return false;
+        });
+      }
 
-        return false;
-      });
+      total = callingData.length;
+      callingData = callingData.slice(skip, skip + limNum);
+    } else {
+      // DB-level pagination — fast path
+      [total, callingData] = await Promise.all([
+        callingDataModal.countDocuments(filter),
+        callingDataModal
+          .find(filter)
+          .populate({ path: "agentId", select: "employeeName email" })
+          .populate({ path: "callHistory" })
+          .sort({ "priorityGroup.no": 1 })
+          .skip(skip)
+          .limit(limNum)
+          .lean(),
+      ]);
     }
 
-    // ================================
-    //  5) ATTACH LAST REMARK & LAST CALL DATE
-    // ================================
+    // Attach lastRemarks and lastCallingDate
     callingData = callingData.map((item) => {
       const chatHist = item.callHistory?.chatHistory;
-
       if (Array.isArray(chatHist) && chatHist.length > 0) {
         const lastEntry = chatHist.reduce(
           (latest, entry) => {
@@ -656,26 +654,21 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
           },
           { callingDate: new Date("1970-01-01") }
         );
-
         item.lastCallingDate = lastEntry.callingDate || null;
         item.lastRemarks = lastEntry.remarks || null;
       } else {
         item.lastCallingDate = null;
         item.lastRemarks = null;
       }
-
       return item;
     });
 
-    const total = callingData.length;
-    const paginatedData = callingData.slice(skip, skip + limNum);
-    const maskedData = paginatedData.map((row) => ({
+    const maskedData = callingData.map((row) => ({
       ...row,
       priorityGroup: row.priorityGroup ?? { no: null, label: null },
       Contact_Direct_Phone1: maskPhone(row.Contact_Direct_Phone1),
       Contact_Direct_Phone2: maskPhone(row.Contact_Direct_Phone2),
       Mobile_No: maskPhone(row.Mobile_No),
-
       Office_Email_1: maskEmail(row.Office_Email_1),
       Office_Email_2: maskEmail(row.Office_Email_2),
       Personal_Email1: maskEmail(row.Personal_Email1),
