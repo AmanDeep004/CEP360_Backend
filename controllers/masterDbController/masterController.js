@@ -895,15 +895,12 @@ const getAllCompanyData = asyncHandler(async (req, res, next) => {
 
 const getAllCompanyName = asyncHandler(async (req, res, next) => {
   try {
-    const search = req.query.search?.trim();
+    const search = (req.query.search || "").trim();
     const limit = Math.min(parseInt(req.query.limit) || 50, 100);
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const skip = (page - 1) * limit;
 
-    const filter = {};
-    if (search) {
-      filter.Company_Name = new RegExp(search, "i");
-    }
+    const filter = search ? { Company_Name: new RegExp(search, "i") } : {};
 
     const [total, companies] = await Promise.all([
       Company.countDocuments(filter),
