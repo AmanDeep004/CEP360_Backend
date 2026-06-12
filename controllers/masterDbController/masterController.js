@@ -900,7 +900,40 @@ const getAllCompanyName = asyncHandler(async (req, res, next) => {
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const skip = (page - 1) * limit;
 
-    const filter = search ? { Company_Name: new RegExp(search, "i") } : {};
+    // Random sample for initial dropdown load (no search)
+    if (req.query.random === "true" && !search) {
+      const companies = await Company.aggregate([
+        { $sample: { size: 25 } },
+        { $project: { _id: 1, Company_Name: 1 } },
+        { $sort: { Company_Name: 1 } },
+      ]);
+      return sendResponse(res, 200, "Companies fetched successfully", {
+        total: companies.length,
+        page: 1,
+        limit: 25,
+        hasMore: false,
+        data: companies,
+      });
+    }
+
+    // Normalize: treat commas as spaces, collapse whitespace, then split into tokens
+    // Handles: "TATA", "tata steel", "Tata,Steel", "tata  steel", "TataSteel" etc.
+    let filter = {};
+    if (search) {
+      const normalized = search.replace(/[,]+/g, " ").replace(/\s+/g, " ").trim();
+      const words = normalized.split(" ").filter(Boolean);
+
+      if (words.length > 1) {
+        filter = {
+          $or: [
+            { Company_Name: new RegExp(normalized, "i") },       // full phrase
+            ...words.map((w) => ({ Company_Name: new RegExp(w, "i") })), // each word
+          ],
+        };
+      } else {
+        filter = { Company_Name: new RegExp(normalized, "i") };
+      }
+    }
 
     const [total, companies] = await Promise.all([
       Company.countDocuments(filter),
