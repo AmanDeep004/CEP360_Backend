@@ -56,6 +56,8 @@ const campaignSchema = new mongoose.Schema(
 
     clientName: { type: String, required: false },
 
+    companyName: { type: String, required: true },
+
     clientCompanyId: { type: String, required: false },
 
     clientEmail: { type: String, required: false },
