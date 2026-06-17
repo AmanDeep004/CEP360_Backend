@@ -18,6 +18,7 @@ const CompanySchema = new mongoose.Schema(
     Company_LinkedIn_Profile: { type: String, trim: true },
     Company_Phone1: { type: String, trim: true },
     Company_Phone2: { type: String, trim: true },
+    ultimateParentCompany: { type: String, trim: true },
   },
   { timestamps: true }
 );
