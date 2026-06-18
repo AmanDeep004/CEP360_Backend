@@ -1267,6 +1267,7 @@ const loadMatchResultFromEntry = async (campaignId) => {
       matchType: "partial",
     })
       .select("inputName companySpecificId segment suggestions")
+      .sort({ _id: 1 })
       .limit(PG + 1)
       .lean(),
     ClientMatchEntry.find({
@@ -3098,6 +3099,7 @@ const getClientMatchEntries = asyncHandler(async (req, res, next) => {
         matchType,
       })
         .select(projection)
+        .sort({ _id: 1 })
         .skip(skip)
         .limit(lim + 1)
         .lean(),
