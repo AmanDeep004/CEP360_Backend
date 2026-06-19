@@ -62,6 +62,39 @@ const EmailTrigger = Object.freeze({
   CALLING_DATA_REASSIGNED_TO_AGENT: "CALLING_DATA_REASSIGNED_TO_AGENT",
 });
 
+// ─── DND / Suppression ────────────────────────────────────────────────────────
+
+/** Channels that support suppression */
+const DND_CHANNEL = Object.freeze({
+  CALLING:  "calling",
+  EMAIL:    "email",
+  WHATSAPP: "whatsapp",
+});
+
+/** Scopes for a suppression — determines how broadly it applies */
+const DND_SCOPE = Object.freeze({
+  CAMPAIGN: "campaign",  // only this campaign
+  BRAND:    "brand",     // all campaigns for this client company
+  GLOBAL:   "global",   // never contact via this channel ever again
+});
+
+/**
+ * Agent-facing remark strings that trigger DND.
+ * Keep in sync with the remark dropdown options in the frontend.
+ */
+const DND_REMARKS = Object.freeze({
+  CAMPAIGN: "DND (For Current Campaign)",
+  BRAND:    "DND (For Current Brand)",
+  GLOBAL:   "DND (Never Call Again for Any Campaign)",
+});
+
+/** Reverse map: remark label → DND_SCOPE value */
+const DND_REMARK_TO_SCOPE = Object.freeze({
+  [DND_REMARKS.CAMPAIGN]: DND_SCOPE.CAMPAIGN,
+  [DND_REMARKS.BRAND]:    DND_SCOPE.BRAND,
+  [DND_REMARKS.GLOBAL]:   DND_SCOPE.GLOBAL,
+});
+
 // Export the enums
 export {
   UserRoleEnum,
@@ -70,4 +103,8 @@ export {
   ProgramType,
   ProgramStatus,
   EmailTrigger,
+  DND_CHANNEL,
+  DND_SCOPE,
+  DND_REMARKS,
+  DND_REMARK_TO_SCOPE,
 };

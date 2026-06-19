@@ -20,6 +20,7 @@ import {
   individualSearch,
   assignIndividualSearch,
 } from "../../controllers/masterDbController/masterController.js";
+import { getAllBrands, addBrand } from "../../controllers/masterDbController/brandsController.js";
 import { UserRoleEnum } from "../../utils/enum.js";
 const router = Router();
 const { ADMIN, PROGRAM_MANAGER, PRESALES_MANAGER, AGENT, RESOURCE_MANAGER } =
@@ -71,5 +72,9 @@ router.post(
   protect,
   migrateToEngagementHistory
 );
+
+// Brands worked with
+router.get("/brands", protect, getAllBrands);
+router.post("/brands", protect, addBrand);
 
 export default router;

@@ -170,6 +170,40 @@ const CallingDataSchema = new mongoose.Schema(
       chatHistory: { type: Array },
       misc: { type: Object, default: {} },
     },
+
+    /**
+     * Channel-level suppression set by the agent during a call.
+     * Each channel tracks its own DND status independently so future
+     * email / whatsapp suppression can be added without schema changes.
+     *
+     * scope:
+     *   "campaign" — suppress only in this campaign
+     *   "brand"    — suppress for all campaigns of this client company
+     *   "global"   — suppress forever across all channels / campaigns
+     */
+    suppressions: {
+      calling: {
+        isDND:     { type: Boolean, default: false },
+        scope:     { type: String, enum: ["campaign", "brand", "global"], default: null },
+        setAt:     { type: Date, default: null },
+        setBy:     { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+        setByName: { type: String, trim: true, default: null },
+      },
+      email: {
+        isDND:     { type: Boolean, default: false },
+        scope:     { type: String, enum: ["campaign", "brand", "global"], default: null },
+        setAt:     { type: Date, default: null },
+        setBy:     { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+        setByName: { type: String, trim: true, default: null },
+      },
+      whatsapp: {
+        isDND:     { type: Boolean, default: false },
+        scope:     { type: String, enum: ["campaign", "brand", "global"], default: null },
+        setAt:     { type: Date, default: null },
+        setBy:     { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+        setByName: { type: String, trim: true, default: null },
+      },
+    },
   },
   {
     timestamps: true,

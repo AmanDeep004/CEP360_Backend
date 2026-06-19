@@ -52,13 +52,11 @@ const campaignSchema = new mongoose.Schema(
 
     jcNumber: { type: String, required: false },
 
-    brandName: { type: String, required: false },
-
     clientName: { type: String, required: false },
 
-    companyName: { type: String, required: true },
+    brandName: { type: String, required: true },
 
-    clientCompanyId: { type: String, required: false },
+    brandId: { type: String, required: false },
 
     clientEmail: { type: String, required: false },
 
