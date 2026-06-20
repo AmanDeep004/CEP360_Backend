@@ -1469,6 +1469,265 @@ const deletePrioritySlotDef = asyncHandler(async (req, res, next) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// External Upload (feature-flagged via ENABLE_EXTERNAL_UPLOAD env var)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const EXTERNAL_UPLOAD_COLUMNS = [
+  "First_Name", "Last_Name", "Full_Name", "Salutation", "Gender",
+  "Job_Title", "Job_Seniority", "Job_Function",
+  "Mobile_No", "Contact_Direct_Phone1", "Contact_Direct_Phone2", "Contact_Extn_No",
+  "Office_Email_1", "Office_Email_2", "Personal_Email1", "Personal_Email2",
+  "Contact_City", "Contact_State", "Contact_Country", "Contact_Region",
+  "Contact_Pin", "Contact_Address_1", "Contact_Address_2", "Contact_Address_3",
+  "Contact_Location_Tier", "Contact_STD_ISD_Code",
+  "Company_Name", "Website", "Industry", "Sub_Industry", "Company_Segment",
+  "Turnover_Range", "Employees_Range", "Year_Founded",
+  "Company_LinkedIn_Profile", "Company_Phone1", "Company_Phone2",
+  "Company_Source", "Company_ID_Kestone",
+  "Contact_LinkedIn_Profile", "Contact_Source",
+];
+
+/**
+ * GET /api/callingData/external-upload-template
+ * Returns a blank XLSX file with all column headers — no fields mandatory.
+ */
+const downloadExternalUploadTemplate = asyncHandler(async (req, res) => {
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([EXTERNAL_UPLOAD_COLUMNS]);
+  // Auto-width hint for each column
+  ws["!cols"] = EXTERNAL_UPLOAD_COLUMNS.map(() => ({ wch: 22 }));
+  XLSX.utils.book_append_sheet(wb, ws, "Template");
+  const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+  res.setHeader(
+    "Content-Disposition",
+    'attachment; filename="external_upload_template.xlsx"'
+  );
+  res.setHeader(
+    "Content-Type",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  );
+  return res.send(buf);
+});
+
+/**
+ * POST /api/callingData/external-upload
+ * Uploads calling data from Excel/XLS directly — no fields are mandatory.
+ * Data is stored with dataSourceType "External".
+ */
+const externalUploadCallingData = asyncHandler(async (req, res, next) => {
+  try {
+    const { CampaignId } = req.body;
+    if (!CampaignId) return sendError(next, "CampaignId is required", 400);
+    if (!req.file)   return sendError(next, "No file uploaded", 400);
+
+    const campaign = await Campaign.findById(CampaignId).select("isExternalSheetUploadAllowed").lean();
+    if (!campaign) return sendError(next, "Campaign not found", 404);
+    if (campaign.isExternalSheetUploadAllowed === false) {
+      return sendError(next, "External sheet upload is disabled for this campaign.", 403);
+    }
+
+    const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+    const sheet    = workbook.Sheets[workbook.SheetNames[0]];
+    const json     = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+    if (!json.length) return sendError(next, "Uploaded file is empty or invalid", 400);
+
+    // Auto-increment batch label per campaign (Batch1, Batch2, …)
+    const existingBatches = await CallingData.distinct("batch", {
+      CampaignId,
+      dataSourceType: "External",
+    });
+    const batchNo    = existingBatches.filter(Boolean).length + 1;
+    const batchLabel = `Batch-${batchNo}`;
+
+    // ── Duplicate detection ────────────────────────────────────────────────
+    const EMAIL_FIELDS  = ["Office_Email_1", "Office_Email_2", "Personal_Email1", "Personal_Email2"];
+    const MOBILE_FIELDS = ["Mobile_No", "Contact_Direct_Phone1", "Contact_Direct_Phone2"];
+
+    // Collect all non-empty email/mobile values from the uploaded file
+    const allEmails  = new Set();
+    const allMobiles = new Set();
+    for (const row of json) {
+      for (const f of EMAIL_FIELDS)  { const v = String(row[f] || "").trim().toLowerCase(); if (v) allEmails.add(v); }
+      for (const f of MOBILE_FIELDS) { const v = String(row[f] || "").trim();               if (v) allMobiles.add(v); }
+    }
+
+    // Single DB query — find existing records in this campaign that match any value
+    const orConditions = [];
+    if (allEmails.size)  EMAIL_FIELDS.forEach(f  => orConditions.push({ [f]: { $in: [...allEmails]  } }));
+    if (allMobiles.size) MOBILE_FIELDS.forEach(f => orConditions.push({ [f]: { $in: [...allMobiles] } }));
+
+    // takenSet: "field:value" pairs already in DB or already queued for insert
+    const takenSet    = new Set();
+    // duplicateMap: "field:value" → { Full_Name, Company_Name } of the existing record it matches
+    const duplicateMap = new Map();
+
+    if (orConditions.length > 0) {
+      const existing = await CallingData.find(
+        { CampaignId, $or: orConditions },
+        "Full_Name Company_Name " + [...EMAIL_FIELDS, ...MOBILE_FIELDS].join(" ")
+      ).lean();
+
+      for (const doc of existing) {
+        const meta = { Full_Name: doc.Full_Name || "", Company_Name: doc.Company_Name || "" };
+        for (const f of EMAIL_FIELDS) {
+          const v = String(doc[f] || "").trim().toLowerCase();
+          if (v) { takenSet.set ? takenSet.add(`${f}:${v}`) : takenSet.add(`${f}:${v}`); duplicateMap.set(`${f}:${v}`, meta); }
+        }
+        for (const f of MOBILE_FIELDS) {
+          const v = String(doc[f] || "").trim();
+          if (v) { takenSet.add(`${f}:${v}`); duplicateMap.set(`${f}:${v}`, meta); }
+        }
+      }
+    }
+
+    // Partition rows into toInsert / duplicateRows
+    const toInsert     = [];
+    const duplicateRows = [];
+
+    const buildEntry = (row) => ({
+      CampaignId,
+      UploadedBy:               req.user._id,
+      Contact_Source:           row.Contact_Source                  || "",
+      Contact_Create_Date:      row.Contact_Create_Date             || "",
+      Salutation:               row.Salutation                      || "",
+      First_Name:               row.First_Name                      || "",
+      Last_Name:                row.Last_Name                       || "",
+      Full_Name:                row.Full_Name                       || "",
+      Gender:                   row.Gender                          || "",
+      Job_Title:                row.Job_Title                       || "",
+      Job_Seniority:            row.Job_Seniority                   || "",
+      Job_Function:             row.Job_Function                    || "",
+      Contact_Address_1:        row.Contact_Address_1               || "",
+      Contact_Address_2:        row.Contact_Address_2               || "",
+      Contact_Address_3:        row.Contact_Address_3               || "",
+      Contact_City:             row.Contact_City                    || "",
+      Contact_Pin:              String(row.Contact_Pin              || ""),
+      Contact_State:            row.Contact_State                   || "",
+      Contact_Region:           row.Contact_Region                  || "",
+      Contact_Country:          row.Contact_Country                 || "",
+      Contact_STD_ISD_Code:     String(row.Contact_STD_ISD_Code     || ""),
+      Contact_Location_Tier:    row.Contact_Location_Tier           || "",
+      Contact_Direct_Phone1:    String(row.Contact_Direct_Phone1    || ""),
+      Contact_Direct_Phone2:    String(row.Contact_Direct_Phone2    || ""),
+      Contact_Extn_No:          String(row.Contact_Extn_No          || ""),
+      Mobile_No:                String(row.Mobile_No                || ""),
+      Office_Email_1:           row.Office_Email_1                  || "",
+      Office_Email_2:           row.Office_Email_2                  || "",
+      Personal_Email1:          row.Personal_Email1                 || "",
+      Personal_Email2:          row.Personal_Email2                 || "",
+      Contact_LinkedIn_Profile: row.Contact_LinkedIn_Profile        || "",
+      Company_ID_Kestone:       row.Company_ID_Kestone              || "",
+      Company_Source:           row.Company_Source                  || "",
+      Company_Name:             row.Company_Name                    || "",
+      Year_Founded:             String(row.Year_Founded             || ""),
+      Turnover_Range:           row.Turnover_Range                  || "",
+      Employees_Range:          row.Employees_Range                 || "",
+      Industry:                 row.Industry                        || "",
+      Sub_Industry:             row.Sub_Industry                    || "",
+      Company_Segment:          row.Company_Segment                 || "",
+      Website:                  row.Website                         || "",
+      Company_LinkedIn_Profile: row.Company_LinkedIn_Profile        || "",
+      Company_Phone1:           String(row.Company_Phone1           || ""),
+      Company_Phone2:           String(row.Company_Phone2           || ""),
+      source:                   "External",
+      batch:                    batchLabel,
+      dataSourceType:           "External",
+      isDataSourceApproved:     false,
+    });
+
+    for (const row of json) {
+      let matchKey  = null;
+      let matchMeta = null;
+
+      for (const f of EMAIL_FIELDS) {
+        const v = String(row[f] || "").trim().toLowerCase();
+        if (v && takenSet.has(`${f}:${v}`)) { matchKey = `${f}:${v}`; matchMeta = duplicateMap.get(matchKey); break; }
+      }
+      if (!matchKey) {
+        for (const f of MOBILE_FIELDS) {
+          const v = String(row[f] || "").trim();
+          if (v && takenSet.has(`${f}:${v}`)) { matchKey = `${f}:${v}`; matchMeta = duplicateMap.get(matchKey); break; }
+        }
+      }
+
+      if (matchKey) {
+        const [matchedField, matchedValue] = matchKey.split(/:(.+)/);
+        duplicateRows.push({
+          ...row,
+          _Duplicate_Match_Field: matchedField,
+          _Duplicate_Match_Value: matchedValue,
+          _Existing_Full_Name:    matchMeta?.Full_Name    || "",
+          _Existing_Company_Name: matchMeta?.Company_Name || "",
+        });
+      } else {
+        toInsert.push(buildEntry(row));
+        // Mark this row's values as taken so intra-file duplicates are also caught
+        for (const f of EMAIL_FIELDS)  { const v = String(row[f] || "").trim().toLowerCase(); if (v) { takenSet.add(`${f}:${v}`); duplicateMap.set(`${f}:${v}`, { Full_Name: row.Full_Name || "", Company_Name: row.Company_Name || "" }); } }
+        for (const f of MOBILE_FIELDS) { const v = String(row[f] || "").trim();               if (v) { takenSet.add(`${f}:${v}`); duplicateMap.set(`${f}:${v}`, { Full_Name: row.Full_Name || "", Company_Name: row.Company_Name || "" }); } }
+      }
+    }
+
+    // ── Insert ─────────────────────────────────────────────────────────────
+    let inserted = 0;
+    let failed   = 0;
+    if (toInsert.length > 0) {
+      try {
+        const result = await CallingData.insertMany(toInsert, { ordered: false });
+        inserted = result.length;
+      } catch (bulkErr) {
+        inserted = bulkErr.insertedDocs?.length ?? 0;
+        failed   = toInsert.length - inserted;
+      }
+    }
+
+    if (inserted > 0) {
+      await Campaign.findByIdAndUpdate(CampaignId, { isCallingDataAssigned: true });
+    }
+
+    // ── Build result XLSX ──────────────────────────────────────────────────
+    const wb = XLSX.utils.book_new();
+
+    // Summary sheet
+    const summaryRows = [
+      ["Metric",             "Count"],
+      ["Total Rows in File", json.length],
+      ["Inserted",           inserted],
+      ["Duplicates Skipped", duplicateRows.length],
+      ["Failed",             failed],
+      ["Batch Assigned",     batchLabel],
+    ];
+    const summaryWs = XLSX.utils.aoa_to_sheet(summaryRows);
+    summaryWs["!cols"] = [{ wch: 22 }, { wch: 16 }];
+    XLSX.utils.book_append_sheet(wb, summaryWs, "Summary");
+
+    // Duplicates sheet
+    if (duplicateRows.length > 0) {
+      const dupWs = XLSX.utils.json_to_sheet(duplicateRows);
+      dupWs["!cols"] = Object.keys(duplicateRows[0]).map(() => ({ wch: 22 }));
+      XLSX.utils.book_append_sheet(wb, dupWs, "Duplicates");
+    }
+
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    res.setHeader("Content-Disposition", `attachment; filename="upload_result_${batchLabel}.xlsx"`);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("X-Inserted-Count",   String(inserted));
+    res.setHeader("X-Duplicate-Count",  String(duplicateRows.length));
+    res.setHeader("X-Failed-Count",     String(failed));
+    res.setHeader("X-Total-Count",      String(json.length));
+    res.setHeader("X-Batch-Label",      batchLabel);
+    res.setHeader("Access-Control-Expose-Headers",
+      "X-Inserted-Count,X-Duplicate-Count,X-Failed-Count,X-Total-Count,X-Batch-Label"
+    );
+
+    return res.send(buf);
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 
 export {
   uploadcallingData,
@@ -1494,4 +1753,6 @@ export {
   getPrioritySlots,
   createPrioritySlot,
   deletePrioritySlotDef,
+  externalUploadCallingData,
+  downloadExternalUploadTemplate,
 };

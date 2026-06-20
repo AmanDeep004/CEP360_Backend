@@ -92,7 +92,7 @@ const campaignSchema = new mongoose.Schema(
       type: String,
       required: false,
       default: "Kestone",
-      enum: ["Kestone", "Client", "Both", "ThirdParty"],
+      enum: ["Kestone", "Client", "Both", "ThirdParty", "External"],
     },
 
     senderEmail: [
@@ -121,6 +121,7 @@ const campaignSchema = new mongoose.Schema(
       },
     },
     isCallingDataAssigned: { type: Boolean, default: false },
+    isExternalSheetUploadAllowed: { type: Boolean, default: true },
 
     // Set when this campaign is a reconfirmation of another campaign
     parentCampaignId: {

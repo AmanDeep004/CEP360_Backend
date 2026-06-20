@@ -106,6 +106,7 @@ const CallingDataSchema = new mongoose.Schema(
         "Both",
         "ThirdParty",
         "IndividualSearchKestone",
+        "External",
       ],
       required: false,
     },

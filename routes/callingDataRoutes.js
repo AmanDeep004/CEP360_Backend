@@ -23,6 +23,8 @@ import {
   getPrioritySlots,
   createPrioritySlot,
   deletePrioritySlotDef,
+  externalUploadCallingData,
+  downloadExternalUploadTemplate,
 } from "../controllers/callingDataController.js";
 import {
   uploadExternalDataController,
@@ -77,6 +79,20 @@ router.get(
   "/getAllExternalRegistrations/:CampaignId",
   protect,
   getAllExternalRegistrations
+);
+
+// ── External Upload ─────────────────────────────────────────────────────────
+router.get(
+  "/external-upload-template",
+  protect,
+  downloadExternalUploadTemplate
+);
+
+router.post(
+  "/external-upload",
+  protect,
+  upload.single("file"),
+  externalUploadCallingData
 );
 
 // here  need to add filter based  calling data as well
