@@ -157,10 +157,10 @@ const CallingDataSchema = new mongoose.Schema(
     },
     // Campaign-level priority group assigned by presales
     priorityGroup: {
-      no:         { type: Number, default: null },  // 1, 2, 3…
-      label:      { type: String, default: null },  // "P-1", "P-2"…
-      assignedAt: { type: Date,   default: null },
-      filters:    { type: Object, default: null },  // snapshot of filters used
+      no: { type: Number, default: null }, // 1, 2, 3…
+      label: { type: String, default: null }, // "P-1", "P-2"…
+      assignedAt: { type: Date, default: null },
+      filters: { type: Object, default: null }, // snapshot of filters used
     },
     clientInfo: {
       companySpecificId: { type: String, trim: true, default: "" },
@@ -184,24 +184,48 @@ const CallingDataSchema = new mongoose.Schema(
      */
     suppressions: {
       calling: {
-        isDND:     { type: Boolean, default: false },
-        scope:     { type: String, enum: ["campaign", "brand", "global"], default: null },
-        setAt:     { type: Date, default: null },
-        setBy:     { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+        isDND: { type: Boolean, default: false },
+        scope: {
+          type: String,
+          enum: ["campaign", "brand", "global"],
+          default: null,
+        },
+        setAt: { type: Date, default: null },
+        setBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          default: null,
+        },
         setByName: { type: String, trim: true, default: null },
       },
       email: {
-        isDND:     { type: Boolean, default: false },
-        scope:     { type: String, enum: ["campaign", "brand", "global"], default: null },
-        setAt:     { type: Date, default: null },
-        setBy:     { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+        isDND: { type: Boolean, default: false },
+        scope: {
+          type: String,
+          enum: ["campaign", "brand", "global"],
+          default: null,
+        },
+        setAt: { type: Date, default: null },
+        setBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          default: null,
+        },
         setByName: { type: String, trim: true, default: null },
       },
       whatsapp: {
-        isDND:     { type: Boolean, default: false },
-        scope:     { type: String, enum: ["campaign", "brand", "global"], default: null },
-        setAt:     { type: Date, default: null },
-        setBy:     { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+        isDND: { type: Boolean, default: false },
+        scope: {
+          type: String,
+          enum: ["campaign", "brand", "global"],
+          default: null,
+        },
+        setAt: { type: Date, default: null },
+        setBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          default: null,
+        },
         setByName: { type: String, trim: true, default: null },
       },
     },

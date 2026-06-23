@@ -641,14 +641,13 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
       Personal_Email2: maskEmail(row.Personal_Email2),
     });
 
-    // ── FAST PATH: no remark, no range ──────────────────────────────────────
-    // Uses index { CampaignId, agentId } — pagination done at DB level
+    // ── FAST PATH 1: no remark, no range ────────────────────────────────────
     if (!remark && !range) {
       const [docs, total] = await Promise.all([
         CallingData.find(filter)
           .populate({ path: "agentId", select: "employeeName email" })
           .populate({ path: "callHistory" })
-          .sort({ "priorityGroup.no": 1 })  // P-1 first; nulls sort last in MongoDB asc
+          .sort({ "priorityGroup.no": 1 })
           .skip(skip)
           .limit(limNum)
           .lean(),
@@ -664,11 +663,70 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
       });
     }
 
-    // ── SLOW PATH: remark or range filter needs full dataset ─────────────────
-    // chatHistory is embedded in CallHistory — nested populate removed (was a no-op)
+    // ── FAST PATH 2: range only (no remark) — DB-level skip/limit ───────────
+    // Avoids loading the full collection; only fetches the current page's docs.
+    // Sort must match assignCallingDataToAgents (createdAt asc) so positions align.
+    if (range && !remark) {
+      const parts = range.split("-").map((v) => parseInt(v.trim(), 10));
+      if (parts.length !== 2 || parts.some((n) => isNaN(n))) {
+        return sendError(next, "Invalid range format. Use 100-200", 400);
+      }
+      const [min, max] = parts;
+      if (min < 1 || min > max) {
+        return sendError(next, "Range minimum must be >= 1 and <= maximum", 400);
+      }
+
+      // Count once to clamp the range and compute total pages
+      const totalInFilter = await CallingData.countDocuments(filter);
+
+      const clampedMin = Math.min(min, totalInFilter);
+      const clampedMax = Math.min(max, totalInFilter);
+      const totalInRange = Math.max(0, clampedMax - clampedMin + 1);
+
+      if (totalInRange === 0) {
+        return sendResponse(res, 200, "Filtered database fetched successfully", {
+          total: 0, page: pageNum, limit: limNum, totalPages: 0, data: [],
+        });
+      }
+
+      // DB skip = offset to first record of range + page offset within range
+      const dbSkip  = (clampedMin - 1) + skip;
+      // Don't fetch past the end of the range
+      const dbLimit = Math.min(limNum, Math.max(0, totalInRange - skip));
+
+      if (dbLimit <= 0) {
+        return sendResponse(res, 200, "Filtered database fetched successfully", {
+          total: totalInRange,
+          page: pageNum,
+          limit: limNum,
+          totalPages: Math.ceil(totalInRange / limNum),
+          data: [],
+        });
+      }
+
+      const docs = await CallingData.find(filter)
+        .populate({ path: "agentId", select: "employeeName email" })
+        .populate({ path: "callHistory" })
+        .sort({ createdAt: 1 })
+        .skip(dbSkip)
+        .limit(dbLimit)
+        .lean();
+
+      return sendResponse(res, 200, "Filtered database fetched successfully", {
+        total: totalInRange,
+        page: pageNum,
+        limit: limNum,
+        totalPages: Math.ceil(totalInRange / limNum),
+        data: docs.map(applyMask),
+      });
+    }
+
+    // ── SLOW PATH: remark filter (must inspect callHistory for every record) ──
+    // Sort by createdAt asc so range positions match assignCallingDataToAgents.
     let data = await CallingData.find(filter)
       .populate({ path: "agentId", select: "employeeName email" })
       .populate({ path: "callHistory" })
+      .sort({ createdAt: 1 })
       .lean();
 
     if (remark) {
@@ -692,16 +750,10 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
       if (parts.length !== 2 || parts.some((n) => isNaN(n))) {
         return sendError(next, "Invalid range format. Use 100-200", 400);
       }
-
       const [min, max] = parts;
       if (min > max) {
-        return sendError(
-          next,
-          "Range minimum should be less than maximum",
-          400
-        );
+        return sendError(next, "Range minimum should be less than maximum", 400);
       }
-
       data = data.slice(min - 1, max);
     }
 
@@ -722,7 +774,7 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
 
 const assignCallingDataToAgents = asyncHandler(async (req, res, next) => {
   try {
-    const { agentId, callingDataIds, pmId, pmName } = req.body;
+    const { agentId, callingDataIds, pmId, pmName, campaignId } = req.body;
     const { range } = req.query;
 
     if (!agentId || !pmId || !pmName) {
@@ -736,43 +788,42 @@ const assignCallingDataToAgents = asyncHandler(async (req, res, next) => {
     let finalCallingDataIds = [];
 
     if (range) {
+      // Range mode — ignore callingDataIds, resolve by position within the campaign
+      if (!campaignId) {
+        return sendError(next, "campaignId is required when using range assignment", 400);
+      }
+
       const match = range.match(/^(\d+)-(\d+)$/);
       if (!match) {
-        return sendError(
-          next,
-          "Invalid range format. Use 'start-end' (e.g., 1-10)",
-          400
-        );
+        return sendError(next, "Invalid range format. Use 'start-end' (e.g., 1-10)", 400);
       }
 
       const start = parseInt(match[1], 10);
-      const end = parseInt(match[2], 10);
+      const end   = parseInt(match[2], 10);
 
       if (start < 1 || end < start) {
-        return sendError(
-          next,
-          "Invalid range. Start must be >= 1 and end must be >= start",
-          400
-        );
+        return sendError(next, "Invalid range. Start must be >= 1 and end must be >= start", 400);
       }
 
-      const unassignedData = await CallingData.find(
-        { agentId: { $exists: false }, "discrepencyInData.status": { $ne: true } },
+      // Fetch only the _ids within the range — skip/limit is efficient even for large ranges
+      const rangeRecords = await CallingData.find(
+        {
+          CampaignId: campaignId,
+          agentId: null,
+          "discrepencyInData.status": { $ne: true },
+        },
         { _id: 1 }
       )
         .sort({ createdAt: 1 })
+        .skip(start - 1)
+        .limit(end - start + 1)
         .lean();
-      // Apply range slicing (convert to 0-based indexing)
-      const rangeRecords = unassignedData.slice(start - 1, end);
-      finalCallingDataIds = rangeRecords.map((item) => item._id.toString());
 
-      if (!unassignedData) {
-        return sendError(
-          next,
-          `No unassigned data found in range ${start}-${end}`,
-          404
-        );
+      if (!rangeRecords.length) {
+        return sendError(next, `No unassigned records found in range ${start}-${end}`, 404);
       }
+
+      finalCallingDataIds = rangeRecords.map((item) => item._id.toString());
     }
     // Handle direct ID assignment (old method)
     else if (callingDataIds && Array.isArray(callingDataIds)) {
