@@ -592,13 +592,23 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
         .lean();
 
       if (callRemarks) {
-        callingData = callingData.filter((data) => {
-          const chatHist = data.callHistory?.chatHistory;
-          return (
-            Array.isArray(chatHist) &&
-            chatHist.some((entry) => entry.remarks === callRemarks)
-          );
-        });
+        if (callRemarks === "Yet to Call") {
+          callingData = callingData.filter((data) => {
+            const chatHist = data.callHistory?.chatHistory;
+            return !Array.isArray(chatHist) || chatHist.length === 0;
+          });
+        } else {
+          callingData = callingData.filter((data) => {
+            const chatHist = data.callHistory?.chatHistory;
+            if (!Array.isArray(chatHist) || chatHist.length === 0) return false;
+            const lastEntry = chatHist.reduce((latest, entry) =>
+              new Date(entry.callingDate || 0) > new Date(latest.callingDate || 0)
+                ? entry
+                : latest
+            );
+            return lastEntry.remarks?.toLowerCase() === callRemarks.toLowerCase();
+          });
+        }
       }
 
       if (lastDateOfTelecalling) {
