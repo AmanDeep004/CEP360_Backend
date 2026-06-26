@@ -16,6 +16,7 @@
  */
 
 import CallRecording from "../models/callRecordingModel.js";
+import CallHistory from "../models/callHistoryModel.js";
 import User from "../models/userModel.js";
 import errorHandler from "../utils/index.js";
 
@@ -59,7 +60,7 @@ const tataGet = async (token, endpoint) => {
 // Backend fetches agent's tataDIDNo from DB and uses it as agent_number + caller_id.
 const initiateCall = asyncHandler(async (req, res, next) => {
   try {
-    const { agentId, tataToken, destinationNumber, callingDataId } = req.body;
+    const { agentId, tataToken, destinationNumber, callingDataId, campaignId } = req.body;
 
     if (!agentId || !tataToken || !destinationNumber) {
       return sendError(
@@ -136,7 +137,7 @@ const initiateCall = asyncHandler(async (req, res, next) => {
     // Create CallRecording entry
     const record = await CallRecording.create({
       callingData_id: callingDataId || null,
-      campaign_id: null,
+      campaign_id: campaignId || null,
       contactNo: dest,
       agent_id: agentId,
       agentName: agent.employeeName || "Agent",
@@ -319,6 +320,49 @@ const tataSmartFloWebhook = asyncHandler(async (req, res) => {
       existing.misc = { ...existing.misc, lastWebhook: payload };
       await existing.save();
       console.log("[Tata Webhook] Record updated:", existing._id);
+
+      // Write recordingUrl back to the latest chatHistory entry for this contact
+      if (recordingUrl && existing.callingData_id) {
+        try {
+          const callHist = await CallHistory.findOne({ callingData_id: existing.callingData_id });
+          if (callHist && Array.isArray(callHist.chatHistory) && callHist.chatHistory.length > 0) {
+            // Primary: exact match by callRecordingId stored on the chatHistory entry
+            let targetIdx = callHist.chatHistory.findIndex(
+              (e) => !e.recordingUrl && String(e.callRecordingId) === String(existing._id)
+            );
+
+            // Fallback: closest unrecorded entry by same agent + callingDate proximity
+            if (targetIdx === -1) {
+              const agentId = existing.agent_id ? String(existing.agent_id) : null;
+              const callDate = existing.callingDate ? new Date(existing.callingDate).getTime() : null;
+              let bestDiff = Infinity;
+              callHist.chatHistory.forEach((entry, i) => {
+                if (entry.recordingUrl) return;
+                const sameAgent = agentId && String(entry.agent_id) === agentId;
+                const diff = callDate ? Math.abs(new Date(entry.callingDate).getTime() - callDate) : Infinity;
+                if (sameAgent && diff < bestDiff) { bestDiff = diff; targetIdx = i; }
+              });
+              if (targetIdx === -1 && callDate !== null) {
+                callHist.chatHistory.forEach((entry, i) => {
+                  if (entry.recordingUrl) return;
+                  const diff = Math.abs(new Date(entry.callingDate).getTime() - callDate);
+                  if (diff < bestDiff) { bestDiff = diff; targetIdx = i; }
+                });
+              }
+            }
+
+            if (targetIdx !== -1) {
+              callHist.chatHistory[targetIdx].recordingUrl = recordingUrl;
+              callHist.markModified("chatHistory");
+              await callHist.save();
+              console.log("[Tata Webhook] recordingUrl written to chatHistory entry:", targetIdx);
+            }
+          }
+        } catch (histErr) {
+          // Non-blocking — never fail the webhook response
+          console.warn("[Tata Webhook] Failed to write recordingUrl to CallHistory:", histErr.message);
+        }
+      }
     } else {
       await CallRecording.create({
         callId,
@@ -342,11 +386,33 @@ const tataSmartFloWebhook = asyncHandler(async (req, res) => {
   }
 });
 
+// ── GET /tataCalling/recordings/:callingDataId ────────────────────────────────
+// Returns all completed recordings for a contact, sorted newest first.
+const getRecordingsByContact = asyncHandler(async (req, res, next) => {
+  try {
+    const { callingDataId } = req.params;
+    if (!callingDataId) return sendError(next, "callingDataId is required", 400);
+
+    const recordings = await CallRecording.find({
+      callingData_id: callingDataId,
+      recording: { $exists: true, $ne: null },
+    })
+      .sort({ callingDate: -1 })
+      .select("callId recording callDuration callStatus callingDate agentName contactNo")
+      .lean();
+
+    return sendResponse(res, 200, "Recordings fetched", { recordings });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
 export {
   initiateCall,
   getLiveCalls,
   hangupCall,
   updateCallId,
   getCallStatus,
+  getRecordingsByContact,
   tataSmartFloWebhook,
 };

@@ -5,6 +5,7 @@ import {
   hangupCall,
   updateCallId,
   getCallStatus,
+  getRecordingsByContact,
 } from "../controllers/tataCallingController.js";
 import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
@@ -26,5 +27,8 @@ router.patch("/updateCallId", protect, authorize(ADMIN, PROGRAM_MANAGER, AGENT),
 
 // Poll call status + recording URL after call ends
 router.get("/status/:callId", protect, authorize(ADMIN, PROGRAM_MANAGER, AGENT), getCallStatus);
+
+// Fetch all recordings for a specific contact
+router.get("/recordings/:callingDataId", protect, authorize(ADMIN, PROGRAM_MANAGER, AGENT), getRecordingsByContact);
 
 export default router;

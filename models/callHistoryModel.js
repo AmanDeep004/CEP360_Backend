@@ -17,6 +17,8 @@ const chatEntrySchema = new mongoose.Schema(
       required: true,
     },
     agentName: { type: String, required: true },
+    recordingUrl: { type: String, default: null },
+    callRecordingId: { type: mongoose.Schema.Types.ObjectId, ref: "CallRecording", default: null },
   },
   { _id: false },
   { timestamps: true }
@@ -29,11 +31,11 @@ const callHistorySchema = new mongoose.Schema(
       ref: "CallingData",
       required: true,
     },
-    // campaign_id: {
-    //   type: mongoose.Schema.Types.ObjectId,
-    //   ref: "Campaign",
-    //   required: true,
-    // },
+    campaign_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Campaign",
+      required: true,
+    },
     isRegistered: { type: Boolean, default: false },
     registrationDate: { type: Date },
     chatHistory: [chatEntrySchema],

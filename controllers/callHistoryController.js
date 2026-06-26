@@ -109,6 +109,7 @@ const createCallHistory = asyncHandler(async (req, res, next) => {
       isRegistered,
       agent_id,
       agentName,
+      callRecordingId,
     } = req.body;
 
     if (
@@ -131,52 +132,38 @@ const createCallHistory = asyncHandler(async (req, res, next) => {
       isRegistered: isRegistered || false,
       agent_id,
       agentName,
+      ...(callRecordingId ? { callRecordingId } : {}),
     };
 
-    // Check for existing call history
-    let existingHistory = await CallHistory.findOne({
-      callingData_id,
-      campaign_id,
-    });
+    // Atomic upsert — $push to existing doc or create new one in a single round-trip.
+    // Uses compound index { callingData_id, campaign_id } for the lookup.
+    const savedHistory = await CallHistory.findOneAndUpdate(
+      { callingData_id, campaign_id },
+      {
+        $push: { chatHistory: chatEntry },
+        ...(isRegistered
+          ? { $set: { isRegistered: true, registrationDate: new Date() } }
+          : {}),
+      },
+      { upsert: true, new: true }
+    );
 
-    let savedHistory;
+    // chatHistory.length === 1 means this was a fresh upsert (just created)
+    const isNew = savedHistory.chatHistory.length === 1;
 
-    if (existingHistory) {
-      // Push new chat entry
-      existingHistory.chatHistory.push(chatEntry);
-
-      // Update isRegistered
-      if (isRegistered) {
-        existingHistory.isRegistered = true;
-        existingHistory.registrationDate = new Date();
-      }
-
-      savedHistory = await existingHistory.save();
-    } else {
-      // Create new history
-      const newHistory = new CallHistory({
-        callingData_id,
-        campaign_id,
-        isRegistered,
-        registrationDate: isRegistered ? new Date() : null,
-        chatHistory: [chatEntry],
-      });
-
-      savedHistory = await newHistory.save();
-
-      // Link history to CallingData
-      await CallingData.findByIdAndUpdate(callingData_id, {
-        callHistory: savedHistory._id,
-      });
-    }
-
-    // Update CallingData registration status
+    // Single consolidated update to CallingData — always runs
+    const callingDataUpdate = {
+      lastRemarks: chatEntry.remarks,
+      lastCallingDate: chatEntry.callingDate,
+    };
     if (isRegistered) {
-      await CallingData.findByIdAndUpdate(callingData_id, {
-        isRegistered: true,
-        registeredOn: new Date(),
-      });
+      callingDataUpdate.isRegistered = true;
+      callingDataUpdate.registeredOn = new Date();
     }
+    if (isNew) {
+      callingDataUpdate.callHistory = savedHistory._id;
+    }
+    await CallingData.findByIdAndUpdate(callingData_id, callingDataUpdate);
 
     // DND processing — fire-and-forget (non-blocking)
     let dndResult = null;
@@ -195,9 +182,7 @@ const createCallHistory = asyncHandler(async (req, res, next) => {
     return sendResponse(
       res,
       200,
-      existingHistory
-        ? "Call history updated successfully"
-        : "Call history created successfully",
+      isNew ? "Call history created successfully" : "Call history updated successfully",
       { ...savedHistory.toObject(), dndResult }
     );
   } catch (err) {

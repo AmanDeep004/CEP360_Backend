@@ -98,6 +98,8 @@ const CallingDataSchema = new mongoose.Schema(
     registeredOn: { type: Date, default: null },
     registrationSource: { type: String, default: "Not Registered" },
     callHistory: { type: mongoose.Schema.Types.ObjectId, ref: "CallHistory" },
+    lastRemarks: { type: String, default: null },
+    lastCallingDate: { type: Date, default: null },
     dataSourceType: {
       type: String,
       enum: [
@@ -237,6 +239,10 @@ const CallingDataSchema = new mongoose.Schema(
 
 // Covers: CampaignId-only, CampaignId+agentId, and CampaignId+agentId+sort(createdAt) queries
 CallingDataSchema.index({ CampaignId: 1, agentId: 1, createdAt: 1 });
+
+// Fast remark/date filtering on agent list page
+CallingDataSchema.index({ agentId: 1, CampaignId: 1, lastRemarks: 1 });
+CallingDataSchema.index({ agentId: 1, CampaignId: 1, lastCallingDate: 1 });
 
 // Duplicate detection (filtration controller: find by CampaignId + Contact_ID $in)
 CallingDataSchema.index({ CampaignId: 1, Contact_ID: 1 });
