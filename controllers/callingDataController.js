@@ -5,6 +5,7 @@ import CallingData from "../models/callingDataModal.js";
 import PrioritySlot from "../models/prioritySlotModel.js";
 import CallHistory from "../models/callHistoryModel.js";
 import CallingDataEditApproval from "../models/callingDataEditApprovalModel.js";
+import CallingDataEditLog from "../models/callingDataEditLogModel.js";
 import { UserRoleEnum } from "../utils/enum.js";
 import XLSX from "xlsx";
 import mongoose from "mongoose";
@@ -220,6 +221,100 @@ const getCallingDataById = asyncHandler(async (req, res, next) => {
  * @access Private
  */
 
+/**
+ * @desc Add a single contact to a campaign (agent-initiated)
+ * @route POST /api/callingData/addContact
+ * @access Private
+ */
+const addSingleContact = asyncHandler(async (req, res, next) => {
+  try {
+    const {
+      CampaignId, agentId, pmId, pmName, source,
+      // Personal
+      Salutation, First_Name, Last_Name, Full_Name, Gender,
+      // Job
+      Job_Title, Job_Seniority, Job_Function,
+      // Contact
+      Mobile_No, Contact_Direct_Phone1, Contact_Direct_Phone2, Contact_Extn_No,
+      Office_Email_1, Office_Email_2, Personal_Email1, Personal_Email2,
+      Contact_LinkedIn_Profile,
+      // Address
+      Contact_Address_1, Contact_City, Contact_State, Contact_Region,
+      Contact_Country, Contact_Pin, Contact_STD_ISD_Code, Contact_Location_Tier,
+      // Company
+      Company_Name, Industry, Sub_Industry, Company_Segment,
+      Turnover_Range, Employees_Range, Website,
+      Company_Phone1, Company_Phone2, Company_LinkedIn_Profile,
+    } = req.body;
+
+    if (!CampaignId) return sendError(next, "CampaignId is required", 400);
+    const hasName  = Full_Name?.trim();
+    const hasPhone = Mobile_No?.trim() || Contact_Direct_Phone1?.trim() || Contact_Direct_Phone2?.trim();
+    if (!hasName)  return sendError(next, "Full Name is required", 400);
+    if (!hasPhone) return sendError(next, "At least one phone number is required", 400);
+
+    const str = (v) => (v?.trim() || null);
+
+    const contact = await CallingData.create({
+      CampaignId,
+      UploadedBy: req.user?._id,
+      agentId: agentId || null,
+      pmId:    pmId    || null,
+      pmName:  str(pmName),
+      source:  str(source) || "Agent Added",
+      // Personal
+      Salutation: str(Salutation), First_Name: str(First_Name), Last_Name: str(Last_Name),
+      Full_Name:  str(Full_Name),  Gender: str(Gender),
+      // Job
+      Job_Title: str(Job_Title), Job_Seniority: str(Job_Seniority), Job_Function: str(Job_Function),
+      // Contact
+      Mobile_No: str(Mobile_No),
+      Contact_Direct_Phone1: str(Contact_Direct_Phone1), Contact_Direct_Phone2: str(Contact_Direct_Phone2),
+      Contact_Extn_No: str(Contact_Extn_No),
+      Office_Email_1: str(Office_Email_1), Office_Email_2: str(Office_Email_2),
+      Personal_Email1: str(Personal_Email1), Personal_Email2: str(Personal_Email2),
+      Contact_LinkedIn_Profile: str(Contact_LinkedIn_Profile),
+      // Address
+      Contact_Address_1: str(Contact_Address_1), Contact_City: str(Contact_City),
+      Contact_State: str(Contact_State), Contact_Region: str(Contact_Region),
+      Contact_Country: str(Contact_Country), Contact_Pin: str(Contact_Pin),
+      Contact_STD_ISD_Code: str(Contact_STD_ISD_Code), Contact_Location_Tier: str(Contact_Location_Tier),
+      // Company
+      Company_Name: str(Company_Name), Industry: str(Industry), Sub_Industry: str(Sub_Industry),
+      Company_Segment: str(Company_Segment), Turnover_Range: str(Turnover_Range),
+      Employees_Range: str(Employees_Range), Website: str(Website),
+      Company_Phone1: str(Company_Phone1), Company_Phone2: str(Company_Phone2),
+      Company_LinkedIn_Profile: str(Company_LinkedIn_Profile),
+    });
+
+    // Audit log — fire-and-forget
+    const SKIP_KEYS = new Set(["_id", "__v", "createdAt", "updatedAt", "CampaignId", "UploadedBy", "agentId", "pmId"]);
+    const logFields = Object.entries(contact.toObject())
+      .filter(([key, val]) => {
+        if (SKIP_KEYS.has(key)) return false;
+        if (val === null || val === undefined || val === "") return false;
+        if (Array.isArray(val) && val.length === 0) return false;
+        if (typeof val === "object" && !Array.isArray(val) && Object.keys(val).length === 0) return false;
+        return true;
+      })
+      .map(([field, newValue]) => ({ field, oldValue: null, newValue }));
+
+    CallingDataEditLog.create({
+      callingDataId:  contact._id,
+      campaignId:     contact.CampaignId,
+      updatedBy:      req.user?._id,
+      updatedByName:  req.user?.employeeName,
+      updatedByRole:  req.user?.role,
+      action:         "created",
+      changedFields:  logFields,
+    }).catch((err) => console.error("[CallingDataEditLog] Failed to save create log:", err.message));
+
+    return sendResponse(res, 201, "Contact added successfully", contact);
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
 const editcallingData = asyncHandler(async (req, res, next) => {
   try {
     const { _id, ...updateFields } = req.body;
@@ -243,23 +338,33 @@ const editcallingData = asyncHandler(async (req, res, next) => {
       return sendError(next, "No changes detected", 400);
     }
 
-    await CallingDataEditApproval.create({
-      callingDataId: _id,
-      contact_Id: existingEntry.Contact_ID,
-      requestedBy: req.user?._id,
-      changedFields,
-      status: "Pending",
-      requestedAt: new Date(),
-    });
+    // Approval + MasterDB sync temporarily disabled
+    // await CallingDataEditApproval.create({
+    //   callingDataId: _id,
+    //   contact_Id: existingEntry.Contact_ID,
+    //   requestedBy: req.user?._id,
+    //   changedFields,
+    //   status: "Pending",
+    //   requestedAt: new Date(),
+    // });
 
-    // Immediately apply changes to CallingData without waiting for approval
     const immediateUpdate = {};
     changedFields.forEach(({ field, newValue }) => {
       immediateUpdate[field] = newValue;
     });
-    await CallingData.findByIdAndUpdate(_id, { $set: immediateUpdate });
+    const updated = await CallingData.findByIdAndUpdate(_id, { $set: immediateUpdate }, { new: true }).lean();
 
-    return sendResponse(res, 200, "Edit request submitted for approval", {
+    // Audit log — fire-and-forget, never blocks the response
+    CallingDataEditLog.create({
+      callingDataId: _id,
+      campaignId: existingEntry.CampaignId,
+      updatedBy: req.user?._id,
+      updatedByName: req.user?.employeeName,
+      updatedByRole: req.user?.role,
+      changedFields,
+    }).catch((err) => console.error("[CallingDataEditLog] Failed to save log:", err.message));
+
+    return sendResponse(res, 200, "Calling data updated successfully", {
       callingDataId: _id,
       changedFields,
     });
@@ -1821,6 +1926,7 @@ export {
   uploadcallingData,
   getCallingDataById,
   editcallingData,
+  addSingleContact,
   deletecallingData,
   getAllCallingData,
   getDatabaseByAssignment,
