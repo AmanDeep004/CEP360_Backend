@@ -409,10 +409,47 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
       }
     }
 
+    // agent filter
+    if (req.query.agentId && req.query.agentId.trim()) {
+      filter.agentId = req.query.agentId.trim();
+    }
+
+    // remark filter — "Yet to Call" means never called (lastRemarks null/missing)
+    const remarkFilter = req.query.remark?.trim();
+    if (remarkFilter) {
+      if (remarkFilter.toLowerCase() === "yet to call") {
+        filter.lastRemarks = { $in: [null, "Yet to Call"] };
+      } else {
+        filter.lastRemarks = remarkFilter;
+      }
+    }
+
+    // calling date range filter
+    if (req.query.callingDateFrom || req.query.callingDateTo) {
+      filter.lastCallingDate = {};
+      if (req.query.callingDateFrom) {
+        filter.lastCallingDate.$gte = new Date(req.query.callingDateFrom);
+      }
+      if (req.query.callingDateTo) {
+        const end = new Date(req.query.callingDateTo);
+        end.setHours(23, 59, 59, 999);
+        filter.lastCallingDate.$lte = end;
+      }
+    }
+
     // fetch data and count
     const [total, data] = await Promise.all([
       CallingData.countDocuments(filter),
-      CallingData.find(filter).sort({ "priorityGroup.no": 1 }).skip(skip).limit(limit).lean(),
+      CallingData.find(filter)
+        .sort({ "priorityGroup.no": 1 })
+        .skip(skip)
+        .limit(limit)
+        .populate("agentId", "employeeName employeeCode")
+        .populate({
+          path: "callHistory",
+          populate: { path: "chatHistory.callRecordingId", select: "recording callDuration agentName" },
+        })
+        .lean(),
     ]);
 
     const maskedData = data.map((row) => ({
