@@ -44,8 +44,14 @@ const invoiceSchema = new mongoose.Schema(
     startDate: { type: Date, required: true },
     endDate: { type: Date, required: true },
     month: { type: String, req: true },
-    noOfDaysWorked: { type: Number },
-    noOfDaysAbsent: { type: Number },
+    noOfDaysWorked: { type: Number },    // weekday present days in agent's period
+    noOfDaysAbsent: { type: Number },    // weekday absent days in agent's period
+    totalWorkingDays: { type: Number },  // Mon-Fri in agent's actual sub-period
+    monthWorkingDays: { type: Number },  // Mon-Fri in full salary cycle (divisor for per-day rate)
+    forgivenAbsent: { type: Number, default: 1 },
+    effectiveAbsent: { type: Number },
+    payableDays: { type: Number },
+    ctc: { type: Number },
     incentive: { type: Number },
     arrears: { type: Number },
     extraPay: { type: Number },
@@ -53,18 +59,13 @@ const invoiceSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
-
     salaryModBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       default: null,
     },
-    totalDaysGenerated: {
-      type: Number,
-    },
-    daysAvailabletoGenerate: {
-      type: Number,
-    },
+    totalDaysGenerated: { type: Number },
+    daysAvailabletoGenerate: { type: Number },
     salary: {
       type: Number,
       required: true,

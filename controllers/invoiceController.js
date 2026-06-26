@@ -15,6 +15,20 @@ import UploadedFiles from "../models/uploadFilesModel.js";
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
+function countWeekdays(start, end) {
+  let count = 0;
+  const cur = new Date(start);
+  cur.setHours(0, 0, 0, 0);
+  const endD = new Date(end);
+  endD.setHours(23, 59, 59, 999);
+  while (cur <= endD) {
+    const d = cur.getDay();
+    if (d !== 0 && d !== 6) count++;
+    cur.setDate(cur.getDate() + 1);
+  }
+  return count;
+}
+
 async function getAttendanceSummary(userId, startDate, endDate) {
   const start = new Date(startDate);
   start.setHours(0, 0, 0, 0);
@@ -30,36 +44,44 @@ async function getAttendanceSummary(userId, startDate, endDate) {
     attendanceRecords.map((rec) => rec.loginDate.toISOString().slice(0, 10))
   );
 
-  const allDates = [];
+  let totalCalendarDays = 0;
+  let totalWorkingDays = 0; // Mon–Fri only
   const presentDates = [];
   const absentDates = [];
 
   let current = new Date(start);
   while (current <= end) {
     const dateStr = current.toISOString().slice(0, 10);
-    const day = current.getDay(); // 0 = Sunday, 6 = Saturday
+    const day = current.getDay(); // 0=Sun, 6=Sat
+    totalCalendarDays++;
 
-    allDates.push(dateStr);
-
-    if (day === 0 || day === 6) {
-      // Mark Saturday/Sunday as present
-      presentDates.push(dateStr);
-    } else if (presentDatesSet.has(dateStr)) {
-      presentDates.push(dateStr);
-    } else {
-      absentDates.push(dateStr);
+    if (day !== 0 && day !== 6) {
+      // Weekday only
+      totalWorkingDays++;
+      if (presentDatesSet.has(dateStr)) {
+        presentDates.push(dateStr);
+      } else {
+        absentDates.push(dateStr);
+      }
     }
 
     current.setDate(current.getDate() + 1);
   }
 
+  const presentDays    = presentDates.length;
+  const absentDays     = absentDates.length;          // weekday absences
+  const forgivenAbsent = Math.min(1, absentDays);     // 1 free leave
+  const effectiveAbsent = Math.max(0, absentDays - forgivenAbsent);
+  const payableDays    = totalWorkingDays - effectiveAbsent;
+
   return {
-    allDates,
-    presentDates,
-    absentDates,
-    totalDays: allDates.length,
-    presentDays: presentDates.length,
-    absentDays: absentDates.length,
+    totalCalendarDays,
+    totalWorkingDays,
+    presentDays,
+    absentDays,
+    forgivenAbsent,
+    effectiveAbsent,
+    payableDays,
     presentDates,
     absentDates,
   };
@@ -342,15 +364,28 @@ const generateAllInvoices = asyncHandler(async (req, res, next) => {
 
     const assignments = await AgentAssigned.find({
       campaign_id: { $in: campaignIds },
+      isAssigned: true,
     })
       .populate("campaign_id agent_id")
       .lean();
 
+    console.log(`[INFO] Found ${assignments.length} active assignments across ${campaigns.length} active campaigns`);
+
+    // Use fixed month names to avoid locale differences between server and client
+    const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+    const month = `${MONTH_NAMES[endDateRef.getMonth()]} ${endDateRef.getFullYear()}`;
+    const monthWorkingDays = countWeekdays(startDateRef, endDateRef);
+
+    console.log(`[INFO] Month label: "${month}", Cycle working days: ${monthWorkingDays}`);
+
     const invoicesToInsert = [];
+    let skippedCount = 0;
 
     for (const assignment of assignments) {
       const agent = assignment.agent_id;
       const campaign = assignment.campaign_id;
+
+      if (!agent || !campaign) continue;
 
       const assignedAt = assignment.assigned_date
         ? new Date(assignment.assigned_date)
@@ -374,13 +409,11 @@ const generateAllInvoices = asyncHandler(async (req, res, next) => {
         toDate
       );
 
-      const noOfDaysWorked = attendanceSummary.presentDays;
-      const noOfDaysAbsent = attendanceSummary.absentDays;
-
-      const month = fromDate.toLocaleString("default", {
-        month: "long",
-        year: "numeric",
-      });
+      const { presentDays, absentDays, totalWorkingDays, forgivenAbsent, effectiveAbsent, payableDays, totalCalendarDays } = attendanceSummary;
+      const agentCtc = agent.ctc || 0;
+      const salary = monthWorkingDays > 0
+        ? Math.round((agentCtc / monthWorkingDays) * payableDays)
+        : 0;
 
       const existingInvoice = await Invoice.findOne({
         employeeId: agent._id,
@@ -388,29 +421,33 @@ const generateAllInvoices = asyncHandler(async (req, res, next) => {
         month,
       });
 
-      if (existingInvoice) continue;
-
-      const totalDaysInRange =
-        Math.ceil((endDateRef - startDateRef) / (1000 * 60 * 60 * 24)) + 1;
-      const daysAvailable = totalDaysInRange - noOfDaysWorked - noOfDaysAbsent;
-      const salary = (agent.ctc / totalDaysInRange) * noOfDaysWorked;
+      if (existingInvoice) {
+        skippedCount++;
+        continue;
+      }
 
       const invoice = {
         employeeId: agent._id,
         campaign_id: campaign._id,
         isMultiCampaign: false,
-        programManagers: campaign.programManager,
+        programManagers: campaign.programManager || [],
         startDate: fromDate,
         endDate: toDate,
         month,
-        noOfDaysWorked,
-        noOfDaysAbsent: attendanceSummary.absentDays,
+        noOfDaysWorked: presentDays,
+        noOfDaysAbsent: absentDays,
+        totalWorkingDays,
+        monthWorkingDays,
+        forgivenAbsent,
+        effectiveAbsent,
+        payableDays,
+        ctc: agentCtc,
         incentive: 0,
         arrears: 0,
         extraPay: 0,
         salaryGenBy: req.user?._id || null,
-        totalDaysGenerated: attendanceSummary.totalDays,
-        daysAvailabletoGenerate: daysAvailable < 0 ? 0 : daysAvailable,
+        totalDaysGenerated: totalCalendarDays,
+        daysAvailabletoGenerate: 0,
         invoiceGenerated: {
           status: false,
           genBy: null,
@@ -438,9 +475,13 @@ const generateAllInvoices = asyncHandler(async (req, res, next) => {
         });
     }
 
+    console.log(`[INFO] Inserted: ${insertedCount}, Skipped (already exist): ${skippedCount}`);
+
     return sendResponse(res, 200, "Invoices generated successfully", {
       totalInvoicesAttempted: invoicesToInsert.length,
       successfullyInserted: insertedCount,
+      alreadyExisted: skippedCount,
+      month,
     });
   } catch (error) {
     return sendError(next, error.message, 500);
@@ -533,14 +574,16 @@ const runInvoiceGeneration = asyncHandler(async () => {
         toDate
       );
 
-      const noOfDaysWorked = attendanceSummary.presentDays || 0;
-      const noOfDaysAbsent = attendanceSummary.absentDays || 0;
-      const totalDaysGenerated = attendanceSummary.totalDays || 0;
+      const { presentDays, absentDays, totalWorkingDays, forgivenAbsent, effectiveAbsent, payableDays, totalCalendarDays } = attendanceSummary;
+      const agentCtc = agent.ctc || 0;
+      const monthWorkingDays = countWeekdays(startDateRef, endDateRef);
+      const salary = monthWorkingDays > 0
+        ? Math.round((agentCtc / monthWorkingDays) * payableDays)
+        : 0;
 
-      const month = fromDate.toLocaleString("default", {
-        month: "long",
-        year: "numeric",
-      });
+      // Use END date of cycle as month label — fixed format to avoid locale differences
+      const _MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+      const month = `${_MONTHS[endDateRef.getMonth()]} ${endDateRef.getFullYear()}`;
 
       //  Check for duplicate invoice
       const existingInvoice = await Invoice.findOne({
@@ -551,12 +594,6 @@ const runInvoiceGeneration = asyncHandler(async () => {
 
       if (existingInvoice) continue;
 
-      //  Calculate salary with all values
-      const totalDaysInRange =
-        Math.ceil((endDateRef - startDateRef) / (1000 * 60 * 60 * 24)) + 1;
-      const daysAvailable = totalDaysInRange - noOfDaysWorked - noOfDaysAbsent;
-      const salary = (agent.ctc / totalDaysInRange) * noOfDaysWorked;
-
       invoicesToInsert.push({
         employeeId: agent._id,
         campaign_id: campaign._id,
@@ -565,14 +602,20 @@ const runInvoiceGeneration = asyncHandler(async () => {
         startDate: fromDate,
         endDate: toDate,
         month,
-        noOfDaysWorked,
-        noOfDaysAbsent,
+        noOfDaysWorked: presentDays,
+        noOfDaysAbsent: absentDays,
+        totalWorkingDays,
+        monthWorkingDays,
+        forgivenAbsent,
+        effectiveAbsent,
+        payableDays,
+        ctc: agentCtc,
         incentive: 0,
         arrears: 0,
         extraPay: 0,
         salaryGenBy: null, // cron = system
-        totalDaysGenerated,
-        daysAvailabletoGenerate: daysAvailable < 0 ? 0 : daysAvailable,
+        totalDaysGenerated: totalCalendarDays,
+        daysAvailabletoGenerate: 0,
         invoiceGenerated: {
           status: false,
           genBy: null,
@@ -672,8 +715,9 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
       incentive,
       arrears,
       extraPay,
-      noOfDaysWorked,
-      noOfDaysAbsent,
+      noOfDaysWorked,   // days present (PM can edit)
+      noOfDaysAbsent,   // days absent (derived, sent for storage)
+      monthWorkingDays: payloadMonthWorkingDays, // full cycle Mon-Fri (PM can override)
       startDate,
       endDate,
       genBy,
@@ -690,26 +734,34 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
     const employee = invoice.employeeId;
     if (!employee) return sendError(next, "Employee not found", 404);
 
-    // Salary Calculations
-    const gross = Math.round((ctc / 30) * Number(noOfDaysWorked));
-    const finalCTC =
-      gross + Number(incentive) + Number(arrears) + Number(extraPay);
-    const totalDaysGenerated = Number(noOfDaysWorked) + Number(noOfDaysAbsent);
-    const daysAvailabletoGenerate = 30 - Number(noOfDaysWorked);
+    // monthWorkingDays used for everything — rate divisor AND absent calc
+    const monthWorkingDays = Number(payloadMonthWorkingDays) || Number(invoice.monthWorkingDays) || (Number(noOfDaysWorked) + Number(noOfDaysAbsent));
+    const present          = Math.min(Number(noOfDaysWorked) || 0, monthWorkingDays);
+    const absent           = Math.max(0, monthWorkingDays - present);
+    const forgivenAbsent   = Math.min(1, absent);
+    const effectiveAbsent  = Math.max(0, absent - forgivenAbsent);
+    const payableDays      = present + forgivenAbsent;
+    const dailyRate        = monthWorkingDays > 0 ? Number(ctc) / monthWorkingDays : 0;
+    const gross            = Math.round(dailyRate * payableDays);
+    const finalCTC         = gross + Number(incentive) + Number(arrears) + Number(extraPay);
 
     // Update invoice fields
-    invoice.incentive = incentive;
-    invoice.arrears = arrears;
-    invoice.extraPay = extraPay;
-    invoice.noOfDaysWorked = noOfDaysWorked;
-    invoice.noOfDaysAbsent = noOfDaysAbsent;
-    invoice.startDate = new Date(startDate);
-    invoice.endDate = new Date(endDate);
-    invoice.salaryModBy = salaryModBy;
-    invoice.totalDaysGenerated = totalDaysGenerated;
-    invoice.daysAvailabletoGenerate = daysAvailabletoGenerate;
-    invoice.invoiceGenerated.genBy = genBy;
-    invoice.ctc = finalCTC;
+    invoice.ctc                     = Number(ctc);
+    invoice.noOfDaysWorked          = present;
+    invoice.noOfDaysAbsent          = absent;
+    invoice.monthWorkingDays        = monthWorkingDays;
+    invoice.forgivenAbsent          = forgivenAbsent;
+    invoice.effectiveAbsent         = effectiveAbsent;
+    invoice.payableDays             = payableDays;
+    invoice.incentive               = incentive;
+    invoice.arrears                 = arrears;
+    invoice.extraPay                = extraPay;
+    invoice.startDate               = new Date(startDate);
+    invoice.endDate                 = new Date(endDate);
+    invoice.salaryModBy             = salaryModBy;
+    invoice.daysAvailabletoGenerate = 0;
+    invoice.invoiceGenerated.genBy  = genBy;
+    invoice.salary                  = gross;
 
     // Generate PDF in memory
     const pdfFilename = `invoice-${invoice._id}-${Date.now()}.pdf`;
