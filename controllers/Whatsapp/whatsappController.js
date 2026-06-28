@@ -77,7 +77,7 @@ const sendTemplateMessageOld = asyncHandler(async (req, res, next) => {
   try {
     const {
       templateName,
-      language = "en",
+      language = "en_US",
       wabaPhoneNumber,
       contacts,
     } = req.body;
@@ -161,7 +161,7 @@ const sendTemplateMessage = asyncHandler(async (req, res, next) => {
   try {
     const {
       templateName,
-      language = "en",
+      language = "en_US",
       wabaPhoneNumber,
       contacts,
       templateDetails: templateInfo = {},

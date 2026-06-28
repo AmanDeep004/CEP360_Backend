@@ -159,10 +159,11 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
       callingDataIds,
       templateName,
       campaignId,
-      fromEmail,
       campignType,
       campaignName,
     } = req.body;
+
+    const fromEmail = req.body.fromEmail || process.env.DEFAULT_SENDER_EMAIL || process.env.MS_GRAPH_SENDER_EMAIL;
 
     if (!callingDataIds?.length || !templateName || !campaignId || !fromEmail) {
       console.log("[MAILER_SEND] Stage 2: Validation failed");
@@ -623,8 +624,47 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
   }
 });
 
+const getAllMailerCloudTemplates = asyncHandler(async (req, res, next) => {
+  try {
+    const API_KEY = process.env.MAILERCLOUD_API_KEY;
+    if (!API_KEY) return sendError(next, "MailerCloud API key missing", 500);
+
+    // Try different MailerCloud template list endpoints
+    const endpoints = [
+      { method: "get", url: "https://cloudapi.mailercloud.com/v1/templates", params: {} },
+      { method: "get", url: "https://cloudapi.mailercloud.com/v1/templates/list", params: {} },
+      { method: "post", url: "https://cloudapi.mailercloud.com/v1/templates/list", data: {} },
+    ];
+
+    let lastError = null;
+    for (const ep of endpoints) {
+      try {
+        const config = {
+          headers: { Authorization: API_KEY, "Content-Type": "application/json", Accept: "application/json" },
+        };
+        const response = ep.method === "get"
+          ? await axios.get(ep.url, { ...config, params: ep.params })
+          : await axios.post(ep.url, ep.data || {}, config);
+
+        const templates = response.data?.data || response.data || [];
+        console.log(`[MailerCloud] Success with: ${ep.method.toUpperCase()} ${ep.url}, got ${Array.isArray(templates) ? templates.length : "?"} templates`);
+        return sendResponse(res, 200, "Templates fetched successfully", Array.isArray(templates) ? templates : []);
+      } catch (err) {
+        console.warn(`[MailerCloud] Failed ${ep.method.toUpperCase()} ${ep.url}:`, err.response?.data || err.message);
+        lastError = err;
+      }
+    }
+
+    return sendError(next, lastError?.response?.data?.errors?.[0]?.message || lastError?.message || "Failed to fetch templates", 500);
+  } catch (error) {
+    console.error("MailerCloud Get All Templates Error:", error.response?.data || error.message);
+    return sendError(next, error.response?.data?.message || error.message, error.response?.status || 500);
+  }
+});
+
 export {
   getMailercloudTemplateByName,
+  getAllMailerCloudTemplates,
   mailercloudWebhook,
   sendTemplateEmailToCallingData,
 };

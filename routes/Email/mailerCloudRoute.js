@@ -1,9 +1,8 @@
 import { Router } from "express";
 import {
-  //getAllEmailWebhookStatus,
   getMailercloudTemplateByName,
+  getAllMailerCloudTemplates,
   mailercloudWebhook,
-  //sendMailercloudEmail,
   sendTemplateEmailToCallingData,
 } from "../../controllers/Email/mailerCloudController.js";
 import { protect } from "../../middleware/authMiddleware.js";
@@ -15,6 +14,7 @@ const router = Router();
 router.post("/sendEmailWithTemplate", protect, sendTemplateEmailToCallingData);
 router.get("/webhook", mailercloudWebhook);
 router.get("/template", protect, getMailercloudTemplateByName);
+router.get("/templates", protect, getAllMailerCloudTemplates);
 // router.get(
 //   "/GetEmailStatus",
 //   protect,

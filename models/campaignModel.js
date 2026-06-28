@@ -123,6 +123,22 @@ const campaignSchema = new mongoose.Schema(
     isCallingDataAssigned: { type: Boolean, default: false },
     isExternalSheetUploadAllowed: { type: Boolean, default: true },
 
+    allowedTemplates: {
+      whatsapp: [
+        {
+          templateName: { type: String },
+          displayName:  { type: String },
+          language:     { type: String },
+        },
+      ],
+      email: [
+        {
+          templateId:   { type: String },
+          templateName: { type: String },
+        },
+      ],
+    },
+
     // Set when this campaign is a reconfirmation of another campaign
     parentCampaignId: {
       type: mongoose.Schema.Types.ObjectId,

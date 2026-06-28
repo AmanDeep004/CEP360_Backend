@@ -625,6 +625,38 @@ const checkEndedCampaigns = asyncHandler(async () => {
   }
 });
 
+const updateAllowedTemplates = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId, whatsapp, email } = req.body;
+    if (!campaignId) return sendError(next, "Campaign ID is required", 400);
+
+    const campaign = await Campaign.findByIdAndUpdate(
+      campaignId,
+      { "allowedTemplates.whatsapp": whatsapp || [], "allowedTemplates.email": email || [] },
+      { new: true }
+    ).select("name allowedTemplates");
+
+    if (!campaign) return sendError(next, "Campaign not found", 404);
+    return sendResponse(res, 200, "Templates updated successfully", campaign);
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
+const getCampaignAllowedTemplates = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    if (!campaignId) return sendError(next, "Campaign ID is required", 400);
+
+    const campaign = await Campaign.findById(campaignId).select("name allowedTemplates").lean();
+    if (!campaign) return sendError(next, "Campaign not found", 404);
+
+    return sendResponse(res, 200, "Allowed templates fetched", campaign.allowedTemplates || { whatsapp: [], email: [] });
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
 export {
   createCampaign,
   getAllCampaigns,
@@ -637,4 +669,6 @@ export {
   checkEndedCampaigns,
   createReconfirmationCampaign,
   getReconfirmationCampaigns,
+  updateAllowedTemplates,
+  getCampaignAllowedTemplates,
 };
