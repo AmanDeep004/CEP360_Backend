@@ -6,7 +6,7 @@ import PrioritySlot from "../models/prioritySlotModel.js";
 import CallHistory from "../models/callHistoryModel.js";
 import CallingDataEditApproval from "../models/callingDataEditApprovalModel.js";
 import CallingDataEditLog from "../models/callingDataEditLogModel.js";
-import { UserRoleEnum } from "../utils/enum.js";
+import { UserRoleEnum, REMARK_STATUS } from "../utils/enum.js";
 import XLSX from "xlsx";
 import mongoose from "mongoose";
 import escapeStringRegexp from "escape-string-regexp";
@@ -1922,6 +1922,27 @@ const externalUploadCallingData = asyncHandler(async (req, res, next) => {
 
 // ═══════════════════════════════════════════════════════════════════════════
 
+const resetNoResponseToYetToCall = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    if (!campaignId) return sendError(next, "Campaign ID is required", 400);
+
+    const result = await CallingData.updateMany(
+      { CampaignId: campaignId, lastRemarks: REMARK_STATUS.NO_RESPONSE },
+      { $set: { lastRemarks: REMARK_STATUS.YET_TO_CALL } }
+    );
+
+    return sendResponse(res, 200, `${result.modifiedCount} records updated from "${REMARK_STATUS.NO_RESPONSE}" to "${REMARK_STATUS.YET_TO_CALL}"`, {
+      matched: result.matchedCount,
+      updated: result.modifiedCount,
+    });
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+
 export {
   uploadcallingData,
   getCallingDataById,
@@ -1949,4 +1970,5 @@ export {
   deletePrioritySlotDef,
   externalUploadCallingData,
   downloadExternalUploadTemplate,
+  resetNoResponseToYetToCall,
 };

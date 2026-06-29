@@ -95,6 +95,18 @@ const DND_REMARK_TO_SCOPE = Object.freeze({
   [DND_REMARKS.GLOBAL]:   DND_SCOPE.GLOBAL,
 });
 
+/**
+ * Calling data remark status values — keep in sync with frontend staticData.js REMARK_OPTIONS
+ */
+const REMARK_STATUS = Object.freeze({
+  YET_TO_CALL:  "Yet to Call",
+  NO_RESPONSE:  "No Response",
+  CALL_BACK:    "Call Back",
+  INTERESTED:   "Interested",
+  NOT_INTERESTED: "Not Interested",
+  DND:          "DND",
+});
+
 // Export the enums
 export {
   UserRoleEnum,
@@ -107,4 +119,5 @@ export {
   DND_SCOPE,
   DND_REMARKS,
   DND_REMARK_TO_SCOPE,
+  REMARK_STATUS,
 };

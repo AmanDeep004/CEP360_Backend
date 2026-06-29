@@ -26,6 +26,7 @@ import {
   deletePrioritySlotDef,
   externalUploadCallingData,
   downloadExternalUploadTemplate,
+  resetNoResponseToYetToCall,
 } from "../controllers/callingDataController.js";
 import {
   uploadExternalDataController,
@@ -116,5 +117,7 @@ router.patch("/:campaignId/swapPriorityGroups",   protect, swapPriorityGroups);
 router.get("/:campaignId/prioritySlots",          protect, getPrioritySlots);
 router.post("/:campaignId/prioritySlots",         protect, createPrioritySlot);
 router.delete("/:campaignId/prioritySlots/:no",   protect, deletePrioritySlotDef);
+
+router.put("/resetNoResponse/:campaignId", protect, authorize(ADMIN, PROGRAM_MANAGER), resetNoResponseToYetToCall);
 
 export default router;
