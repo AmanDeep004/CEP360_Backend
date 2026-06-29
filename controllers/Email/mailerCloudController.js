@@ -192,24 +192,24 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
     (async () => {
       try {
 
-    ///////// FETCH TEMPLATE
-    const baseUrl = process.env.BASE_URL;
-    console.log("[MAILER_SEND] Stage 3: Fetching template", { baseUrl });
+    ///////// FETCH TEMPLATE — call MailerCloud directly (avoid JWT auth issue)
+    console.log("[MAILER_SEND] Stage 3: Fetching template from MailerCloud", { templateName });
 
     const templateRes = await axios.get(
-      `${baseUrl}api/mailercloud/template?name=${templateName}`,
+      `https://cloudapi.mailercloud.com/v1/templates/details?name=${encodeURIComponent(templateName)}`,
       {
         headers: {
           Authorization: process.env.MAILERCLOUD_API_KEY,
+          Accept: "application/json",
         },
       }
     );
 
     console.log("[MAILER_SEND] Stage 4: Template API response received");
-    const template = templateRes.data?.data?.data;
+    const template = templateRes.data?.data;
 
     if (!template?.html || !template?.plainText) {
-      console.log("[MAILER_SEND] Stage 4: Invalid template payload");
+      console.log("[MAILER_SEND] Stage 4: Invalid template payload", templateRes.data);
       await failJob(jobId, "Invalid template received");
       return;
     }
