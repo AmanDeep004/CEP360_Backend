@@ -575,103 +575,36 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
       ];
     }
 
-    // callRemarks and lastDateOfTelecalling require post-population filtering —
-    // fetch all matching records for those filters, otherwise paginate at DB level.
-    const needsPostFilter = !!(callRemarks || lastDateOfTelecalling);
+    // Filter directly on indexed lastRemarks / lastCallingDate fields — no populate needed
+    if (callRemarks) {
+      if (callRemarks === "Yet to Call") {
+        filter.lastRemarks = null;
+      } else {
+        filter.lastRemarks = { $regex: new RegExp(`^${callRemarks}$`, "i") };
+      }
+    }
+
+    if (lastDateOfTelecalling) {
+      const trimmedDate = lastDateOfTelecalling.trim();
+      filter.lastCallingDate = {
+        $gte: new Date(trimmedDate + "T00:00:00+05:30"),
+        $lte: new Date(trimmedDate + "T23:59:59.999+05:30"),
+      };
+    }
 
     let callingData;
     let total;
 
-    if (needsPostFilter) {
-      callingData = await callingDataModal
+    [total, callingData] = await Promise.all([
+      callingDataModal.countDocuments(filter),
+      callingDataModal
         .find(filter)
         .populate({ path: "agentId", select: "employeeName email" })
-        .populate({ path: "callHistory" })
         .sort({ "priorityGroup.no": 1 })
-        .allowDiskUse(true)
-        .lean();
-
-      if (callRemarks) {
-        if (callRemarks === "Yet to Call") {
-          callingData = callingData.filter((data) => {
-            const chatHist = data.callHistory?.chatHistory;
-            return !Array.isArray(chatHist) || chatHist.length === 0;
-          });
-        } else {
-          callingData = callingData.filter((data) => {
-            const chatHist = data.callHistory?.chatHistory;
-            if (!Array.isArray(chatHist) || chatHist.length === 0) return false;
-            const lastEntry = chatHist.reduce((latest, entry) =>
-              new Date(entry.callingDate || 0) > new Date(latest.callingDate || 0)
-                ? entry
-                : latest
-            );
-            return lastEntry.remarks?.toLowerCase() === callRemarks.toLowerCase();
-          });
-        }
-      }
-
-      if (lastDateOfTelecalling) {
-        const trimmedDate = lastDateOfTelecalling.trim();
-        const startOfDay = new Date(trimmedDate + "T00:00:00+05:30");
-        const endOfDay = new Date(trimmedDate + "T23:59:59.999+05:30");
-
-        callingData = callingData.filter((data) => {
-          const chatHist = data.callHistory?.chatHistory;
-          if (Array.isArray(chatHist) && chatHist.length > 0) {
-            const lastEntry = chatHist.reduce(
-              (latest, item) => {
-                const callDate = new Date(item.callingDate || "1970-01-01");
-                return callDate > new Date(latest.callingDate || "1970-01-01")
-                  ? item
-                  : latest;
-              },
-              { callingDate: "1970-01-01" }
-            );
-            if (!lastEntry.callingDate) return false;
-            const callDate = new Date(lastEntry.callingDate);
-            return callDate >= startOfDay && callDate <= endOfDay;
-          }
-          return false;
-        });
-      }
-
-      total = callingData.length;
-      callingData = callingData.slice(skip, skip + limNum);
-    } else {
-      // DB-level pagination — fast path
-      [total, callingData] = await Promise.all([
-        callingDataModal.countDocuments(filter),
-        callingDataModal
-          .find(filter)
-          .populate({ path: "agentId", select: "employeeName email" })
-          .populate({ path: "callHistory" })
-          .sort({ "priorityGroup.no": 1 })
-          .skip(skip)
-          .limit(limNum)
-          .lean(),
-      ]);
-    }
-
-    // Attach lastRemarks and lastCallingDate
-    callingData = callingData.map((item) => {
-      const chatHist = item.callHistory?.chatHistory;
-      if (Array.isArray(chatHist) && chatHist.length > 0) {
-        const lastEntry = chatHist.reduce(
-          (latest, entry) => {
-            const date = new Date(entry.callingDate || "1970-01-01");
-            return date > latest.callingDate ? entry : latest;
-          },
-          { callingDate: new Date("1970-01-01") }
-        );
-        item.lastCallingDate = lastEntry.callingDate || null;
-        item.lastRemarks = lastEntry.remarks || null;
-      } else {
-        item.lastCallingDate = null;
-        item.lastRemarks = null;
-      }
-      return item;
-    });
+        .skip(skip)
+        .limit(limNum)
+        .lean(),
+    ]);
 
     const maskedData = callingData.map((row) => ({
       ...row,
