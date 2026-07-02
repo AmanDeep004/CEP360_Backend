@@ -15,6 +15,7 @@ import {
   getInvoicesByPMAndMonth,
   getInvoicesOfAgent,
   getAllInvoicesOfPmMonthWise,
+  getSalaryDashboard,
 } from "../controllers/invoiceController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
@@ -43,5 +44,6 @@ router.get(
   protect,
   getAllInvoicesOfPmMonthWise
 );
+router.get("/salaryDashboard", protect, getSalaryDashboard);
 
 export default router;

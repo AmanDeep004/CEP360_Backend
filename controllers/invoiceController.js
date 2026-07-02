@@ -711,55 +711,76 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
   try {
     const {
       invoiceId,
+      agentId,      // used to auto-create invoice if invoiceId missing
+      campaignId,
+      month,
       ctc,
       incentive,
       arrears,
       extraPay,
-      noOfDaysWorked,   // days present (PM can edit)
-      noOfDaysAbsent,   // days absent (derived, sent for storage)
-      monthWorkingDays: payloadMonthWorkingDays, // full cycle Mon-Fri (PM can override)
+      noOfDaysWorked,              // payable days for this campaign (direct)
+      noOfDaysAbsent,              // stored for record keeping
+      monthWorkingDays: payloadMonthWorkingDays,
       startDate,
       endDate,
       genBy,
       salaryModBy,
     } = req.body;
 
-    if (!invoiceId || !startDate || !endDate || !ctc || !genBy) {
+    if (!startDate || !endDate || !ctc || !genBy) {
       return sendError(next, "Missing required fields", 400);
     }
 
-    const invoice = await Invoice.findById(invoiceId).populate("employeeId");
+    let invoice;
+    if (invoiceId) {
+      invoice = await Invoice.findById(invoiceId).populate("employeeId");
+    } else if (agentId && campaignId && month) {
+      // Find or create invoice record
+      invoice = await Invoice.findOne({ employeeId: agentId, campaign_id: campaignId, month }).populate("employeeId");
+      if (!invoice) {
+        const campaign = await Campaign.findById(campaignId).select("programManager").lean();
+        const created = await Invoice.create({
+          employeeId: agentId,
+          campaign_id: campaignId,
+          month,
+          programManagers: campaign?.programManager || [],
+          startDate: new Date(startDate),
+          endDate:   new Date(endDate),
+          salary: 0,
+          salaryGenBy: req.user?._id || genBy,
+        });
+        invoice = await Invoice.findById(created._id).populate("employeeId");
+      }
+    } else {
+      return sendError(next, "Either invoiceId or (agentId, campaignId, month) required", 400);
+    }
+
     if (!invoice) return sendError(next, "Invoice not found", 404);
 
     const employee = invoice.employeeId;
     if (!employee) return sendError(next, "Employee not found", 404);
 
-    // monthWorkingDays used for everything — rate divisor AND absent calc
-    const monthWorkingDays = Number(payloadMonthWorkingDays) || Number(invoice.monthWorkingDays) || (Number(noOfDaysWorked) + Number(noOfDaysAbsent));
-    const present          = Math.min(Number(noOfDaysWorked) || 0, monthWorkingDays);
-    const absent           = Math.max(0, monthWorkingDays - present);
-    const forgivenAbsent   = Math.min(1, absent);
-    const effectiveAbsent  = Math.max(0, absent - forgivenAbsent);
-    const payableDays      = present + forgivenAbsent;
+    // noOfDaysWorked IS the payable days for this campaign (PM sets it directly)
+    const monthWorkingDays = Number(payloadMonthWorkingDays) || Number(invoice.monthWorkingDays) || 0;
+    const payableDays      = Number(noOfDaysWorked) || 0;
     const dailyRate        = monthWorkingDays > 0 ? Number(ctc) / monthWorkingDays : 0;
     const gross            = Math.round(dailyRate * payableDays);
-    const finalCTC         = gross + Number(incentive) + Number(arrears) + Number(extraPay);
+    const finalCTC         = gross + Number(incentive || 0) + Number(arrears || 0) + Number(extraPay || 0);
 
     // Update invoice fields
     invoice.ctc                     = Number(ctc);
-    invoice.noOfDaysWorked          = present;
-    invoice.noOfDaysAbsent          = absent;
+    invoice.noOfDaysWorked          = payableDays;
+    invoice.noOfDaysAbsent          = Number(noOfDaysAbsent || 0);
     invoice.monthWorkingDays        = monthWorkingDays;
-    invoice.forgivenAbsent          = forgivenAbsent;
-    invoice.effectiveAbsent         = effectiveAbsent;
     invoice.payableDays             = payableDays;
-    invoice.incentive               = incentive;
-    invoice.arrears                 = arrears;
-    invoice.extraPay                = extraPay;
+    invoice.incentive               = Number(incentive || 0);
+    invoice.arrears                 = Number(arrears || 0);
+    invoice.extraPay                = Number(extraPay || 0);
     invoice.startDate               = new Date(startDate);
     invoice.endDate                 = new Date(endDate);
     invoice.salaryModBy             = salaryModBy;
     invoice.daysAvailabletoGenerate = 0;
+    if (!invoice.invoiceGenerated) invoice.invoiceGenerated = {};
     invoice.invoiceGenerated.genBy  = genBy;
     invoice.salary                  = gross;
 
@@ -1218,6 +1239,167 @@ const getAllInvoicesOfPmMonthWise = asyncHandler(async (req, res, next) => {
   }
 });
 
+// ─── Salary Dashboard ──────────────────────────────────────────────────────────
+// Returns per-agent attendance summary + existing invoice status for PM's cycle
+const getSalaryDashboard = asyncHandler(async (req, res, next) => {
+  try {
+    const { pmId, month } = req.query;
+    if (!pmId || !month) return sendError(next, "pmId and month are required", 400);
+
+    const parts = month.trim().split(" ");
+    if (parts.length !== 2) return sendError(next, "month must be 'Month Year' e.g. 'June 2026'", 400);
+    const [monthName, yearStr] = parts;
+    const year = parseInt(yearStr, 10);
+    const monthIndex = new Date(`${monthName} 1, ${year}`).getMonth(); // 0-indexed
+
+    // Salary cycle: 26th of prev month → 25th of this month
+    const cycleStart = new Date(year, monthIndex - 1, 26, 0, 0, 0, 0);
+    const cycleEnd   = new Date(year, monthIndex,     25, 23, 59, 59, 999);
+    const cycleStartStr = `${cycleStart.getFullYear()}-${String(cycleStart.getMonth() + 1).padStart(2, "0")}-26`;
+    const cycleEndStr   = `${year}-${String(monthIndex + 1).padStart(2, "0")}-25`;
+    const totalWorkingDays  = countWeekdays(cycleStart, cycleEnd);
+    const totalCalendarDays = Math.floor((new Date(year, monthIndex, 25) - new Date(year, monthIndex - 1, 26)) / (24 * 60 * 60 * 1000)) + 1;
+
+    // Campaigns under this PM
+    const campaigns = await Campaign.find({ programManager: pmId }).select("_id name jcNumber").lean();
+    const campaignIds = campaigns.map(c => c._id);
+    if (!campaignIds.length) {
+      return sendResponse(res, 200, "No campaigns found", { agents: [], totalWorkingDays, totalCalendarDays, cycleStart: cycleStartStr, cycleEnd: cycleEndStr, month });
+    }
+
+    // Active agent assignments for these campaigns
+    const assignments = await AgentAssigned.find({
+      campaign_id: { $in: campaignIds },
+      isAssigned: true,
+    }).populate({ path: "agent_id", select: "employeeName employeeCode ctc" }).lean();
+
+    if (!assignments.length) {
+      return sendResponse(res, 200, "No agents found", { agents: [], totalWorkingDays, totalCalendarDays, cycleStart: cycleStartStr, cycleEnd: cycleEndStr, month });
+    }
+
+    const campaignMap = Object.fromEntries(campaigns.map(c => [c._id.toString(), c]));
+    const agentIds = [...new Set(assignments.map(a => a.agent_id?._id?.toString()).filter(Boolean))];
+
+    // Fetch attendance records for all agents in the cycle
+    const attendanceRecords = await Attendance.find({
+      employeeId: { $in: agentIds },
+      createdAt: { $gte: cycleStart, $lte: cycleEnd },
+    }).sort({ createdAt: 1 }).lean();
+
+    // Build per-agent map: { agentId: { "YYYY-MM-DD": ISOString of first login } }
+    const agentAttMap = {};
+    for (const rec of attendanceRecords) {
+      const aId = rec.employeeId.toString();
+      const istDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date(rec.createdAt));
+      if (!agentAttMap[aId]) agentAttMap[aId] = {};
+      if (!agentAttMap[aId][istDate]) agentAttMap[aId][istDate] = rec.createdAt;
+    }
+
+    // All invoices for these agents this month (to compute already-generated payable days)
+    const existingInvoices = await Invoice.find({ employeeId: { $in: agentIds }, month }).lean();
+
+    // Per-agent total payable days already generated across ALL campaigns this month
+    const agentGenDays = {};
+    for (const inv of existingInvoices) {
+      const aId = inv.employeeId.toString();
+      agentGenDays[aId] = (agentGenDays[aId] || 0) + (inv.payableDays || 0);
+    }
+
+    const agents = [];
+    for (const asgn of assignments) {
+      const agent = asgn.agent_id;
+      if (!agent) continue;
+      const aId = agent._id.toString();
+      const campaign = campaignMap[asgn.campaign_id?.toString()];
+      if (!campaign) continue;
+
+      // Agent's effective period clipped to the cycle
+      const assignedAt = asgn.assigned_date ? new Date(asgn.assigned_date) : cycleStart;
+      const releasedAt = asgn.released_date  ? new Date(asgn.released_date)  : null;
+      const fromDate = assignedAt < cycleStart ? new Date(cycleStart) : new Date(assignedAt);
+      let   toDate   = releasedAt ? new Date(releasedAt) : new Date(cycleEnd);
+      if (toDate > cycleEnd) toDate = new Date(cycleEnd);
+
+      const agentWorkingDays = countWeekdays(fromDate, toDate);
+
+      // Walk through each weekday in the period
+      const presentDates = [];
+      const absentDates  = [];
+      const attMap = agentAttMap[aId] || {};
+
+      const cur  = new Date(fromDate); cur.setHours(12, 0, 0, 0);
+      const endD = new Date(toDate);   endD.setHours(12, 0, 0, 0);
+
+      while (cur <= endD) {
+        if (cur.getDay() !== 0 && cur.getDay() !== 6) {
+          const ds = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(cur);
+          if (attMap[ds]) {
+            const loginTime = new Date(attMap[ds]);
+            const threshold = new Date(`${ds}T09:31:00+05:30`);
+            presentDates.push({ date: ds, loginTime: attMap[ds], status: loginTime < threshold ? "Ontime" : "Late" });
+          } else {
+            absentDates.push(ds);
+          }
+        }
+        cur.setDate(cur.getDate() + 1);
+      }
+
+      const presentDays     = presentDates.length;
+      const absentDays      = absentDates.length;
+      const forgivenAbsent  = Math.min(1, absentDays);
+      const effectiveAbsent = Math.max(0, absentDays - forgivenAbsent);
+      const payableDays     = presentDays + forgivenAbsent;
+      const totalGeneratedDays = agentGenDays[aId] || 0;
+      const availableDays   = Math.max(0, payableDays - totalGeneratedDays);
+
+      const existingInvoice = existingInvoices.find(
+        i => i.employeeId.toString() === aId && i.campaign_id?.toString() === campaign._id.toString()
+      );
+
+      agents.push({
+        agentId: aId,
+        employeeName: agent.employeeName,
+        employeeCode: agent.employeeCode,
+        ctc: agent.ctc || 0,
+        campaign: { _id: campaign._id, name: campaign.name, jcNumber: campaign.jcNumber },
+        assignedFrom: fromDate.toISOString().slice(0, 10),
+        assignedTo:   toDate.toISOString().slice(0, 10),
+        agentWorkingDays,
+        presentDays,
+        absentDays,
+        forgivenAbsent,
+        effectiveAbsent,
+        payableDays,
+        totalGeneratedDays,
+        availableDays,
+        presentDates,
+        absentDates,
+        existingInvoice: existingInvoice ? {
+          _id: existingInvoice._id,
+          payableDays:    existingInvoice.payableDays,
+          salary:         existingInvoice.salary,
+          noOfDaysWorked: existingInvoice.noOfDaysWorked,
+          incentive:      existingInvoice.incentive,
+          arrears:        existingInvoice.arrears,
+          extraPay:       existingInvoice.extraPay,
+          invoiceGenerated: existingInvoice.invoiceGenerated,
+        } : null,
+      });
+    }
+
+    return sendResponse(res, 200, "Salary dashboard fetched successfully", {
+      cycleStart: cycleStartStr,
+      cycleEnd:   cycleEndStr,
+      totalWorkingDays,
+      totalCalendarDays,
+      month,
+      agents,
+    });
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
 export {
   createInvoice,
   updateInvoice,
@@ -1233,4 +1415,5 @@ export {
   getInvoicesByPMAndMonth,
   getInvoicesOfAgent,
   getAllInvoicesOfPmMonthWise,
+  getSalaryDashboard,
 };
