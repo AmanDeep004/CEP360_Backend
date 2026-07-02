@@ -12,7 +12,7 @@ const router = Router();
 // router.post("/send-batch", sendBatchEmails);
 // router.post("/send-template-email", sendEmailUsingTemplate);
 router.post("/sendEmailWithTemplate", protect, sendTemplateEmailToCallingData);
-router.get("/webhook", mailercloudWebhook);
+router.post("/webhook", mailercloudWebhook);
 router.get("/template", protect, getMailercloudTemplateByName);
 router.get("/templates", protect, getAllMailerCloudTemplates);
 // router.get(

@@ -55,51 +55,168 @@ const mailercloudWebhookOLD = asyncHandler(async (req, res, next) => {
     return sendError(next, "Error processing webhook", 500);
   }
 });
+// Normalise MailerCloud's verbose event names → short lowercase tokens
+const MAILERCLOUD_EVENT_MAP = {
+  "Campaign Sent":    "sent",
+  "Opened":           "opened",
+  "Clicked":          "clicked",
+  "Campaign Failed":  "failed",
+  "Spam":             "spam",
+  "Unsubscribed":     "unsubscribed",
+  "Bounced":          "bounced",
+};
+
 const mailercloudWebhook = asyncHandler(async (req, res, next) => {
   try {
-    console.log("📩 MailerCloud Webhook Data:", req.body);
+    console.log("📩 MailerCloud Webhook:", JSON.stringify(req.body, null, 2));
 
-    const { email, event, campaignId, timestamp, messageId } = req.body;
+    // ── Parse MailerCloud payload fields ────────────────────────────────────
+    // Docs: https://help.mailercloud.com/en/articles/132-getting-started-with-webhooks
+    // Payload fields: event, email, campaign_name, tag_name, campaign_id,
+    //                 date_event (datetime str), ts / ts_event (Unix secs),
+    //                 URL (click only), reason (bounce/fail/spam only),
+    //                 list_id (unsubscribe only), emails[] (sent batch only)
+    const {
+      event:          rawEvent,
+      email:          recipientEmail,
+      emails:         recipientEmails,   // batch sent event
+      campaign_name:  campaignName,      // MailerCloud campaign name (= templateName for transactional)
+      campaign_id:    mailerCampaignId,  // MailerCloud campaign id (may equal our campaignId from metadata)
+      ts_event:       tsEvent,           // Unix seconds – most reliable timestamp
+      date_event:     dateEvent,         // datetime string fallback
+      URL:            clickedUrl,        // present for "Clicked" events
+      reason,                            // present for Bounced / Campaign Failed / Spam
+      list_id:        listId,            // present for Unsubscribed
+    } = req.body;
 
-    if (!email || !event) {
-      return sendError(next, "Missing required fields (email/event)", 400);
+    if (!rawEvent) {
+      return sendError(next, "Missing event field", 400);
     }
 
-    // 1️⃣ Save webhook event to EmailStatus
-    const resp = await EmailStatus.create({
-      email,
-      event,
-      campaignId,
-      timestamp: timestamp,
-    });
-    console.log("EmailStatus saved:", resp);
-    // 2️⃣ Update CallingData emailTemplates history
-    // await CallingData.findByIdAndUpdate(
-    //   campaignId, // must be CallingData _id
-    //   {
-    //     $set: {
-    //       "emailTemplates.status": event,
-    //       "emailTemplates.messageId": messageId || "",
-    //       "emailTemplates.timestamp": new Date(),
-    //     },
-    //     $push: {
-    //       "emailTemplates.history": {
-    //         status: event,
-    //         timestamp: new Date(),
-    //         messageId: messageId || "",
-    //         data: req.body,
-    //       },
-    //     },
-    //   },
-    //   { new: true }
-    // );
+    // Normalise event name
+    const event = MAILERCLOUD_EVENT_MAP[rawEvent] || rawEvent.toLowerCase().replace(/\s+/g, "_");
 
-    return sendResponse(res, 200, "Webhook received successfully", {
-      email,
-      event,
-    });
+    // Resolve timestamp: prefer ts_event (Unix secs) → date_event string → now
+    const eventTime = tsEvent
+      ? new Date(tsEvent * 1000)
+      : dateEvent
+        ? new Date(dateEvent)
+        : new Date();
+
+    // For batch "Campaign Sent" events, MailerCloud sends an `emails` array
+    // instead of a single `email`. Expand each into its own processing.
+    const addressList = recipientEmails?.length
+      ? recipientEmails
+      : recipientEmail
+        ? [recipientEmail]
+        : [];
+
+    if (!addressList.length) {
+      // Event has no email — just log it (e.g. campaign-level failure)
+      await EmailStatus.create({
+        event,
+        mailerCampaignId,
+        templateName:   campaignName,
+        reason:         reason || "",
+        webhookPayload: req.body,
+        timestamp:      eventTime,
+      });
+      return sendResponse(res, 200, "Webhook received (no email target)", { event });
+    }
+
+    // ── Process each recipient ───────────────────────────────────────────────
+    await Promise.all(addressList.map(async (email) => {
+      // ── 1. Resolve callingDataId ─────────────────────────────────────────
+      // Strategy A: look up the "sent" EmailStatus record for this email +
+      //             our MongoDB campaignId (which we embed in metadata.custom.campaign_id)
+      let callingDataId = null;
+      let sentRecord = await EmailStatus.findOne({
+        email,
+        campaignId: mailerCampaignId,   // works when metadata.custom.campaign_id matches
+        event: "sent",
+      }).select("callingDataId templateName").sort({ createdAt: -1 }).lean();
+
+      // Strategy B: try email + templateName (campaign_name from webhook ≈ template name)
+      if (!sentRecord) {
+        sentRecord = await EmailStatus.findOne({
+          email,
+          templateName: campaignName,
+          event: "sent",
+        }).select("callingDataId templateName").sort({ createdAt: -1 }).lean();
+      }
+
+      callingDataId = sentRecord?.callingDataId || null;
+
+      // ── 2. Save to EmailStatus ───────────────────────────────────────────
+      const statusDoc = {
+        email,
+        event,
+        campaignId:       mailerCampaignId,        // MailerCloud's id (best we can store)
+        callingDataId:    callingDataId || "",
+        templateName:     campaignName || sentRecord?.templateName || "",
+        mailerCampaignId: mailerCampaignId || "",
+        reason:           reason || "",
+        url:              clickedUrl || "",
+        provider:         "MailerCloud",
+        webhookPayload:   req.body,
+        meta:             { listId: listId || "" },
+        timestamp:        eventTime,
+      };
+      await EmailStatus.create(statusDoc);
+
+      // ── 3. Update CallingData.emailTemplates ─────────────────────────────
+      if (!callingDataId) {
+        console.log(`[WEBHOOK] No callingDataId resolved for email=${email} event=${event}`);
+        return;
+      }
+
+      const historyEntry = {
+        event,
+        timestamp: eventTime,
+        ...(reason     && { reason }),
+        ...(clickedUrl && { url: clickedUrl }),
+      };
+
+      // Find the most recent emailTemplates entry whose recipientEmail matches
+      const cdDoc = await CallingData.findOne(
+        { _id: callingDataId, "emailTemplates.recipientEmail": email },
+        { "emailTemplates.$": 1 }
+      ).lean();
+
+      if (cdDoc?.emailTemplates?.length) {
+        // Get the subdocument _id of the latest matching entry
+        const latestEntry = cdDoc.emailTemplates[cdDoc.emailTemplates.length - 1];
+        await CallingData.findOneAndUpdate(
+          { _id: callingDataId, "emailTemplates._id": latestEntry._id },
+          {
+            $set:  { "emailTemplates.$.status": event },
+            $push: { "emailTemplates.$.history": historyEntry },
+          }
+        );
+      } else {
+        // No entry found — create a stub so the event is not lost
+        await CallingData.findByIdAndUpdate(
+          callingDataId,
+          {
+            $push: {
+              emailTemplates: {
+                recipientEmail: email,
+                templateName:   campaignName || "",
+                status:         event,
+                timestamp:      eventTime,
+                history:        [historyEntry],
+              },
+            },
+          }
+        );
+      }
+
+      console.log(`[WEBHOOK] ${event} → callingDataId=${callingDataId} email=${email}`);
+    }));
+
+    return sendResponse(res, 200, "Webhook processed", { event, count: addressList.length });
   } catch (err) {
-    console.error("Webhook Error:", err);
+    console.error("[WEBHOOK] Error:", err);
     return sendError(next, "Error processing webhook", 500);
   }
 });
@@ -332,23 +449,17 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
             await CallingData.findByIdAndUpdate(
               item._id,
               {
-                $set: {
-                  "emailTemplates.templateName": templateName,
-                  "emailTemplates.status": "failed",
-                  "emailTemplates.messageId": "",
-                  "emailTemplates.timestamp": noEmailTime,
-                  "emailTemplates.templateId": String(campaignId),
-                  "emailTemplates.templateDetails": template,
-                },
                 $push: {
-                  "emailTemplates.history": {
-                    status: "failed",
-                    timestamp: noEmailTime,
-                    messageId: "",
-                    data: "No email available",
-                    templateId: String(campaignId),
+                  emailTemplates: {
+                    messageId:       "",
+                    templateId:      String(campaignId),
                     templateName,
-                    templateDetails: template,
+                    campaignId:      String(campaignId),
+                    recipientEmail:  "",
+                    recipientSource: "",
+                    status:          "failed",
+                    timestamp:       noEmailTime,
+                    history:         [{ event: "failed", timestamp: noEmailTime, reason: "No email available" }],
                   },
                 },
               },
@@ -409,8 +520,10 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
               campaignType: campignType,
               timestamp: new Date().toISOString(),
               custom: {
-                inbox_tracking: "true",
-                campaign_id: campaignId,
+                inbox_tracking:   "true",
+                campaign_id:      String(campaignId),
+                calling_data_id:  String(item._id),
+                template_name:    templateName,
               },
             },
             version: "1.0",
@@ -453,23 +566,17 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
           await CallingData.findByIdAndUpdate(
             item._id,
             {
-              $set: {
-                "emailTemplates.templateName": templateName,
-                "emailTemplates.status": "sent",
-                "emailTemplates.messageId": messageId,
-                "emailTemplates.timestamp": sendTime,
-                "emailTemplates.templateId": String(campaignId),
-                "emailTemplates.templateDetails": template,
-              },
               $push: {
-                "emailTemplates.history": {
-                  status: "sent",
-                  timestamp: sendTime,
+                emailTemplates: {
                   messageId,
-                  data: JSON.stringify(sendRes.data || {}),
-                  templateId: String(campaignId),
+                  templateId:      String(campaignId),
                   templateName,
-                  templateDetails: template,
+                  campaignId:      String(campaignId),
+                  recipientEmail,
+                  recipientSource,
+                  status:          "sent",
+                  timestamp:       sendTime,
+                  history:         [{ event: "sent", timestamp: sendTime }],
                 },
               },
             },
@@ -525,23 +632,17 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
           await CallingData.findByIdAndUpdate(
             item._id,
             {
-              $set: {
-                "emailTemplates.templateName": templateName,
-                "emailTemplates.status": "failed",
-                "emailTemplates.messageId": "",
-                "emailTemplates.timestamp": failTime,
-                "emailTemplates.templateId": String(campaignId),
-                "emailTemplates.templateDetails": template,
-              },
               $push: {
-                "emailTemplates.history": {
-                  status: "failed",
-                  timestamp: failTime,
-                  messageId: "",
-                  data: failureReason,
-                  templateId: String(campaignId),
+                emailTemplates: {
+                  messageId:       "",
+                  templateId:      String(campaignId),
                   templateName,
-                  templateDetails: template,
+                  campaignId:      String(campaignId),
+                  recipientEmail,
+                  recipientSource,
+                  status:          "failed",
+                  timestamp:       failTime,
+                  history:         [{ event: "failed", timestamp: failTime, reason: failureReason }],
                 },
               },
             },

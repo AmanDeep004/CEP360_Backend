@@ -113,24 +113,26 @@ const CallingDataSchema = new mongoose.Schema(
       required: false,
     },
     isDataSourceApproved: { type: Boolean, default: false },
-    emailTemplates: {
-      templateId: { type: String },
-      templateName: { type: String, trim: true },
-      timestamp: { type: Date },
-      templateDetails: { type: Object },
-      status: { type: String, trim: true },
-      messageId: { type: String, trim: true },
-      history: [
-        {
-          status: { type: String, trim: true },
-          timestamp: { type: Date },
-          templateId: { type: String },
-          templateName: { type: String, trim: true },
-          data: { type: String, trim: true },
-          templateDetails: { type: Object },
-        },
-      ],
-    },
+    emailTemplates: [
+      {
+        messageId:       { type: String, trim: true, default: "" },
+        templateId:      { type: String },
+        templateName:    { type: String, trim: true },
+        campaignId:      { type: String },
+        recipientEmail:  { type: String, trim: true },
+        recipientSource: { type: String, trim: true },
+        status:          { type: String, trim: true },   // latest status
+        timestamp:       { type: Date, default: Date.now },
+        history: [
+          {
+            event:     { type: String, trim: true }, // sent|opened|clicked|failed|spam|unsubscribed|bounced
+            timestamp: { type: Date, default: Date.now },
+            reason:    { type: String, trim: true }, // for failed/bounced/spam
+            url:       { type: String, trim: true }, // for clicked
+          },
+        ],
+      },
+    ],
 
     whatsappTemplates: [
       {
