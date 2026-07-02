@@ -242,9 +242,13 @@ const CallingDataSchema = new mongoose.Schema(
 // Covers: CampaignId-only, CampaignId+agentId, and CampaignId+agentId+sort(createdAt) queries
 CallingDataSchema.index({ CampaignId: 1, agentId: 1, createdAt: 1 });
 
-// Fast remark/date filtering on agent list page
+// Fast remark/date filtering on agent list page (agentId-first for agent view)
 CallingDataSchema.index({ agentId: 1, CampaignId: 1, lastRemarks: 1 });
 CallingDataSchema.index({ agentId: 1, CampaignId: 1, lastCallingDate: 1 });
+
+// PM view: filter by campaign + remark without agentId constraint
+CallingDataSchema.index({ CampaignId: 1, lastRemarks: 1 });
+CallingDataSchema.index({ CampaignId: 1, agentId: 1, lastRemarks: 1 });
 
 // Duplicate detection (filtration controller: find by CampaignId + Contact_ID $in)
 CallingDataSchema.index({ CampaignId: 1, Contact_ID: 1 });

@@ -736,59 +736,61 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
       dataSourceType,
       range,
       batch,
-      priorityGroup,   // "P-1","P-2",... or "unassigned"
-      page = 1,
+      priorityGroup,
+      page  = 1,
       limit = 20,
     } = req.query;
 
     const pageNum = parseInt(page, 10);
-    const limNum = parseInt(limit, 10);
-    const skip = (pageNum - 1) * limNum;
+    const limNum  = parseInt(limit, 10);
+    const skip    = (pageNum - 1) * limNum;
 
+    // ── Base filter ──────────────────────────────────────────────────────────
     const filter = { CampaignId, "discrepencyInData.status": { $ne: true } };
 
-    if (assignment === "assigned") filter.agentId = { $ne: null };
+    if (assignment === "assigned")    filter.agentId = { $ne: null };
     if (assignment === "notassigned") filter.agentId = null;
-
     if (agentId) filter.agentId = agentId;
 
     if (dataSourceType) {
-      if (dataSourceType === "Kestone") {
-        filter.dataSourceType = { $in: ["Kestone", "Both"] };
-      } else if (dataSourceType === "Client") {
-        filter.dataSourceType = { $in: ["Client", "Both"] };
-      } else {
-        filter.dataSourceType = dataSourceType;
-      }
+      if (dataSourceType === "Kestone")     filter.dataSourceType = { $in: ["Kestone", "Both"] };
+      else if (dataSourceType === "Client") filter.dataSourceType = { $in: ["Client", "Both"] };
+      else                                  filter.dataSourceType = dataSourceType;
     }
 
     if (batch) {
       filter.batch = { $regex: new RegExp(escapeStringRegexp(batch), "i") };
     }
 
-    if (priorityGroup === "unassigned") {
-      filter["priorityGroup.no"] = null;
-    } else if (priorityGroup) {
-      filter["priorityGroup.label"] = priorityGroup;
+    if (priorityGroup === "unassigned") filter["priorityGroup.no"] = null;
+    else if (priorityGroup)             filter["priorityGroup.label"] = priorityGroup;
+
+    // ── Remark filter — uses denormalised lastRemarks field on CallingData ───
+    // No callHistory population or in-memory scan needed.
+    if (remark) {
+      if (remark === "Yet to Call") {
+        filter.lastRemarks = { $in: [null, ""] };
+      } else {
+        filter.lastRemarks = remark;
+      }
     }
 
     const applyMask = (row) => ({
       ...row,
       Contact_Direct_Phone1: maskPhone(row.Contact_Direct_Phone1),
       Contact_Direct_Phone2: maskPhone(row.Contact_Direct_Phone2),
-      Mobile_No: maskPhone(row.Mobile_No),
-      Office_Email_1: maskEmail(row.Office_Email_1),
-      Office_Email_2: maskEmail(row.Office_Email_2),
-      Personal_Email1: maskEmail(row.Personal_Email1),
-      Personal_Email2: maskEmail(row.Personal_Email2),
+      Mobile_No:             maskPhone(row.Mobile_No),
+      Office_Email_1:        maskEmail(row.Office_Email_1),
+      Office_Email_2:        maskEmail(row.Office_Email_2),
+      Personal_Email1:       maskEmail(row.Personal_Email1),
+      Personal_Email2:       maskEmail(row.Personal_Email2),
     });
 
-    // ── FAST PATH 1: no remark, no range ────────────────────────────────────
-    if (!remark && !range) {
+    // ── PATH 1: no range — full DB-level pagination ──────────────────────────
+    if (!range) {
       const [docs, total] = await Promise.all([
         CallingData.find(filter)
           .populate({ path: "agentId", select: "employeeName email" })
-          .populate({ path: "callHistory" })
           .sort({ "priorityGroup.no": 1 })
           .skip(skip)
           .limit(limNum)
@@ -805,109 +807,45 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
       });
     }
 
-    // ── FAST PATH 2: range only (no remark) — DB-level skip/limit ───────────
-    // Avoids loading the full collection; only fetches the current page's docs.
-    // Sort must match assignCallingDataToAgents (createdAt asc) so positions align.
-    if (range && !remark) {
-      const parts = range.split("-").map((v) => parseInt(v.trim(), 10));
-      if (parts.length !== 2 || parts.some((n) => isNaN(n))) {
-        return sendError(next, "Invalid range format. Use 100-200", 400);
-      }
-      const [min, max] = parts;
-      if (min < 1 || min > max) {
-        return sendError(next, "Range minimum must be >= 1 and <= maximum", 400);
-      }
+    // ── PATH 2: range (with optional remark already in filter) ───────────────
+    // Sort by _id asc so row positions are stable and consistent.
+    const parts = range.split("-").map((v) => parseInt(v.trim(), 10));
+    if (parts.length !== 2 || parts.some((n) => isNaN(n))) {
+      return sendError(next, "Invalid range format. Use 100-200", 400);
+    }
+    const [min, max] = parts;
+    if (min < 1 || min > max) {
+      return sendError(next, "Range minimum must be >= 1 and <= maximum", 400);
+    }
 
-      // Count once to clamp the range and compute total pages
-      const totalInFilter = await CallingData.countDocuments(filter);
+    const totalInFilter = await CallingData.countDocuments(filter);
+    const clampedMin    = Math.min(min, totalInFilter);
+    const clampedMax    = Math.min(max, totalInFilter);
+    const totalInRange  = Math.max(0, clampedMax - clampedMin + 1);
 
-      const clampedMin = Math.min(min, totalInFilter);
-      const clampedMax = Math.min(max, totalInFilter);
-      const totalInRange = Math.max(0, clampedMax - clampedMin + 1);
-
-      if (totalInRange === 0) {
-        return sendResponse(res, 200, "Filtered database fetched successfully", {
-          total: 0, page: pageNum, limit: limNum, totalPages: 0, data: [],
-        });
-      }
-
-      // DB skip = offset to first record of range + page offset within range
-      const dbSkip  = (clampedMin - 1) + skip;
-      // Don't fetch past the end of the range
-      const dbLimit = Math.min(limNum, Math.max(0, totalInRange - skip));
-
-      if (dbLimit <= 0) {
-        return sendResponse(res, 200, "Filtered database fetched successfully", {
-          total: totalInRange,
-          page: pageNum,
-          limit: limNum,
-          totalPages: Math.ceil(totalInRange / limNum),
-          data: [],
-        });
-      }
-
-      const docs = await CallingData.find(filter)
-        .populate({ path: "agentId", select: "employeeName email" })
-        .populate({ path: "callHistory" })
-        .sort({ createdAt: 1 })
-        .skip(dbSkip)
-        .limit(dbLimit)
-        .lean();
-
+    if (totalInRange === 0 || skip >= totalInRange) {
       return sendResponse(res, 200, "Filtered database fetched successfully", {
-        total: totalInRange,
-        page: pageNum,
-        limit: limNum,
-        totalPages: Math.ceil(totalInRange / limNum),
-        data: docs.map(applyMask),
+        total: totalInRange, page: pageNum, limit: limNum,
+        totalPages: Math.ceil(totalInRange / limNum), data: [],
       });
     }
 
-    // ── SLOW PATH: remark filter (must inspect callHistory for every record) ──
-    // Sort by createdAt asc so range positions match assignCallingDataToAgents.
-    let data = await CallingData.find(filter)
+    const dbSkip  = (clampedMin - 1) + skip;
+    const dbLimit = Math.min(limNum, totalInRange - skip);
+
+    const docs = await CallingData.find(filter)
       .populate({ path: "agentId", select: "employeeName email" })
-      .populate({ path: "callHistory" })
-      .sort({ createdAt: 1 })
+      .sort({ _id: 1 })
+      .skip(dbSkip)
+      .limit(dbLimit)
       .lean();
 
-    if (remark) {
-      if (remark === "Yet to Call") {
-        data = data.filter((entry) => {
-          const history = entry.callHistory?.chatHistory;
-          return !history || history.length === 0;
-        });
-      } else {
-        data = data.filter((entry) => {
-          const history = entry.callHistory?.chatHistory;
-          if (!Array.isArray(history) || history.length === 0) return false;
-          const lastRemark = history[history.length - 1];
-          return lastRemark?.remarks === remark;
-        });
-      }
-    }
-
-    if (range) {
-      const parts = range.split("-").map((v) => parseInt(v.trim(), 10));
-      if (parts.length !== 2 || parts.some((n) => isNaN(n))) {
-        return sendError(next, "Invalid range format. Use 100-200", 400);
-      }
-      const [min, max] = parts;
-      if (min > max) {
-        return sendError(next, "Range minimum should be less than maximum", 400);
-      }
-      data = data.slice(min - 1, max);
-    }
-
-    const total = data.length;
-    const paginatedData = data.slice(skip, skip + limNum);
-
     return sendResponse(res, 200, "Filtered database fetched successfully", {
-      total,
+      total: totalInRange,
       page: pageNum,
       limit: limNum,
-      totalPages: Math.ceil(total / limNum),
-      data: paginatedData.map(applyMask),
+      totalPages: Math.ceil(totalInRange / limNum),
+      data: docs.map(applyMask),
     });
   } catch (err) {
     return sendError(next, err.message, 500);
@@ -1061,44 +999,108 @@ const unassignCallingDataFromAgents = asyncHandler(async (req, res, next) => {
 });
 const reassignCallingDatatoAgents = asyncHandler(async (req, res, next) => {
   try {
-    const { callingDataIds, newAgentId } = req.body;
+    const {
+      callingDataIds,          // explicit mode: array of _ids
+      newAgentId,              // required in all modes
+      campaignId:  bodyCampaignId,   // required for range / remark mode
+      fromAgentId,             // optional: only reassign records currently held by this agent
+      remarks,                 // remark mode: array of lastRemarks values to match
+      range: bodyRange,        // range mode from body: "1-1825"
+    } = req.body;
 
-    if (
-      !Array.isArray(callingDataIds) ||
-      callingDataIds.length === 0 ||
-      !newAgentId
-    ) {
+    // Body range always applies.
+    // Query-string range only applies when no explicit callingDataIds are in the body
+    // (prevents the URL ?range= from overriding a manual checkbox selection).
+    const hasExplicitIds = Array.isArray(callingDataIds) && callingDataIds.length > 0;
+    const rangeStr   = bodyRange || (!hasExplicitIds ? req.query.range : null) || null;
+    const campaignId = bodyCampaignId || req.query.campaignId || null;
+
+    if (!newAgentId) {
+      return sendError(next, "newAgentId is required", 400);
+    }
+
+    // ── Resolve which records to reassign ──────────────────────────────────
+    let records = [];
+
+    // range always wins — if range is present, ignore callingDataIds
+    const isRangeOrRemark  = !!(rangeStr || (Array.isArray(remarks) && remarks.length > 0));
+    const isExplicitMode   = !isRangeOrRemark && Array.isArray(callingDataIds) && callingDataIds.length > 0;
+
+    if (isExplicitMode) {
+      // ── Mode 1: explicit IDs ─────────────────────────────────────────────
+      records = await CallingData.find(
+        { _id: { $in: callingDataIds } },
+        { agentId: 1 }
+      ).lean();
+
+      if (!records.length) {
+        return sendError(next, "No records found for the provided callingDataIds", 404);
+      }
+
+    } else if (isRangeOrRemark) {
+      // ── Mode 2: range and / or remark filter ────────────────────────────
+      if (!campaignId) {
+        return sendError(next, "campaignId is required for range or remark based reassignment", 400);
+      }
+
+      const filter = { CampaignId: campaignId };
+
+      // Optionally restrict to records owned by a specific agent
+      if (fromAgentId) filter.agentId = fromAgentId;
+
+      // Remark filter — match any of the provided lastRemarks values
+      if (Array.isArray(remarks) && remarks.length > 0) {
+        filter.lastRemarks = { $in: remarks };
+      }
+
+      if (rangeStr) {
+        // ── Range: "start-end" (1-indexed, inclusive) ──────────────────────
+        const parts = rangeStr.split("-");
+        if (parts.length !== 2) {
+          return sendError(next, "range must be in format 'start-end' e.g. '1-1825'", 400);
+        }
+        const start = parseInt(parts[0], 10);
+        const end   = parseInt(parts[1], 10);
+        if (isNaN(start) || isNaN(end) || start < 1 || end < start) {
+          return sendError(next, "Invalid range values. start must be ≥ 1 and end must be ≥ start", 400);
+        }
+
+        records = await CallingData.find(filter, { agentId: 1 })
+          .sort({ _id: 1 })                  // consistent ordering by insertion
+          .skip(start - 1)
+          .limit(end - start + 1)
+          .lean();
+      } else {
+        // ── Remark-only: no range limit — match all records with those remarks ──
+        records = await CallingData.find(filter, { agentId: 1 })
+          .sort({ _id: 1 })
+          .lean();
+      }
+
+      if (!records.length) {
+        return sendError(next, "No records matched the given range / remark filter", 404);
+      }
+
+    } else {
       return sendError(
         next,
-        "CallingData Ids and New AgentId are required",
+        "Provide either callingDataIds (explicit), or campaignId + range / remarks (filter mode)",
         400
       );
     }
 
-    const records = await CallingData.find(
-      { _id: { $in: callingDataIds } },
-      { agentId: 1 } // fetch only agentId field
-    );
-
-    if (records.length === 0) {
-      return sendError(
-        next,
-        "No records found for provided callingDataIds",
-        404
-      );
-    }
-
+    // ── Bulk reassign ──────────────────────────────────────────────────────
     const bulkOps = records.map((rec) => ({
       updateOne: {
         filter: { _id: rec._id },
         update: {
           $set: {
-            agentId: newAgentId,
-            "reassigned_to.status": true,
+            agentId:                 newAgentId,
+            "reassigned_to.status":  true,
           },
           $push: {
             "reassigned_to.previously_assigned_to": {
-              agentId: rec.agentId,
+              agentId:      rec.agentId,
               unassignedAt: new Date(),
             },
           },
@@ -1108,13 +1110,12 @@ const reassignCallingDatatoAgents = asyncHandler(async (req, res, next) => {
 
     const result = await CallingData.bulkWrite(bulkOps);
 
-    // Fire-and-forget: notify the newly assigned agent
+    // ── Fire-and-forget email notification ────────────────────────────────
     if (result.modifiedCount > 0) {
+      const sampleId = records[0]._id;
       Promise.all([
         User.findById(newAgentId).select("employeeName email").lean(),
-        CallingData.findOne({ _id: { $in: callingDataIds } })
-          .populate({ path: "CampaignId", select: "name" })
-          .lean(),
+        CallingData.findById(sampleId).populate({ path: "CampaignId", select: "name" }).lean(),
       ])
         .then(([agent, sampleRecord]) => {
           if (!agent?.email) return;
@@ -1122,26 +1123,25 @@ const reassignCallingDatatoAgents = asyncHandler(async (req, res, next) => {
             agent.email,
             `Calling data reassigned to you`,
             callingDataReassignedToAgentTemplate({
-              agentName: agent.employeeName,
+              agentName:    agent.employeeName,
               campaignName: sampleRecord?.CampaignId?.name || "—",
-              count: result.modifiedCount,
+              count:        result.modifiedCount,
             }),
             {
-              trigger: EmailTrigger.CALLING_DATA_REASSIGNED_TO_AGENT,
-              campaignId: sampleRecord?.CampaignId?._id || null,
+              trigger:         EmailTrigger.CALLING_DATA_REASSIGNED_TO_AGENT,
+              campaignId:      sampleRecord?.CampaignId?._id || null,
               recipientUserId: agent._id,
             }
           );
         })
-        .catch((err) => console.error(`[Email] Calling data reassignment notification failed: ${err.message}`));
+        .catch((err) => console.error(`[Email] Reassignment notification failed: ${err.message}`));
     }
 
-    return sendResponse(
-      res,
-      200,
-      `${result.modifiedCount} records reassigned successfully`,
-      result
-    );
+    return sendResponse(res, 200, `${result.modifiedCount} records reassigned successfully`, {
+      matched:  records.length,
+      modified: result.modifiedCount,
+      mode:     isExplicitMode ? "explicit" : (rangeStr && remarks?.length ? "range+remark" : rangeStr ? "range" : "remark"),
+    });
   } catch (err) {
     return sendError(next, err.message, 500);
   }
