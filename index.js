@@ -122,6 +122,18 @@ const startServer = async () => {
       methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
       credentials: true,
     };
+    // Raw logger for webhook — runs before everything so we see exactly what MailerCloud sends
+    app.use("/api/mailercloud/webhook", (req, res, next) => {
+      console.log("🔔 [WEBHOOK-RAW] Incoming request:");
+      console.log("  Method :", req.method);
+      console.log("  Headers:", JSON.stringify(req.headers, null, 2));
+      console.log("  Body   :", JSON.stringify(req.body));
+      next();
+    });
+
+    // Webhook routes: allow all origins (server-to-server, no browser)
+    app.use("/api/mailercloud/webhook", cors());
+    app.use("/api/whatsapp/webhook", cors());
     app.use(cors(corsOptions));
     app.use(cookieParser());
     app.use(expressWinston.logger(logger));

@@ -109,18 +109,15 @@ const initiateCall = asyncHandler(async (req, res, next) => {
       };
       if (callingDataId) tataPayload.custom_identifier = String(callingDataId);
 
-      console.log("[Tata] click_to_call payload:", tataPayload);
       const tataRes = await tataPost(
         tataToken,
         "/v1/click_to_call",
         tataPayload
       );
-      console.log("[Tata] click_to_call response:", tataRes);
       // Tata returns ref_id (queued call reference), not call_id yet.
       // The actual call_id appears in live_calls once the call connects.
       tataCallId = tataRes?.call_id || null;
       tataRefId = tataRes?.ref_id || null;
-      if (tataRefId) console.log("[Tata] ref_id (queued):", tataRefId);
     } catch (tataErr) {
       console.error("[Tata] click_to_call failed:", tataErr.message);
       const msg = tataErr.message || "";
@@ -180,12 +177,10 @@ const getLiveCalls = asyncHandler(async (req, res, next) => {
       tataToken,
       `/v1/live_calls?agent_number=${encodeURIComponent(agent.tataTeleLoginId)}`
     );
-    console.log("[Tata] live_calls raw:", JSON.stringify(data));
     const calls =
       data?.data || data?.calls || (Array.isArray(data) ? data : []);
     return sendResponse(res, 200, "Live calls", { calls });
   } catch (err) {
-    console.warn("[Tata] live_calls proxy error:", err.message);
     return sendResponse(res, 200, "Live calls", { calls: [] });
   }
 });
@@ -215,21 +210,17 @@ const hangupCall = asyncHandler(async (req, res, next) => {
             liveData?.data || liveData?.calls || (Array.isArray(liveData) ? liveData : []);
           if (liveCalls.length > 0) {
             callId = liveCalls[0].call_id || liveCalls[0].uuid || liveCalls[0].id || null;
-            console.log("[Tata] Resolved callId from live_calls for hangup:", callId);
           }
         }
       } catch (e) {
-        console.warn("[Tata] Could not fetch live_calls for hangup:", e.message);
       }
     }
 
     // Tell Tata to end the call
     if (callId && tataToken) {
       try {
-        const hangupRes = await tataPost(tataToken, "/v1/call/hangup", { call_id: callId });
-        console.log("[Tata] hangup response:", hangupRes);
+        await tataPost(tataToken, "/v1/call/hangup", { call_id: callId });
       } catch (e) {
-        console.warn("[Tata] hangup API error (ignored):", e.message);
       }
     }
 
@@ -289,12 +280,9 @@ const getCallStatus = asyncHandler(async (req, res, next) => {
 const tataSmartFloWebhook = asyncHandler(async (req, res) => {
   try {
     const payload = req.body;
-    console.log("[Tata Webhook] received:", JSON.stringify(payload));
-
     const callId = payload.call_id || payload.uuid || payload.call_uuid || null;
 
     if (!callId) {
-      console.warn("[Tata Webhook] No call_id in payload, skipping.");
       return res.status(200).json({ success: true });
     }
 
@@ -319,7 +307,6 @@ const tataSmartFloWebhook = asyncHandler(async (req, res) => {
       if (duration != null) existing.callDuration = duration;
       existing.misc = { ...existing.misc, lastWebhook: payload };
       await existing.save();
-      console.log("[Tata Webhook] Record updated:", existing._id);
 
       // Write recordingUrl back to the latest chatHistory entry for this contact
       if (recordingUrl && existing.callingData_id) {
@@ -355,12 +342,10 @@ const tataSmartFloWebhook = asyncHandler(async (req, res) => {
               callHist.chatHistory[targetIdx].recordingUrl = recordingUrl;
               callHist.markModified("chatHistory");
               await callHist.save();
-              console.log("[Tata Webhook] recordingUrl written to chatHistory entry:", targetIdx);
             }
           }
         } catch (histErr) {
           // Non-blocking — never fail the webhook response
-          console.warn("[Tata Webhook] Failed to write recordingUrl to CallHistory:", histErr.message);
         }
       }
     } else {
@@ -376,7 +361,6 @@ const tataSmartFloWebhook = asyncHandler(async (req, res) => {
         webHookResponse: [payload],
         misc: { lastWebhook: payload },
       });
-      console.log("[Tata Webhook] Orphan record created for callId:", callId);
     }
 
     return res.status(200).json({ success: true });
