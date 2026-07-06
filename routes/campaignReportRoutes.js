@@ -7,6 +7,7 @@ import {
   getReportHistory,
   getReportById,
   getSharedReport,
+  downloadReport,
 } from "../controllers/campaignReportController.js";
 
 const router = Router();
@@ -19,6 +20,7 @@ router.get("/shared/:token", getSharedReport);
 router.post("/generate", protect, authorize(PROGRAM_MANAGER), generateReport);
 router.get("/history", protect, authorize(PROGRAM_MANAGER), getAllReportHistory);
 router.get("/history/:campaignId", protect, authorize(PROGRAM_MANAGER), getReportHistory);
+router.get("/:reportId/download", protect, authorize(PROGRAM_MANAGER), downloadReport);
 router.get("/:reportId", protect, authorize(PROGRAM_MANAGER), getReportById);
 
 export default router;

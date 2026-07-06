@@ -1,7 +1,9 @@
+import mongoose from "mongoose";
 import utils from "../utils/index.js";
 import CallingData from "../models/callingDataModal.js";
 import Campaign from "../models/campaignModel.js";
 import CampaignReport from "../models/campaignReportModel.js";
+import ExcelJS from "exceljs";
 
 const { asyncHandler, sendResponse, sendError } = utils;
 
@@ -18,7 +20,10 @@ const buildDateRange = (dateFrom, dateTo, timeFrom, timeTo) => {
 };
 
 const buildBaseQuery = (campaignId, reportType, dateFrom, dateTo, timeFrom, timeTo) => {
-  const query = { CampaignId: campaignId };
+  const objId = mongoose.Types.ObjectId.isValid(campaignId)
+    ? new mongoose.Types.ObjectId(String(campaignId))
+    : campaignId;
+  const query = { CampaignId: objId };
   if (reportType === "called") {
     const { from, to } = buildDateRange(dateFrom, dateTo, timeFrom, timeTo);
     query.lastCallingDate = { $gte: from, $lte: to };
@@ -229,4 +234,100 @@ const getSharedReport = asyncHandler(async (req, res, next) => {
   });
 });
 
-export { generateReport, getAllReportHistory, getReportHistory, getReportById, getSharedReport };
+// Column definitions for Excel download: { key, header, width }
+const DOWNLOAD_COLUMNS = [
+  // Contact
+  { key: "Contact_ID",      header: "Contact ID",      width: 18 },
+  { key: "Full_Name",       header: "Full Name",        width: 24 },
+  { key: "Gender",          header: "Gender",           width: 10 },
+  { key: "Job_Title",       header: "Job Title",        width: 28 },
+  { key: "Job_Seniority",   header: "Job Seniority",    width: 18 },
+  { key: "Job_Function",    header: "Job Function",     width: 20 },
+  { key: "Contact_City",    header: "City",             width: 16 },
+  { key: "Contact_State",   header: "State",            width: 16 },
+  { key: "Contact_Country", header: "Country",          width: 16 },
+  { key: "Contact_Region",  header: "Region",           width: 16 },
+  // Company
+  { key: "Company_Name",    header: "Company Name",     width: 28 },
+  { key: "Company_Segment", header: "Company Segment",  width: 18 },
+  { key: "Industry",        header: "Industry",         width: 22 },
+  { key: "Sub_Industry",    header: "Sub Industry",     width: 22 },
+  { key: "Employees_Range", header: "Employees Range",  width: 16 },
+  { key: "Turnover_Range",  header: "Turnover Range",   width: 18 },
+  // CRM Status
+  { key: "isRegistered",    header: "Registered",       width: 12 },
+  { key: "lastRemarks",     header: "Last Remarks",     width: 28 },
+  { key: "lastCallingDate", header: "Last Calling Date", width: 20 },
+];
+
+const SELECT_DOWNLOAD = DOWNLOAD_COLUMNS.map((c) => c.key).join(" ");
+
+/**
+ * GET /api/campaignReport/:reportId/download
+ * Returns an Excel (.xlsx) of all filtered rows, excluding mobile/email/first/last name.
+ */
+const downloadReport = asyncHandler(async (req, res, next) => {
+  const report = await CampaignReport.findById(req.params.reportId).lean();
+  if (!report) return sendError(next, "Report not found", 404);
+
+  const { segment, registered, called } = req.query;
+  const filters = {};
+  if (segment)    filters.segment    = segment;
+  if (registered) filters.registered = registered;
+  if (called)     filters.called     = called;
+
+  const query = buildBaseQuery(
+    report.campaignId, report.reportType,
+    report.dateFrom, report.dateTo,
+    report.timeFrom, report.timeTo
+  );
+  if (filters.segment)                         query.Company_Segment = filters.segment;
+  if (filters.registered === "Registered")     query.isRegistered = true;
+  if (filters.registered === "Not Registered") query.isRegistered = false;
+  if (filters.called === "Called")             query.lastCallingDate = { ...(query.lastCallingDate || {}), $ne: null };
+  if (filters.called === "Not Called")         query.lastCallingDate = null;
+
+  const records = await CallingData.find(query).select(SELECT_DOWNLOAD).lean();
+
+  // Build workbook
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "CEP360 CRM";
+  wb.created = new Date();
+
+  const ws = wb.addWorksheet("Campaign Report");
+  ws.columns = DOWNLOAD_COLUMNS;
+
+  // Style header row
+  const headerRow = ws.getRow(1);
+  headerRow.font    = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+  headerRow.fill    = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0D9A8F" } };
+  headerRow.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+  headerRow.height  = 28;
+
+  // Add data rows
+  for (const r of records) {
+    const row = {};
+    for (const col of DOWNLOAD_COLUMNS) {
+      const k = col.key;
+      if (k === "isRegistered")    { row[k] = r[k] ? "Yes" : "No"; continue; }
+      if (k === "lastCallingDate") { row[k] = r[k] ? new Date(r[k]).toLocaleString("en-GB") : ""; continue; }
+      row[k] = r[k] != null ? r[k] : "";
+    }
+    const dataRow = ws.addRow(row);
+    dataRow.alignment = { vertical: "middle", wrapText: false };
+  }
+
+  // Freeze header
+  ws.views = [{ state: "frozen", ySplit: 1 }];
+
+  const safeName = (report.campaignName || "report").replace(/[^a-zA-Z0-9_-]/g, "_");
+  const filename = `campaign_report_${safeName}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+
+  await wb.xlsx.write(res);
+  res.end();
+});
+
+export { generateReport, getAllReportHistory, getReportHistory, getReportById, getSharedReport, downloadReport };
