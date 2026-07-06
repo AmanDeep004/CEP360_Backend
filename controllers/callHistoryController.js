@@ -110,6 +110,7 @@ const createCallHistory = asyncHandler(async (req, res, next) => {
       agent_id,
       agentName,
       callRecordingId,
+      overallTime,
     } = req.body;
 
     if (
@@ -133,6 +134,7 @@ const createCallHistory = asyncHandler(async (req, res, next) => {
       agent_id,
       agentName,
       ...(callRecordingId ? { callRecordingId } : {}),
+      ...(overallTime != null ? { overallTime: Number(overallTime) } : {}),
     };
 
     // Atomic upsert — $push to existing doc or create new one in a single round-trip.

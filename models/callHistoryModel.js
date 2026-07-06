@@ -19,6 +19,7 @@ const chatEntrySchema = new mongoose.Schema(
     agentName: { type: String, required: true },
     recordingUrl: { type: String, default: null },
     callRecordingId: { type: mongoose.Schema.Types.ObjectId, ref: "CallRecording", default: null },
+    overallTime: { type: Number, default: null }, // seconds from call button click to remark submit
   },
   { _id: false },
   { timestamps: true }
