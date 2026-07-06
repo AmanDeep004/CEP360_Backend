@@ -1279,6 +1279,7 @@ const PRIORITY_FILTER_FIELDS = [
   "Industry",
   "Sub_Industry",
   "Company_Segment",
+  "Job_Title",
   "Job_Seniority",
   "Job_Function",
   "Employees_Range",
@@ -1485,9 +1486,13 @@ const getPriorityGroups = asyncHandler(async (req, res, next) => {
     const { campaignId } = req.params;
     if (!campaignId) return sendError(next, "campaignId is required", 400);
 
+    const campaignObjId = mongoose.Types.ObjectId.isValid(campaignId)
+      ? new mongoose.Types.ObjectId(campaignId)
+      : campaignId;
+
     const [groups, unassignedCount] = await Promise.all([
       CallingData.aggregate([
-        { $match: { CampaignId: campaignId, "priorityGroup.no": { $ne: null } } },
+        { $match: { CampaignId: campaignObjId, "priorityGroup.no": { $ne: null } } },
         {
           $group: {
             _id:        "$priorityGroup.no",
