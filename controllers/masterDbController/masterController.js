@@ -854,7 +854,8 @@ const getAllCompanyData = asyncHandler(async (req, res, next) => {
 
     let searchFilter = {};
     if (search && search.trim()) {
-      const regex = new RegExp(search.trim(), "i");
+      const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const regex = new RegExp(escaped, "i");
       searchFilter = {
         $or: [
           { Company_Name: regex },
@@ -982,7 +983,7 @@ const getCompanyDataById = asyncHandler(async (req, res, next) => {
 
     let searchFilter = {};
     if (search && search.trim()) {
-      const regex = new RegExp(search.trim(), "i");
+      const regex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
       searchFilter = {
         $or: [
           { Company_Name: regex },
@@ -2572,7 +2573,7 @@ const getContactsWithEngagementsWorking = asyncHandler(
 
       // Search across multiple fields
       if (search && search.trim()) {
-        const searchRegex = new RegExp(search.trim(), "i");
+        const searchRegex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
         contactQuery.$or = [
           { Contact_ID: searchRegex },
           { Full_Name: searchRegex },
@@ -2817,7 +2818,7 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
     let contactQuery = {};
 
     if (search && search.trim()) {
-      const searchRegex = new RegExp(search.trim(), "i");
+      const searchRegex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
       contactQuery.$or = [
         { Contact_ID: searchRegex },
         { Full_Name: searchRegex },
@@ -3171,19 +3172,21 @@ async function individualSearch(req, res, next) {
 
     const andConditions = [];
 
+    const esc = (s) => s.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
     if (name?.trim()) {
-      const r = new RegExp(name.trim(), "i");
+      const r = new RegExp(esc(name), "i");
       andConditions.push({
         $or: [{ Full_Name: r }, { First_Name: r }, { Last_Name: r }],
       });
     }
 
     if (designation?.trim()) {
-      andConditions.push({ Job_Title: new RegExp(designation.trim(), "i") });
+      andConditions.push({ Job_Title: new RegExp(esc(designation), "i") });
     }
 
     if (email?.trim()) {
-      const r = new RegExp(email.trim(), "i");
+      const r = new RegExp(esc(email), "i");
       andConditions.push({
         $or: [
           { Office_Email_1: r },
@@ -3197,7 +3200,7 @@ async function individualSearch(req, res, next) {
     // Company is on the same secondary connection — resolve IDs first, then filter Contact
     if (company?.trim()) {
       const matchingCompanies = await Company.find(
-        { Company_Name: new RegExp(company.trim(), "i") },
+        { Company_Name: new RegExp(esc(company), "i") },
         { _id: 1 }
       ).lean();
       if (!matchingCompanies.length) {

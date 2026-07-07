@@ -91,7 +91,7 @@ const SUFFIX_SET = new Set([
   "in",    // .in TLD (not the preposition — stripped only when it's the sole remaining word)
 ]);
 
-const PARTIAL_THRESHOLD = 50; // min hybrid score (0–100) to include as a suggestion
+const PARTIAL_THRESHOLD = 25; // min hybrid score (0–100) to include as a suggestion
 
 // ── Pre-processing ────────────────────────────────────────────────────────────
 

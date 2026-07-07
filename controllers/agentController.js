@@ -552,14 +552,15 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
         filter.dataSourceType = dataSourceType;
       }
     }
-    if (batch) filter.batch = { $regex: new RegExp(batch.trim(), "i") };
+    const esc = (s) => s.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (batch) filter.batch = { $regex: new RegExp(esc(batch), "i") };
     if (registered !== undefined && registered !== "")
       filter.isRegistered = registered === "true";
     if (priorityGroup === "unassigned") filter["priorityGroup.no"] = null;
     else if (priorityGroup) filter["priorityGroup.label"] = priorityGroup;
 
     if (search.trim()) {
-      const regex = new RegExp(search.trim(), "i");
+      const regex = new RegExp(esc(search), "i");
       filter.$or = [
         { Full_Name: regex },
         { First_Name: regex },
