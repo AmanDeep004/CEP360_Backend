@@ -1670,15 +1670,29 @@ const deletePrioritySlotDef = asyncHandler(async (req, res, next) => {
 // External Upload (feature-flagged via ENABLE_EXTERNAL_UPLOAD env var)
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Mandatory fields marked with * — validated on upload
+const EXTERNAL_UPLOAD_MANDATORY = [
+  "Full_Name", "Job_Title", "Contact_City", "Mobile_No",
+  "Office_Email_1", "Company_Name",
+  "Registration_Status", "Registration_Date", "Is_Attended",
+];
+
 const EXTERNAL_UPLOAD_COLUMNS = [
-  "First_Name", "Last_Name", "Full_Name", "Salutation", "Gender",
-  "Job_Title", "Job_Seniority", "Job_Function",
-  "Mobile_No", "Contact_Direct_Phone1", "Contact_Direct_Phone2", "Contact_Extn_No",
-  "Office_Email_1", "Office_Email_2", "Personal_Email1", "Personal_Email2",
-  "Contact_City", "Contact_State", "Contact_Country", "Contact_Region",
+  // ── Mandatory fields (fill all) ──
+  "Full_Name", "Job_Title", "Contact_City", "Mobile_No",
+  "Office_Email_1", "Company_Name",
+  "Registration_Status",   // yes / no
+  "Registration_Date",     // e.g. 2026-07-14
+  "Is_Attended",           // yes / no
+  // ── Optional fields ──
+  "First_Name", "Last_Name", "Salutation", "Gender",
+  "Job_Seniority", "Job_Function",
+  "Contact_Direct_Phone1", "Contact_Direct_Phone2", "Contact_Extn_No",
+  "Office_Email_2", "Personal_Email1", "Personal_Email2",
+  "Contact_State", "Contact_Country", "Contact_Region",
   "Contact_Pin", "Contact_Address_1", "Contact_Address_2", "Contact_Address_3",
   "Contact_Location_Tier", "Contact_STD_ISD_Code",
-  "Company_Name", "Website", "Industry", "Sub_Industry", "Company_Segment",
+  "Website", "Industry", "Sub_Industry", "Company_Segment",
   "Turnover_Range", "Employees_Range", "Year_Founded",
   "Company_LinkedIn_Profile", "Company_Phone1", "Company_Phone2",
   "Company_Source", "Company_ID_Kestone",
@@ -1690,20 +1704,45 @@ const EXTERNAL_UPLOAD_COLUMNS = [
  * Returns a blank XLSX file with all column headers — no fields mandatory.
  */
 const downloadExternalUploadTemplate = asyncHandler(async (req, res) => {
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet([EXTERNAL_UPLOAD_COLUMNS]);
-  // Auto-width hint for each column
-  ws["!cols"] = EXTERNAL_UPLOAD_COLUMNS.map(() => ({ wch: 22 }));
-  XLSX.utils.book_append_sheet(wb, ws, "Template");
-  const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
-  res.setHeader(
-    "Content-Disposition",
-    'attachment; filename="external_upload_template.xlsx"'
+  const ExcelJS = (await import("exceljs")).default;
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Template");
+
+  // Set columns first so widths apply
+  ws.columns = EXTERNAL_UPLOAD_COLUMNS.map((col) => ({
+    header: col,
+    key: col,
+    width: EXTERNAL_UPLOAD_MANDATORY.includes(col) ? 26 : 22,
+  }));
+
+  // Style header row (row 1 auto-created by ws.columns)
+  const headerRow = ws.getRow(1);
+  headerRow.height = 20;
+  EXTERNAL_UPLOAD_COLUMNS.forEach((col, idx) => {
+    const cell = headerRow.getCell(idx + 1);
+    const isMandatory = EXTERNAL_UPLOAD_MANDATORY.includes(col);
+    cell.font      = { bold: true, color: { argb: isMandatory ? "FFCC0000" : "FF000000" } };
+    cell.fill      = { type: "pattern", pattern: "solid", fgColor: { argb: isMandatory ? "FFFFF0F0" : "FFF2F2F2" } };
+    cell.alignment = { vertical: "middle", horizontal: "center" };
+  });
+
+  // Notes row (row 2)
+  const notesRow = ws.addRow(
+    EXTERNAL_UPLOAD_COLUMNS.map((col) => {
+      if (col === "Registration_Status") return "yes or no";
+      if (col === "Is_Attended")         return "yes or no";
+      if (col === "Registration_Date")   return "e.g. 2026-07-14";
+      if (EXTERNAL_UPLOAD_MANDATORY.includes(col)) return "(required)";
+      return "";
+    })
   );
-  res.setHeader(
-    "Content-Type",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-  );
+  notesRow.font = { italic: true, color: { argb: "FF888888" }, size: 9 };
+
+  ws.views = [{ state: "frozen", ySplit: 2 }];
+
+  const buf = await wb.xlsx.writeBuffer();
+  res.setHeader("Content-Disposition", 'attachment; filename="external_upload_template.xlsx"');
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   return res.send(buf);
 });
 
@@ -1730,6 +1769,50 @@ const externalUploadCallingData = asyncHandler(async (req, res, next) => {
 
     if (!json.length) return sendError(next, "Uploaded file is empty or invalid", 400);
 
+    // ── Helpers ────────────────────────────────────────────────────────────
+    const parseBool = (v) => {
+      const s = String(v || "").trim().toLowerCase();
+      if (s === "yes" || s === "true" || s === "1") return true;
+      if (s === "no"  || s === "false"|| s === "0") return false;
+      return null; // invalid
+    };
+
+    const parseDate = (v) => {
+      if (!v) return null;
+      // ExcelJS numeric serial date
+      if (typeof v === "number") {
+        const d = XLSX.SSF.parse_date_code(v);
+        if (d) return new Date(d.y, d.m - 1, d.d);
+      }
+      const d = new Date(v);
+      return isNaN(d.getTime()) ? null : d;
+    };
+
+    // ── Mandatory validation ───────────────────────────────────────────────
+    const validRows    = [];
+    const invalidRows  = [];
+
+    for (const row of json) {
+      const missing = EXTERNAL_UPLOAD_MANDATORY.filter((f) => {
+        const v = String(row[f] || "").trim();
+        return !v;
+      });
+
+      // Extra: Registration_Status and Is_Attended must be yes/no
+      const regStatus = parseBool(row["Registration_Status"]);
+      const isAttended = parseBool(row["Is_Attended"]);
+      if (!missing.includes("Registration_Status") && regStatus === null)
+        missing.push("Registration_Status (must be yes/no)");
+      if (!missing.includes("Is_Attended") && isAttended === null)
+        missing.push("Is_Attended (must be yes/no)");
+
+      if (missing.length > 0) {
+        invalidRows.push({ ...row, _Validation_Errors: missing.join(", ") });
+      } else {
+        validRows.push(row);
+      }
+    }
+
     // Auto-increment batch label per campaign (Batch1, Batch2, …)
     const existingBatches = await CallingData.distinct("batch", {
       CampaignId,
@@ -1738,52 +1821,52 @@ const externalUploadCallingData = asyncHandler(async (req, res, next) => {
     const batchNo    = existingBatches.filter(Boolean).length + 1;
     const batchLabel = `Batch-${batchNo}`;
 
-    // ── Duplicate detection ────────────────────────────────────────────────
-    const EMAIL_FIELDS  = ["Office_Email_1", "Office_Email_2", "Personal_Email1", "Personal_Email2"];
-    const MOBILE_FIELDS = ["Mobile_No", "Contact_Direct_Phone1", "Contact_Direct_Phone2"];
+    // ── Match existing records by Mobile_No or Office_Email_1 ─────────────
+    const MATCH_MOBILE = "Mobile_No";
+    const MATCH_EMAIL  = "Office_Email_1";
 
-    // Collect all non-empty email/mobile values from the uploaded file
-    const allEmails  = new Set();
     const allMobiles = new Set();
-    for (const row of json) {
-      for (const f of EMAIL_FIELDS)  { const v = String(row[f] || "").trim().toLowerCase(); if (v) allEmails.add(v); }
-      for (const f of MOBILE_FIELDS) { const v = String(row[f] || "").trim();               if (v) allMobiles.add(v); }
+    const allEmails  = new Set();
+    for (const row of validRows) {
+      const mob = String(row[MATCH_MOBILE] || "").trim();
+      const eml = String(row[MATCH_EMAIL]  || "").trim().toLowerCase();
+      if (mob) allMobiles.add(mob);
+      if (eml) allEmails.add(eml);
     }
 
-    // Single DB query — find existing records in this campaign that match any value
+    // Also check all other email/phone fields for full-duplicate detection (new inserts)
+    const ALL_EMAIL_FIELDS  = ["Office_Email_1", "Office_Email_2", "Personal_Email1", "Personal_Email2"];
+    const ALL_MOBILE_FIELDS = ["Mobile_No", "Contact_Direct_Phone1", "Contact_Direct_Phone2"];
+
     const orConditions = [];
-    if (allEmails.size)  EMAIL_FIELDS.forEach(f  => orConditions.push({ [f]: { $in: [...allEmails]  } }));
-    if (allMobiles.size) MOBILE_FIELDS.forEach(f => orConditions.push({ [f]: { $in: [...allMobiles] } }));
+    if (allMobiles.size) orConditions.push({ Mobile_No:       { $in: [...allMobiles] } });
+    if (allEmails.size)  orConditions.push({ Office_Email_1:  { $in: [...allEmails]  } });
 
-    // takenSet: "field:value" pairs already in DB or already queued for insert
-    const takenSet    = new Set();
-    // duplicateMap: "field:value" → { Full_Name, Company_Name } of the existing record it matches
-    const duplicateMap = new Map();
-
+    // existingMap: "mobile:<v>" or "email:<v>" → { _id, Full_Name, Company_Name }
+    const existingMap = new Map();
     if (orConditions.length > 0) {
       const existing = await CallingData.find(
         { CampaignId, $or: orConditions },
-        "Full_Name Company_Name " + [...EMAIL_FIELDS, ...MOBILE_FIELDS].join(" ")
+        "_id Full_Name Company_Name Mobile_No Office_Email_1"
       ).lean();
-
       for (const doc of existing) {
-        const meta = { Full_Name: doc.Full_Name || "", Company_Name: doc.Company_Name || "" };
-        for (const f of EMAIL_FIELDS) {
-          const v = String(doc[f] || "").trim().toLowerCase();
-          if (v) { takenSet.set ? takenSet.add(`${f}:${v}`) : takenSet.add(`${f}:${v}`); duplicateMap.set(`${f}:${v}`, meta); }
-        }
-        for (const f of MOBILE_FIELDS) {
-          const v = String(doc[f] || "").trim();
-          if (v) { takenSet.add(`${f}:${v}`); duplicateMap.set(`${f}:${v}`, meta); }
-        }
+        const mob = String(doc.Mobile_No      || "").trim();
+        const eml = String(doc.Office_Email_1 || "").trim().toLowerCase();
+        if (mob) existingMap.set(`mobile:${mob}`, doc);
+        if (eml) existingMap.set(`email:${eml}`,  doc);
       }
     }
 
-    // Partition rows into toInsert / duplicateRows
-    const toInsert     = [];
-    const duplicateRows = [];
+    // takenSet for intra-file duplicate prevention (new inserts only)
+    const takenSet = new Set();
+    for (const [key, doc] of existingMap) takenSet.add(key);
 
-    const buildEntry = (row) => ({
+    const toInsert      = [];
+    const toUpdate      = []; // { filter, regStatus, isAttended, registeredOn }
+    const updatedRows   = []; // for result report
+    const skippedIntraFile = [];
+
+    const buildEntry = (row, regBool, attendedBool, regDate) => ({
       CampaignId,
       UploadedBy:               req.user._id,
       Contact_Source:           row.Contact_Source                  || "",
@@ -1832,41 +1915,55 @@ const externalUploadCallingData = asyncHandler(async (req, res, next) => {
       batch:                    batchLabel,
       dataSourceType:           "External",
       isDataSourceApproved:     false,
+      isRegistered:             regBool,
+      registeredOn:             regDate,
+      registrationSource:       regBool ? "External Registration" : "Not Registered",
+      isAttended:               attendedBool,
     });
 
-    for (const row of json) {
-      let matchKey  = null;
-      let matchMeta = null;
+    for (const row of validRows) {
+      const regBool    = parseBool(row["Registration_Status"]);
+      const attendedBool = parseBool(row["Is_Attended"]);
+      const regDate    = parseDate(row["Registration_Date"]);
 
-      for (const f of EMAIL_FIELDS) {
-        const v = String(row[f] || "").trim().toLowerCase();
-        if (v && takenSet.has(`${f}:${v}`)) { matchKey = `${f}:${v}`; matchMeta = duplicateMap.get(matchKey); break; }
-      }
-      if (!matchKey) {
-        for (const f of MOBILE_FIELDS) {
-          const v = String(row[f] || "").trim();
-          if (v && takenSet.has(`${f}:${v}`)) { matchKey = `${f}:${v}`; matchMeta = duplicateMap.get(matchKey); break; }
-        }
-      }
+      const mob = String(row[MATCH_MOBILE] || "").trim();
+      const eml = String(row[MATCH_EMAIL]  || "").trim().toLowerCase();
+
+      const matchKey = mob && existingMap.has(`mobile:${mob}`) ? `mobile:${mob}`
+                     : eml && existingMap.has(`email:${eml}`)  ? `email:${eml}`
+                     : null;
 
       if (matchKey) {
-        const [matchedField, matchedValue] = matchKey.split(/:(.+)/);
-        duplicateRows.push({
+        // Existing record — update registration fields
+        const existingDoc = existingMap.get(matchKey);
+        toUpdate.push({
+          _id:         existingDoc._id,
+          isRegistered: regBool,
+          registeredOn: regDate,
+          registrationSource: regBool ? "External Upload" : "Not Registered",
+          isAttended:  attendedBool,
+        });
+        updatedRows.push({
           ...row,
-          _Duplicate_Match_Field: matchedField,
-          _Duplicate_Match_Value: matchedValue,
-          _Existing_Full_Name:    matchMeta?.Full_Name    || "",
-          _Existing_Company_Name: matchMeta?.Company_Name || "",
+          _Action: "Updated",
+          _Matched_By: matchKey.split(":")[0],
+          _Existing_Full_Name: existingDoc.Full_Name || "",
         });
       } else {
-        toInsert.push(buildEntry(row));
-        // Mark this row's values as taken so intra-file duplicates are also caught
-        for (const f of EMAIL_FIELDS)  { const v = String(row[f] || "").trim().toLowerCase(); if (v) { takenSet.add(`${f}:${v}`); duplicateMap.set(`${f}:${v}`, { Full_Name: row.Full_Name || "", Company_Name: row.Company_Name || "" }); } }
-        for (const f of MOBILE_FIELDS) { const v = String(row[f] || "").trim();               if (v) { takenSet.add(`${f}:${v}`); duplicateMap.set(`${f}:${v}`, { Full_Name: row.Full_Name || "", Company_Name: row.Company_Name || "" }); } }
+        // New record — check intra-file duplicates
+        const intraKey = mob ? `mobile:${mob}` : eml ? `email:${eml}` : null;
+        if (intraKey && takenSet.has(intraKey)) {
+          skippedIntraFile.push({ ...row, _Action: "Skipped (intra-file duplicate)" });
+        } else {
+          toInsert.push(buildEntry(row, regBool, attendedBool, regDate));
+          // Mark as taken
+          if (mob) takenSet.add(`mobile:${mob}`);
+          if (eml) takenSet.add(`email:${eml}`);
+        }
       }
     }
 
-    // ── Insert ─────────────────────────────────────────────────────────────
+    // ── Insert new records ─────────────────────────────────────────────────
     let inserted = 0;
     let failed   = 0;
     if (toInsert.length > 0) {
@@ -1879,6 +1976,16 @@ const externalUploadCallingData = asyncHandler(async (req, res, next) => {
       }
     }
 
+    // ── Update registration fields on existing records ─────────────────────
+    let updated = 0;
+    if (toUpdate.length > 0) {
+      const bulkOps = toUpdate.map(({ _id, ...fields }) => ({
+        updateOne: { filter: { _id }, update: { $set: fields } },
+      }));
+      const bulkRes = await CallingData.bulkWrite(bulkOps, { ordered: false });
+      updated = bulkRes.modifiedCount;
+    }
+
     if (inserted > 0) {
       await Campaign.findByIdAndUpdate(CampaignId, { isCallingDataAssigned: true });
     }
@@ -1886,24 +1993,37 @@ const externalUploadCallingData = asyncHandler(async (req, res, next) => {
     // ── Build result XLSX ──────────────────────────────────────────────────
     const wb = XLSX.utils.book_new();
 
-    // Summary sheet
     const summaryRows = [
-      ["Metric",             "Count"],
-      ["Total Rows in File", json.length],
-      ["Inserted",           inserted],
-      ["Duplicates Skipped", duplicateRows.length],
-      ["Failed",             failed],
-      ["Batch Assigned",     batchLabel],
+      ["Metric",                    "Count"],
+      ["Total Rows in File",        json.length],
+      ["Valid Rows",                validRows.length],
+      ["New Records Inserted",      inserted],
+      ["Existing Records Updated",  updated],
+      ["Validation Failed (skipped)", invalidRows.length],
+      ["Intra-file Duplicates (skipped)", skippedIntraFile.length],
+      ["Insert Failed",             failed],
+      ["Batch Assigned",            batchLabel],
     ];
     const summaryWs = XLSX.utils.aoa_to_sheet(summaryRows);
-    summaryWs["!cols"] = [{ wch: 22 }, { wch: 16 }];
+    summaryWs["!cols"] = [{ wch: 32 }, { wch: 16 }];
     XLSX.utils.book_append_sheet(wb, summaryWs, "Summary");
 
-    // Duplicates sheet
-    if (duplicateRows.length > 0) {
-      const dupWs = XLSX.utils.json_to_sheet(duplicateRows);
-      dupWs["!cols"] = Object.keys(duplicateRows[0]).map(() => ({ wch: 22 }));
-      XLSX.utils.book_append_sheet(wb, dupWs, "Duplicates");
+    if (updatedRows.length > 0) {
+      const updWs = XLSX.utils.json_to_sheet(updatedRows);
+      updWs["!cols"] = Object.keys(updatedRows[0]).map(() => ({ wch: 22 }));
+      XLSX.utils.book_append_sheet(wb, updWs, "Updated Records");
+    }
+
+    if (invalidRows.length > 0) {
+      const invWs = XLSX.utils.json_to_sheet(invalidRows);
+      invWs["!cols"] = Object.keys(invalidRows[0]).map(() => ({ wch: 22 }));
+      XLSX.utils.book_append_sheet(wb, invWs, "Validation Failed");
+    }
+
+    if (skippedIntraFile.length > 0) {
+      const skipWs = XLSX.utils.json_to_sheet(skippedIntraFile);
+      skipWs["!cols"] = Object.keys(skippedIntraFile[0]).map(() => ({ wch: 22 }));
+      XLSX.utils.book_append_sheet(wb, skipWs, "Intra-file Duplicates");
     }
 
     const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
@@ -1911,8 +2031,8 @@ const externalUploadCallingData = asyncHandler(async (req, res, next) => {
     res.setHeader("Content-Disposition", `attachment; filename="upload_result_${batchLabel}.xlsx"`);
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("X-Inserted-Count",   String(inserted));
-    res.setHeader("X-Duplicate-Count",  String(duplicateRows.length));
-    res.setHeader("X-Failed-Count",     String(failed));
+    res.setHeader("X-Duplicate-Count",  String(updated));
+    res.setHeader("X-Failed-Count",     String(failed + invalidRows.length));
     res.setHeader("X-Total-Count",      String(json.length));
     res.setHeader("X-Batch-Label",      batchLabel);
     res.setHeader("Access-Control-Expose-Headers",

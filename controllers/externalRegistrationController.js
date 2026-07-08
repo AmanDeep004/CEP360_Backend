@@ -340,38 +340,101 @@ const uploadExternalDataController = asyncHandler(async (req, res, next) => {
           $or: orConditions,
         };
 
+        // Parse registration fields
+        const regBool = ["true", "t", "yes", "y", "1"].includes(
+          String(row.Registration_Status || "").trim().toLowerCase()
+        );
+        const attendedBool = ["true", "t", "yes", "y", "1"].includes(
+          String(row.Is_Attended || "").trim().toLowerCase()
+        );
+        const regDateRaw = row.Registration_Date;
+        const regDate = regDateRaw
+          ? (typeof regDateRaw === "number"
+              ? (() => { try { const d = XLSX.SSF.parse_date_code(regDateRaw); return d ? new Date(d.y, d.m - 1, d.d) : new Date(); } catch { return new Date(); } })()
+              : (isNaN(new Date(regDateRaw).getTime()) ? new Date() : new Date(regDateRaw)))
+          : new Date();
+
         // Check if exists in CallingData
         const existingCallingData = await CallingData.findOne(matchQuery);
 
-        let isRegistered = false;
+        let isRegistered = regBool;
         let isAvailableInCallingData = false;
 
-        // If match found in CallingData
         if (existingCallingData) {
-          isRegistered = true;
+          // Match found — update registration fields
           isAvailableInCallingData = true;
           results.matched++;
 
-          // Update CallingData registration status
           await CallingData.findByIdAndUpdate(
             existingCallingData._id,
             {
-              isRegistered: true,
-              registeredOn: new Date(),
-              registrationSource: {
-                source: "External Registration",
-                uploadedAt: new Date(),
-              },
-            },
-            { new: true }
+              isRegistered:       regBool,
+              registeredOn:       regDate,
+              registrationSource: "External Registration",
+              isAttended:         attendedBool,
+            }
           );
 
-          console.log(
-            `✓ Matched and updated CallingData ID: ${existingCallingData._id}`
-          );
+          console.log(`✓ Matched and updated CallingData ID: ${existingCallingData._id}`);
         } else {
+          // No match — insert as new CallingData record
           results.notMatched++;
-          console.log(`✗ No match found for row ${i + 1}`);
+          try {
+            await CallingData.create({
+              CampaignId,
+              UploadedBy:               req.user._id,
+              Contact_Source:           row.Contact_Source || "External Registration",
+              Salutation:               row.Salutation               || "",
+              First_Name:               row.First_Name               || "",
+              Last_Name:                row.Last_Name                || "",
+              Full_Name:                row.Full_Name                || "",
+              Gender:                   row.Gender                   || "",
+              Job_Title:                row.Job_Title                || "",
+              Job_Seniority:            row.Job_Seniority            || "",
+              Job_Function:             row.Job_Function             || "",
+              Contact_Address_1:        row.Contact_Address_1        || "",
+              Contact_Address_2:        row.Contact_Address_2        || "",
+              Contact_Address_3:        row.Contact_Address_3        || "",
+              Contact_City:             row.Contact_City             || "",
+              Contact_Pin:              String(row.Contact_Pin       || ""),
+              Contact_State:            row.Contact_State            || "",
+              Contact_Region:           row.Contact_Region           || "",
+              Contact_Country:          row.Contact_Country          || "",
+              Contact_STD_ISD_Code:     String(row.Contact_STD_ISD_Code || ""),
+              Contact_Location_Tier:    row.Contact_Location_Tier    || "",
+              Contact_Direct_Phone1:    String(row.Contact_Direct_Phone1 || ""),
+              Contact_Direct_Phone2:    String(row.Contact_Direct_Phone2 || ""),
+              Contact_Extn_No:          String(row.Contact_Extn_No   || ""),
+              Mobile_No:                String(mobileNo              || ""),
+              Office_Email_1:           officeEmail1                 || "",
+              Office_Email_2:           officeEmail2                 || "",
+              Personal_Email1:          personalEmail1               || "",
+              Personal_Email2:          personalEmail2               || "",
+              Contact_LinkedIn_Profile: row.Contact_LinkedIn_Profile || "",
+              Company_Name:             row.Company_Name             || "",
+              Company_ID_Kestone:       row.Company_ID_Kestone       || "",
+              Company_Source:           row.Company_Source           || "",
+              Year_Founded:             String(row.Year_Founded      || ""),
+              Turnover_Range:           row.Turnover_Range           || "",
+              Employees_Range:          row.Employees_Range          || "",
+              Industry:                 row.Industry                 || "",
+              Sub_Industry:             row.Sub_Industry             || "",
+              Company_Segment:          row.Company_Segment          || "",
+              Website:                  row.Website                  || "",
+              Company_LinkedIn_Profile: row.Company_LinkedIn_Profile || "",
+              Company_Phone1:           String(row.Company_Phone1    || ""),
+              Company_Phone2:           String(row.Company_Phone2    || ""),
+              source:                   "External Registration",
+              dataSourceType:           "External",
+              isRegistered:             regBool,
+              registeredOn:             regDate,
+              registrationSource:       "External Registration",
+              isAttended:               attendedBool,
+            });
+            console.log(`✓ Inserted new CallingData for row ${i + 1}`);
+          } catch (cdErr) {
+            console.warn(`⚠ Could not insert CallingData for row ${i + 1}:`, cdErr.message);
+          }
         }
 
         // Prepare ExternalRegistration document
@@ -474,7 +537,7 @@ const getAllExternalRegistrations = asyncHandler(async (req, res, next) => {
 
     // Search on multiple fields
     if (req.query.search && req.query.search.trim() !== "") {
-      const search = req.query.search.trim();
+      const search = req.query.search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const regex = new RegExp(search, "i");
 
       filter.$or = [

@@ -97,6 +97,7 @@ const CallingDataSchema = new mongoose.Schema(
     isRegistered: { type: Boolean, default: false },
     registeredOn: { type: Date, default: null },
     registrationSource: { type: String, default: "Not Registered" },
+    isAttended: { type: Boolean, default: false },
     callHistory: { type: mongoose.Schema.Types.ObjectId, ref: "CallHistory" },
     lastRemarks: { type: String, default: null },
     lastCallingDate: { type: Date, default: null },
