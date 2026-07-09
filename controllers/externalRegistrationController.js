@@ -432,10 +432,12 @@ const uploadExternalDataController = asyncHandler(async (req, res, next) => {
           isAvailableInCallingData = true;
           results.matched++;
           await CallingData.findByIdAndUpdate(existingCallingData._id, {
-            isRegistered:       regBool,
-            registeredOn:       regDate,
-            registrationSource: "External Registration",
-            isAttended:         attendedBool,
+            $set: {
+              isRegistered:       regBool,
+              registeredOn:       regDate,
+              registrationSource: "External Registration",
+              isAttended:         attendedBool,
+            },
           });
           console.log(`✓ Updated CallingData ID: ${existingCallingData._id}`);
         } else {
