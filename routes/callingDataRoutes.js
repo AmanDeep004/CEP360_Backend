@@ -31,6 +31,7 @@ import {
 import {
   uploadExternalDataController,
   getAllExternalRegistrations,
+  downloadExternalRegistrationTemplate,
 } from "../controllers/externalRegistrationController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -82,6 +83,12 @@ router.get(
   "/getAllExternalRegistrations/:CampaignId",
   protect,
   getAllExternalRegistrations
+);
+
+router.get(
+  "/external-registration-template",
+  protect,
+  downloadExternalRegistrationTemplate
 );
 
 // ── External Upload ─────────────────────────────────────────────────────────

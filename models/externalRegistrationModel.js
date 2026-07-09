@@ -63,6 +63,7 @@ const ExternalRegistrationSchema = new mongoose.Schema(
     Company_Phone1: { type: String, trim: true },
     Company_Phone2: { type: String, trim: true },
     isRegistered: { type: Boolean, default: false },
+    isAttended: { type: Boolean, default: false },
     registeredOn: { type: Date, default: null },
     isAvailableInCallingData: { type: Boolean, default: false },
   },
