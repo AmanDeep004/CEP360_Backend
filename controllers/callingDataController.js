@@ -1672,27 +1672,20 @@ const deletePrioritySlotDef = asyncHandler(async (req, res, next) => {
 
 // Mandatory fields marked with * — validated on upload
 const EXTERNAL_UPLOAD_MANDATORY = [
-  "Full_Name", "Job_Title", "Contact_City", "Mobile_No",
+  "Full_Name", "Mobile_No", "Job_Title", "Contact_City",
   "Office_Email_1", "Company_Name",
-  "Registration_Status", "Registration_Date", "Is_Attended",
 ];
 
 const EXTERNAL_UPLOAD_COLUMNS = [
-  // ── Mandatory fields (fill all) ──
-  "Full_Name", "Job_Title", "Contact_City", "Mobile_No",
-  "Office_Email_1", "Company_Name",
-  "Registration_Status",   // yes / no
-  "Registration_Date",     // e.g. 2026-07-14
-  "Is_Attended",           // yes / no
-  // ── Optional fields ──
-  "First_Name", "Last_Name", "Salutation", "Gender",
-  "Job_Seniority", "Job_Function",
-  "Contact_Direct_Phone1", "Contact_Direct_Phone2", "Contact_Extn_No",
-  "Office_Email_2", "Personal_Email1", "Personal_Email2",
-  "Contact_State", "Contact_Country", "Contact_Region",
-  "Contact_Pin", "Contact_Address_1", "Contact_Address_2", "Contact_Address_3",
+  // ── Mandatory fields ──
+  "First_Name", "Last_Name", "Full_Name", "Salutation", "Gender",
+  "Job_Title", "Job_Seniority", "Job_Function",
+  "Mobile_No", "Contact_Direct_Phone1", "Contact_Direct_Phone2", "Contact_Extn_No",
+  "Office_Email_1", "Office_Email_2", "Personal_Email1", "Personal_Email2",
+  "Contact_City", "Contact_State", "Contact_Country", "Contact_Region", "Contact_Pin",
+  "Contact_Address_1", "Contact_Address_2", "Contact_Address_3",
   "Contact_Location_Tier", "Contact_STD_ISD_Code",
-  "Website", "Industry", "Sub_Industry", "Company_Segment",
+  "Company_Name", "Website", "Industry", "Sub_Industry", "Company_Segment",
   "Turnover_Range", "Employees_Range", "Year_Founded",
   "Company_LinkedIn_Profile", "Company_Phone1", "Company_Phone2",
   "Company_Source", "Company_ID_Kestone",
@@ -1729,9 +1722,6 @@ const downloadExternalUploadTemplate = asyncHandler(async (req, res) => {
   // Notes row (row 2)
   const notesRow = ws.addRow(
     EXTERNAL_UPLOAD_COLUMNS.map((col) => {
-      if (col === "Registration_Status") return "yes or no";
-      if (col === "Is_Attended")         return "yes or no";
-      if (col === "Registration_Date")   return "e.g. 2026-07-14";
       if (EXTERNAL_UPLOAD_MANDATORY.includes(col)) return "(required)";
       return "";
     })
@@ -1798,14 +1788,6 @@ const externalUploadCallingData = asyncHandler(async (req, res, next) => {
         return !v;
       });
 
-      // Extra: Registration_Status and Is_Attended must be yes/no
-      const regStatus = parseBool(row["Registration_Status"]);
-      const isAttended = parseBool(row["Is_Attended"]);
-      if (!missing.includes("Registration_Status") && regStatus === null)
-        missing.push("Registration_Status (must be yes/no)");
-      if (!missing.includes("Is_Attended") && isAttended === null)
-        missing.push("Is_Attended (must be yes/no)");
-
       if (missing.length > 0) {
         invalidRows.push({ ...row, _Validation_Errors: missing.join(", ") });
       } else {
@@ -1861,12 +1843,11 @@ const externalUploadCallingData = asyncHandler(async (req, res, next) => {
     const takenSet = new Set();
     for (const [key, doc] of existingMap) takenSet.add(key);
 
-    const toInsert      = [];
-    const toUpdate      = []; // { filter, regStatus, isAttended, registeredOn }
-    const updatedRows   = []; // for result report
+    const toInsert    = [];
+    const updatedRows = []; // already-existing rows skipped
     const skippedIntraFile = [];
 
-    const buildEntry = (row, regBool, attendedBool, regDate) => ({
+    const buildEntry = (row) => ({
       CampaignId,
       UploadedBy:               req.user._id,
       Contact_Source:           row.Contact_Source                  || "",
@@ -1915,17 +1896,9 @@ const externalUploadCallingData = asyncHandler(async (req, res, next) => {
       batch:                    batchLabel,
       dataSourceType:           "External",
       isDataSourceApproved:     false,
-      isRegistered:             regBool,
-      registeredOn:             regDate,
-      registrationSource:       regBool ? "External Registration" : "Not Registered",
-      isAttended:               attendedBool,
     });
 
     for (const row of validRows) {
-      const regBool    = parseBool(row["Registration_Status"]);
-      const attendedBool = parseBool(row["Is_Attended"]);
-      const regDate    = parseDate(row["Registration_Date"]);
-
       const mob = String(row[MATCH_MOBILE] || "").trim();
       const eml = String(row[MATCH_EMAIL]  || "").trim().toLowerCase();
 
@@ -1934,18 +1907,11 @@ const externalUploadCallingData = asyncHandler(async (req, res, next) => {
                      : null;
 
       if (matchKey) {
-        // Existing record — update registration fields
+        // Already exists in campaign — skip (record as duplicate)
         const existingDoc = existingMap.get(matchKey);
-        toUpdate.push({
-          _id:         existingDoc._id,
-          isRegistered: regBool,
-          registeredOn: regDate,
-          registrationSource: regBool ? "External Upload" : "Not Registered",
-          isAttended:  attendedBool,
-        });
         updatedRows.push({
           ...row,
-          _Action: "Updated",
+          _Action: "Skipped (already exists)",
           _Matched_By: matchKey.split(":")[0],
           _Existing_Full_Name: existingDoc.Full_Name || "",
         });
@@ -1955,7 +1921,7 @@ const externalUploadCallingData = asyncHandler(async (req, res, next) => {
         if (intraKey && takenSet.has(intraKey)) {
           skippedIntraFile.push({ ...row, _Action: "Skipped (intra-file duplicate)" });
         } else {
-          toInsert.push(buildEntry(row, regBool, attendedBool, regDate));
+          toInsert.push(buildEntry(row));
           // Mark as taken
           if (mob) takenSet.add(`mobile:${mob}`);
           if (eml) takenSet.add(`email:${eml}`);
@@ -1976,16 +1942,6 @@ const externalUploadCallingData = asyncHandler(async (req, res, next) => {
       }
     }
 
-    // ── Update registration fields on existing records ─────────────────────
-    let updated = 0;
-    if (toUpdate.length > 0) {
-      const bulkOps = toUpdate.map(({ _id, ...fields }) => ({
-        updateOne: { filter: { _id }, update: { $set: fields } },
-      }));
-      const bulkRes = await CallingData.bulkWrite(bulkOps, { ordered: false });
-      updated = bulkRes.modifiedCount;
-    }
-
     if (inserted > 0) {
       await Campaign.findByIdAndUpdate(CampaignId, { isCallingDataAssigned: true });
     }
@@ -1994,15 +1950,15 @@ const externalUploadCallingData = asyncHandler(async (req, res, next) => {
     const wb = XLSX.utils.book_new();
 
     const summaryRows = [
-      ["Metric",                    "Count"],
-      ["Total Rows in File",        json.length],
-      ["Valid Rows",                validRows.length],
-      ["New Records Inserted",      inserted],
-      ["Existing Records Updated",  updated],
-      ["Validation Failed (skipped)", invalidRows.length],
+      ["Metric",                          "Count"],
+      ["Total Rows in File",              json.length],
+      ["Valid Rows",                      validRows.length],
+      ["New Records Inserted",            inserted],
+      ["Already Exists (skipped)",        updatedRows.length],
+      ["Validation Failed (skipped)",     invalidRows.length],
       ["Intra-file Duplicates (skipped)", skippedIntraFile.length],
-      ["Insert Failed",             failed],
-      ["Batch Assigned",            batchLabel],
+      ["Insert Failed",                   failed],
+      ["Batch Assigned",                  batchLabel],
     ];
     const summaryWs = XLSX.utils.aoa_to_sheet(summaryRows);
     summaryWs["!cols"] = [{ wch: 32 }, { wch: 16 }];
@@ -2011,7 +1967,7 @@ const externalUploadCallingData = asyncHandler(async (req, res, next) => {
     if (updatedRows.length > 0) {
       const updWs = XLSX.utils.json_to_sheet(updatedRows);
       updWs["!cols"] = Object.keys(updatedRows[0]).map(() => ({ wch: 22 }));
-      XLSX.utils.book_append_sheet(wb, updWs, "Updated Records");
+      XLSX.utils.book_append_sheet(wb, updWs, "Already Exists");
     }
 
     if (invalidRows.length > 0) {
@@ -2031,7 +1987,7 @@ const externalUploadCallingData = asyncHandler(async (req, res, next) => {
     res.setHeader("Content-Disposition", `attachment; filename="upload_result_${batchLabel}.xlsx"`);
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("X-Inserted-Count",   String(inserted));
-    res.setHeader("X-Duplicate-Count",  String(updated));
+    res.setHeader("X-Duplicate-Count",  String(updatedRows.length));
     res.setHeader("X-Failed-Count",     String(failed + invalidRows.length));
     res.setHeader("X-Total-Count",      String(json.length));
     res.setHeader("X-Batch-Label",      batchLabel);

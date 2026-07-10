@@ -33,6 +33,10 @@ import {
   getAllExternalRegistrations,
   downloadExternalRegistrationTemplate,
 } from "../controllers/externalRegistrationController.js";
+import {
+  downloadExternalCallingDataTemplate,
+  uploadExternalCallingData,
+} from "../controllers/externalCallingDataController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
@@ -126,5 +130,14 @@ router.post("/:campaignId/prioritySlots",         protect, createPrioritySlot);
 router.delete("/:campaignId/prioritySlots/:no",   protect, deletePrioritySlotDef);
 
 router.put("/resetNoResponse/:campaignId", protect, authorize(ADMIN, PROGRAM_MANAGER), resetNoResponseToYetToCall);
+
+// ── External Calling Data Upload (presales) ──────────────────────────────────
+router.get("/external-calling-data-template", protect, downloadExternalCallingDataTemplate);
+router.post(
+  "/external-calling-data-upload",
+  protect,
+  upload.single("file"),
+  uploadExternalCallingData
+);
 
 export default router;
