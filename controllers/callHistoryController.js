@@ -1,7 +1,7 @@
 import CallHistory from "../models/callHistoryModel.js";
 import CallingData from "../models/callingDataModal.js";
 import errorHandler from "../utils/index.js";
-import { DND_REMARK_TO_SCOPE, DND_SCOPE, DND_CHANNEL } from "../utils/enum.js";
+import { DND_REMARK_TO_SCOPE, DND_SCOPE, DND_CHANNEL, REMARK_STATUS } from "../utils/enum.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
 /**
@@ -137,13 +137,20 @@ const createCallHistory = asyncHandler(async (req, res, next) => {
       ...(overallTime != null ? { overallTime: Number(overallTime) } : {}),
     };
 
+    // Registration remarks from agent only go into chat history — they must NOT
+    // update CallingData registration fields (isRegistered / registeredOn).
+    // Registration in CallingData is only set via the external registration upload.
+    const isRegistrationRemark =
+      remarks === REMARK_STATUS.REGISTERED ||
+      remarks === REMARK_STATUS.ALREADY_REGISTERED;
+
     // Atomic upsert — $push to existing doc or create new one in a single round-trip.
     // Uses compound index { callingData_id, campaign_id } for the lookup.
     const savedHistory = await CallHistory.findOneAndUpdate(
       { callingData_id, campaign_id },
       {
         $push: { chatHistory: chatEntry },
-        ...(isRegistered
+        ...(isRegistered && !isRegistrationRemark
           ? { $set: { isRegistered: true, registrationDate: new Date() } }
           : {}),
       },
@@ -158,7 +165,7 @@ const createCallHistory = asyncHandler(async (req, res, next) => {
       lastRemarks: chatEntry.remarks,
       lastCallingDate: chatEntry.callingDate,
     };
-    if (isRegistered) {
+    if (isRegistered && !isRegistrationRemark) {
       callingDataUpdate.isRegistered = true;
       callingDataUpdate.registeredOn = new Date();
     }

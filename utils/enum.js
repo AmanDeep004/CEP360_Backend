@@ -96,15 +96,43 @@ const DND_REMARK_TO_SCOPE = Object.freeze({
 });
 
 /**
- * Calling data remark status values — keep in sync with frontend staticData.js REMARK_OPTIONS
+ * Calling data remark status values.
+ * ⚠️  Values MUST match exactly with CALL_REMARK_OPTIONS in:
+ *     crm-kestone/src/common/constants.js
  */
 const REMARK_STATUS = Object.freeze({
-  YET_TO_CALL:  "Yet to Call",
-  NO_RESPONSE:  "No Response",
-  CALL_BACK:    "Call Back",
-  INTERESTED:   "Interested",
-  NOT_INTERESTED: "Not Interested",
-  DND:          "DND",
+  REGISTERED:                          "Registered",
+  ALREADY_REGISTERED:                  "Already Registered",
+  YET_TO_CALL:                         "Yet to Call",
+  CALL_BACK:                           "Call Back",
+  CALL_DISCONNECTED:                   "Call Disconnected",
+  COMPANY_CLOSED:                      "Company Closed",
+  COMPANY_ACQUIRED:                    "Company is acquired",
+  DND_CAMPAIGN:                        "DND (For Current Campaign)",
+  DND_BRAND:                           "DND (For Current Brand)",
+  DND_FOREVER:                         "DND (Never Call Again for Any Campaign)",
+  DUPLICATE_CONTACT:                   "Duplicate Contact",
+  HELPDESK_NUMBER:                     "Helpdesk Number",
+  INTERESTED:                          "Interested",
+  NEED_TO_CONFIRM:                     "Need To Confirm",
+  NO_NUMBER:                           "No Number",
+  NO_NUMBER_FOUND_WEBSEARCH:           "No Number Found (WebSearch)",
+  NO_RESPONSE:                         "No Response",
+  NOT_BASED_IN_EVENT_LOCATION:         "Not Based In Event Location",
+  NOT_DISCLOSING_OFFICIAL_EMAIL:       "Not Disclosing Official Email ID",
+  NOT_INTERESTED:                      "Not Interested",
+  NOT_REACHABLE:                       "Not Reachable",
+  NOT_RELEVANT:                        "Not Relevant",
+  OUT_OF_ORDER:                        "Out Of Order",
+  QUIT_THE_COMPANY:                    "Quit The Company",
+  RECEPTIONIST_DENIED:                 "Receptionist Denied To Connect Call",
+  SEND_MAIL:                           "Send Mail",
+  SMS_CONFIRMATION:                    "SMS Confirmation",
+  SWITCHED_OFF:                        "Switched Off",
+  TENTATIVE:                           "Tentative",
+  WEBSITE_NOT_FOUND:                   "Website Not Found",
+  WILL_REGISTER:                       "Will Register",
+  WRONG_NUMBER:                        "Wrong Number",
 });
 
 // Export the enums

@@ -581,7 +581,9 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
       if (callRemarks === "Yet to Call") {
         filter.lastRemarks = null;
       } else {
-        filter.lastRemarks = { $regex: new RegExp(`^${callRemarks}$`, "i") };
+        // Escape regex special chars so values like "No Number Found (WebSearch)" match literally
+        const escapedRemark = callRemarks.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        filter.lastRemarks = { $regex: new RegExp(`^${escapedRemark}$`, "i") };
       }
     }
 
