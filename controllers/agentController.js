@@ -579,7 +579,7 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
     // Filter directly on indexed lastRemarks / lastCallingDate fields — no populate needed
     if (callRemarks) {
       if (callRemarks === "Yet to Call") {
-        filter.lastRemarks = null;
+        filter.lastRemarks = { $in: [null, "", "Yet to Call"] };
       } else {
         // Escape regex special chars so values like "No Number Found (WebSearch)" match literally
         const escapedRemark = callRemarks.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

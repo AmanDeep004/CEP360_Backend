@@ -523,7 +523,7 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
     const remarkFilter = req.query.remark?.trim();
     if (remarkFilter) {
       if (remarkFilter.toLowerCase() === "yet to call") {
-        filter.lastRemarks = { $in: [null, "Yet to Call"] };
+        filter.lastRemarks = { $in: [null, "", "Yet to Call"] };
       } else {
         filter.lastRemarks = remarkFilter;
       }
@@ -769,7 +769,8 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
     // No callHistory population or in-memory scan needed.
     if (remark) {
       if (remark === "Yet to Call") {
-        filter.lastRemarks = { $in: [null, ""] };
+        // null/""  = never called (default); "Yet to Call" = older records set as string
+        filter.lastRemarks = { $in: [null, "", "Yet to Call"] };
       } else {
         filter.lastRemarks = remark;
       }
@@ -2010,10 +2011,10 @@ const resetNoResponseToYetToCall = asyncHandler(async (req, res, next) => {
 
     const result = await CallingData.updateMany(
       { CampaignId: campaignId, lastRemarks: REMARK_STATUS.NO_RESPONSE },
-      { $set: { lastRemarks: REMARK_STATUS.YET_TO_CALL } }
+      { $set: { lastRemarks: null, lastCallingDate: null } }
     );
 
-    return sendResponse(res, 200, `${result.modifiedCount} records updated from "${REMARK_STATUS.NO_RESPONSE}" to "${REMARK_STATUS.YET_TO_CALL}"`, {
+    return sendResponse(res, 200, `${result.modifiedCount} records reset from "${REMARK_STATUS.NO_RESPONSE}" to Yet to Call`, {
       matched: result.matchedCount,
       updated: result.modifiedCount,
     });
