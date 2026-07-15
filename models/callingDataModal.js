@@ -168,8 +168,10 @@ const CallingDataSchema = new mongoose.Schema(
       filters: { type: Object, default: null }, // snapshot of filters used
     },
     clientInfo: {
-      companySpecificId: { type: String, trim: true, default: "" },
-      segment: { type: String, trim: true, default: "" },
+      companySpecificId:        { type: String, trim: true, default: "" },
+      segment:                  { type: String, trim: true, default: "" },
+      clientCompanyName:        { type: String, trim: true, default: "" }, // client's own company name
+      masterDbMatchedCompanyName: { type: String, trim: true, default: "" }, // name used to match master DB
     },
     discrepencyInData: {
       status: { type: Boolean, default: false },

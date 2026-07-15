@@ -476,43 +476,41 @@ export function matchBatch(
   getSuggestionsLimit,
   maxCandidates = 300
 ) {
-  // Use a Map to track the first uploaded name that completely matched each DB company.
-  // If a second (different) uploaded name matches the same DB company, it is placed in
-  // sameCompanyDuplicates so the total row count stays consistent with the upload.
-  const completeMap = new Map(); // _id (string) → entry
+  const completeMap = new Map(); // _id (string) → entry (first match wins)
   const partiallyMatched = [];
   const notMatched = [];
-  const sameCompanyDuplicates = []; // names that map to an already-matched DB company
 
-  for (const { name, companySpecificId, segment } of rows) {
+  for (const { name, companySpecificId, segment, clientCompanyName } of rows) {
     const result = matchOne(name, dbIndex, maxCandidates);
 
     if (result.type === "complete") {
       const id = String(result.match._id);
-      if (completeMap.has(id)) {
-        // Second uploaded name matches the same DB company — treat as duplicate
-        sameCompanyDuplicates.push(name);
-      } else {
+      if (!completeMap.has(id)) {
         completeMap.set(id, {
           _id: result.match._id,
           Company_Name: result.match.Company_Name,
           matchedWith: name,
-          ...(companySpecificId ? { companySpecificId } : {}),
-          ...(segment ? { segment } : {}),
+          companySpecificId: companySpecificId || "",
+          segment: segment || "",
+          clientCompanyName: clientCompanyName || "",
         });
       }
     } else if (result.type === "partial") {
-      partiallyMatched.push({
-        input: name,
-        suggestions: result.suggestions.slice(
-          0,
-          getSuggestionsLimit(rows.length)
-        ),
-        ...(companySpecificId ? { companySpecificId } : {}),
-        ...(segment ? { segment } : {}),
+      // Partial matches are treated as not matched — no manual review required
+      notMatched.push({
+        inputName: name,
+        clientCompanyName: clientCompanyName || "",
+        companySpecificId: companySpecificId || "",
+        segment: segment || "",
       });
     } else {
-      notMatched.push(name);
+      // Return as object so clientCompanyName, companySpecificId, segment are preserved
+      notMatched.push({
+        inputName: name,
+        clientCompanyName: clientCompanyName || "",
+        companySpecificId: companySpecificId || "",
+        segment: segment || "",
+      });
     }
   }
 
@@ -520,6 +518,5 @@ export function matchBatch(
     completelyMatched: [...completeMap.values()],
     partiallyMatched,
     notMatched,
-    sameCompanyDuplicates, // caller merges these into the main duplicates array
   };
 }
