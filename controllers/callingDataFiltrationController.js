@@ -2874,18 +2874,18 @@ const getClientMatchSessionData = asyncHandler(async (req, res, next) => {
         clientList,
       ] = await Promise.all([
         ClientMatchEntry.find({ ...base, matchType: "complete" })
-          .select("companyId companyName matchedWith companySpecificId segment")
+          .select("companyId companyName matchedWith companySpecificId segment clientCompanyName")
           .limit(PG + 1)
           .lean(),
         ClientMatchEntry.find({ ...base, matchType: "partial" })
           .select("inputName")
           .lean(),
         ClientMatchEntry.find({ ...base, matchType: "notMatched" })
-          .select("inputName")
+          .select("inputName clientCompanyName companySpecificId segment")
           .limit(PG + 1)
           .lean(),
         ClientMatchEntry.find({ ...base, matchType: "duplicate" })
-          .select("inputName")
+          .select("inputName clientCompanyName companySpecificId segment")
           .limit(PG + 1)
           .lean(),
         ClientCompanyList.findOne({ campaignId, dataType: "Client" })
@@ -2910,6 +2910,7 @@ const getClientMatchSessionData = asyncHandler(async (req, res, next) => {
           _id: d.companyId,
           Company_Name: d.companyName,
           matchedWith: d.matchedWith || d.inputName,
+          clientCompanyName: d.clientCompanyName || "",
           ...(d.companySpecificId
             ? { companySpecificId: d.companySpecificId }
             : {}),
@@ -2931,9 +2932,19 @@ const getClientMatchSessionData = asyncHandler(async (req, res, next) => {
             approvedCompanyName: approvedName || null,
           };
         }),
-        notMatched: notMatchedDocs.slice(0, PG).map((d) => d.inputName),
+        notMatched: notMatchedDocs.slice(0, PG).map((d) => ({
+          inputName: d.inputName || "",
+          clientCompanyName: d.clientCompanyName || "",
+          companySpecificId: d.companySpecificId || "",
+          segment: d.segment || "",
+        })),
         notMatchedHasMore: notMatchedDocs.length > PG,
-        duplicates: duplicateDocs.slice(0, PG).map((d) => d.inputName),
+        duplicates: duplicateDocs.slice(0, PG).map((d) => ({
+          inputName: d.inputName || "",
+          clientCompanyName: d.clientCompanyName || "",
+          companySpecificId: d.companySpecificId || "",
+          segment: d.segment || "",
+        })),
         duplicatesHasMore: duplicateDocs.length > PG,
       });
     }
