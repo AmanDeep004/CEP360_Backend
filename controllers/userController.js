@@ -220,6 +220,7 @@ const updateUserProfile = asyncHandler(async (req, res, next) => {
 
     const updateFields = [
       "employeeName",
+      "email",
       "type",
       "code",
       "role",
