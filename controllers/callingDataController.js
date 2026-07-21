@@ -1049,9 +1049,25 @@ const reassignCallingDatatoAgents = asyncHandler(async (req, res, next) => {
       // Optionally restrict to records owned by a specific agent
       if (fromAgentId) filter.agentId = fromAgentId;
 
-      // Remark filter — match any of the provided lastRemarks values
+      // Remark filter — match any of the provided lastRemarks values.
+      // "Yet to Call" is a UI label for records that have never been called (lastRemarks: null).
       if (Array.isArray(remarks) && remarks.length > 0) {
-        filter.lastRemarks = { $in: remarks };
+        const mappedRemarks = remarks.map((r) =>
+          r === "Yet to Call" ? null : r
+        );
+        const hasNull = mappedRemarks.includes(null);
+        const nonNull = mappedRemarks.filter((r) => r !== null);
+
+        if (hasNull && nonNull.length > 0) {
+          filter.$or = [
+            { lastRemarks: { $in: nonNull } },
+            { lastRemarks: null },
+          ];
+        } else if (hasNull) {
+          filter.lastRemarks = null;
+        } else {
+          filter.lastRemarks = { $in: nonNull };
+        }
       }
 
       if (rangeStr) {
@@ -1077,6 +1093,9 @@ const reassignCallingDatatoAgents = asyncHandler(async (req, res, next) => {
           .sort({ _id: 1 })
           .lean();
       }
+
+      console.log("[reassign] filter =>", JSON.stringify(filter));
+      console.log("[reassign] records found =>", records.length);
 
       if (!records.length) {
         return sendError(next, "No records matched the given range / remark filter", 404);
