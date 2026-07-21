@@ -2042,6 +2042,139 @@ const resetNoResponseToYetToCall = asyncHandler(async (req, res, next) => {
   }
 });
 
+// ─── Reshuffle Calling Data Among Agents ─────────────────────────────────────
+// POST /callingData/reshuffleCallingData
+// Body: { campaignId, agentIds[], fromAgentIds[], remarks[], range, batch, priorityGroup }
+// Fetches all matching records, shuffles them, distributes round-robin to agentIds.
+const reshuffleCallingData = asyncHandler(async (req, res, next) => {
+  try {
+    const {
+      campaignId,
+      agentIds,       // target agents to distribute to
+      fromAgentIds,   // optional: only reshuffle records from these agents
+      remarks,        // optional: filter by lastRemarks
+      range,          // optional: "start-end" e.g. "1-500"
+      batch,          // optional: batch filter
+      priorityGroup,  // optional: priorityGroup.label filter
+    } = req.body;
+
+    if (!campaignId) return sendError(next, "campaignId is required", 400);
+    if (!Array.isArray(agentIds) || agentIds.length < 2)
+      return sendError(next, "At least 2 agentIds are required for reshuffling", 400);
+
+    // Build filter — only assigned records
+    const filter = {
+      CampaignId: new mongoose.Types.ObjectId(campaignId),
+      agentId:    { $exists: true, $ne: null },
+    };
+
+    if (Array.isArray(fromAgentIds) && fromAgentIds.length > 0) {
+      filter.agentId = { $in: fromAgentIds.map((id) => new mongoose.Types.ObjectId(id)) };
+    }
+
+    if (Array.isArray(remarks) && remarks.length > 0) {
+      const mappedRemarks = remarks.map((r) => (r === "Yet to Call" ? null : r));
+      const hasNull = mappedRemarks.includes(null);
+      const nonNull = mappedRemarks.filter((r) => r !== null);
+      if (hasNull && nonNull.length > 0) {
+        filter.$or = [{ lastRemarks: { $in: nonNull } }, { lastRemarks: null }];
+      } else if (hasNull) {
+        filter.lastRemarks = null;
+      } else {
+        filter.lastRemarks = { $in: nonNull };
+      }
+    }
+
+    if (batch) filter.batch = batch;
+    if (priorityGroup) filter["priorityGroup.label"] = priorityGroup;
+
+    // Fetch _id + agentId (needed to prevent self-reassignment)
+    let query = CallingData.find(filter, { _id: 1, agentId: 1 }).sort({ _id: 1 });
+
+    if (range) {
+      const parts = range.split("-");
+      if (parts.length !== 2) return sendError(next, "range must be 'start-end' e.g. '1-500'", 400);
+      const start = parseInt(parts[0], 10);
+      const end   = parseInt(parts[1], 10);
+      if (isNaN(start) || isNaN(end) || start < 1 || end < start)
+        return sendError(next, "Invalid range values", 400);
+      query = query.skip(start - 1).limit(end - start + 1);
+    }
+
+    const records = await query.lean();
+
+    if (!records.length)
+      return sendError(next, "No records matched the given filters", 404);
+
+    // Fisher-Yates shuffle the records
+    for (let i = records.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [records[i], records[j]] = [records[j], records[i]];
+    }
+
+    // Distribute — ensure no agent gets their own records back
+    const agentStrIds    = agentIds.map(String);
+    const agentObjectIds = agentIds.map((id) => new mongoose.Types.ObjectId(id));
+
+    // Track how many records each target agent has received so far (for even distribution)
+    const perAgent = {};
+    agentStrIds.forEach((id) => { perAgent[id] = 0; });
+
+    const now = new Date();
+
+    const bulkOps = records.map((rec) => {
+      const originalAgentId = String(rec.agentId || "");
+
+      // Pick the target agent with the fewest assignments so far that is NOT the original owner
+      let bestIdx = -1;
+      let bestCount = Infinity;
+      for (let i = 0; i < agentStrIds.length; i++) {
+        if (agentStrIds[i] === originalAgentId) continue; // never reassign back to original owner
+        if (perAgent[agentStrIds[i]] < bestCount) {
+          bestCount = perAgent[agentStrIds[i]];
+          bestIdx   = i;
+        }
+      }
+
+      // Fallback: only triggered if every target agent IS the original (edge case with 1 target = self)
+      if (bestIdx === -1) {
+        bestIdx = agentStrIds.reduce((minIdx, id, idx) =>
+          perAgent[id] < perAgent[agentStrIds[minIdx]] ? idx : minIdx, 0);
+      }
+
+      perAgent[agentStrIds[bestIdx]] += 1;
+
+      return {
+        updateOne: {
+          filter: { _id: rec._id },
+          update: {
+            $set: {
+              agentId:                agentObjectIds[bestIdx],
+              "reassigned_to.status": true,
+            },
+            $push: {
+              "reassigned_to.previously_assigned_to": {
+                agentId:      rec.agentId || null,
+                unassignedAt: now,
+              },
+            },
+          },
+        },
+      };
+    });
+
+    const result = await CallingData.bulkWrite(bulkOps);
+
+    return sendResponse(res, 200, `${result.modifiedCount} records reshuffled among ${agentIds.length} agents`, {
+      total: records.length,
+      modified: result.modifiedCount,
+      perAgent,
+    });
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 
 export {
@@ -2072,4 +2205,5 @@ export {
   externalUploadCallingData,
   downloadExternalUploadTemplate,
   resetNoResponseToYetToCall,
+  reshuffleCallingData,
 };

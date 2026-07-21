@@ -27,6 +27,7 @@ import {
   externalUploadCallingData,
   downloadExternalUploadTemplate,
   resetNoResponseToYetToCall,
+  reshuffleCallingData,
 } from "../controllers/callingDataController.js";
 import {
   uploadExternalDataController,
@@ -64,6 +65,12 @@ router.post(
   "/unassignCallingDataFromAgents",
   protect,
   unassignCallingDataFromAgents
+);
+router.post(
+  "/reshuffleCallingData",
+  protect,
+  authorize(ADMIN, PROGRAM_MANAGER),
+  reshuffleCallingData
 );
 router.delete("/:id", protect, deletecallingData);
 router.get("/getAllCallingData/:CampaignId", protect, getAllCallingData);
