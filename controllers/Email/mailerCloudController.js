@@ -825,9 +825,34 @@ const getAllMailerCloudTemplates = asyncHandler(async (req, res, next) => {
   }
 });
 
+const getMailerCloudSenders = asyncHandler(async (req, res, next) => {
+  try {
+    const API_KEY = process.env.MAILERCLOUD_API_KEY;
+    if (!API_KEY) return sendError(next, "MailerCloud API key missing", 500);
+
+    const response = await axios.post(
+      "https://cloudapi.mailercloud.com/v1/senders/search",
+      { limit: 100, page: 1, search: "", sort_field: "sender_email", sort_order: "asc" },
+      { headers: { Authorization: API_KEY, "Content-Type": "application/json", Accept: "application/json" } }
+    );
+
+    const list = response.data?.data || response.data || [];
+    const senders = (Array.isArray(list) ? list : []).map((s) => ({
+      email: s.sender_email || s.email || "",
+      name:  s.sender_name  || s.name  || "",
+    })).filter((s) => s.email);
+
+    return sendResponse(res, 200, "Senders fetched", senders);
+  } catch (error) {
+    console.error("[MailerCloud] senders/search error:", error.response?.data || error.message);
+    return sendError(next, error.response?.data?.message || error.message, error.response?.status || 500);
+  }
+});
+
 export {
   getMailercloudTemplateByName,
   getAllMailerCloudTemplates,
   mailercloudWebhook,
   sendTemplateEmailToCallingData,
+  getMailerCloudSenders,
 };

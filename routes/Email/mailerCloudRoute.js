@@ -4,6 +4,7 @@ import {
   getAllMailerCloudTemplates,
   mailercloudWebhook,
   sendTemplateEmailToCallingData,
+  getMailerCloudSenders,
 } from "../../controllers/Email/mailerCloudController.js";
 import { protect } from "../../middleware/authMiddleware.js";
 
@@ -20,6 +21,7 @@ router.get("/webhook", (req, res) =>
 );
 router.get("/template", protect, getMailercloudTemplateByName);
 router.get("/templates", protect, getAllMailerCloudTemplates);
+router.get("/senders", protect, getMailerCloudSenders);
 // router.get(
 //   "/GetEmailStatus",
 //   protect,

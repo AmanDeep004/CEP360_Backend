@@ -129,12 +129,16 @@ const campaignSchema = new mongoose.Schema(
           templateName: { type: String },
           displayName:  { type: String },
           language:     { type: String },
+          variables:    { type: mongoose.Schema.Types.Mixed, default: {} },
         },
       ],
       email: [
         {
           templateId:   { type: String },
           templateName: { type: String },
+          fromEmail:    { type: String },
+          fromName:     { type: String },
+          variables:    { type: mongoose.Schema.Types.Mixed, default: {} },
         },
       ],
     },
