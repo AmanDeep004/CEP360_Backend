@@ -95,13 +95,6 @@ const campaignSchema = new mongoose.Schema(
       enum: ["Kestone", "Client", "Both", "ThirdParty", "External"],
     },
 
-    senderEmail: [
-      {
-        email: { type: String, trim: true },
-        timestamp: { type: Date, default: Date.now },
-      },
-    ],
-
     stage: {
       type: String,
       required: true,
