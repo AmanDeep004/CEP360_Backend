@@ -2,6 +2,7 @@ import axios from "axios";
 import errorHandler from "../../utils/index.js";
 import EmailStatus from "../../models/Email/EmailStatusModel.js";
 import CallingData from "../../models/callingDataModal.js";
+import Campaign from "../../models/campaignModel.js";
 import { logger } from "../../logger/index.js";
 import {
   createJob,
@@ -377,6 +378,9 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
       totalContacts: callingDataIds.length,
       templateName,
     });
+
+    // Increment campaign email sent counter (fire-and-forget)
+    Campaign.findByIdAndUpdate(campaignId, { $inc: { totalEmailSent: callingDataIds.length } }).catch(() => {});
 
     // ---- BACKGROUND PROCESSING ----
     (async () => {

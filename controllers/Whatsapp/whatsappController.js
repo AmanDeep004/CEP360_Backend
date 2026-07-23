@@ -3,6 +3,7 @@ import WhatsAppService from "../../services/doubletick.js";
 import pLimit from "p-limit";
 import CallingData from "../../models/callingDataModal.js";
 import DoubleTickData from "../../models/Webhook/webHookModel.js";
+import Campaign from "../../models/campaignModel.js";
 import { createJob, updateJob, completeJob, failJob } from "../../utils/jobTracker.js";
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
@@ -165,6 +166,7 @@ const sendTemplateMessage = asyncHandler(async (req, res, next) => {
       wabaPhoneNumber,
       contacts,
       templateDetails: templateInfo = {},
+      campaignId,
     } = req.body;
     console.log("[WA_TEMPLATE] Stage 1: Request received", {
       templateName,
@@ -201,6 +203,11 @@ const sendTemplateMessage = asyncHandler(async (req, res, next) => {
       totalContacts: contacts.length,
       templateName,
     });
+
+    // Increment campaign WhatsApp sent counter (fire-and-forget)
+    if (campaignId) {
+      Campaign.findByIdAndUpdate(campaignId, { $inc: { totalWhatsappSent: contacts.length } }).catch(() => {});
+    }
 
     // ---------------- BACKGROUND PROCESS ----------------
     console.log("[WA_TEMPLATE] Stage 4: Preparing background processing");

@@ -116,6 +116,9 @@ const campaignSchema = new mongoose.Schema(
     isCallingDataAssigned: { type: Boolean, default: false },
     isExternalSheetUploadAllowed: { type: Boolean, default: true },
 
+    totalEmailSent:    { type: Number, default: 0 },
+    totalWhatsappSent: { type: Number, default: 0 },
+
     allowedTemplates: {
       whatsapp: [
         {
