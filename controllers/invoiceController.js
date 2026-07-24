@@ -720,6 +720,8 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
       extraPay,
       noOfDaysWorked,              // payable days for this campaign (direct)
       noOfDaysAbsent,              // stored for record keeping
+      noOfDaysPresent,             // manually overridden present days
+      forgivenAbsent,              // manually overridden forgiven absences
       monthWorkingDays: payloadMonthWorkingDays,
       startDate,
       endDate,
@@ -771,6 +773,8 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
     invoice.ctc                     = Number(ctc);
     invoice.noOfDaysWorked          = payableDays;
     invoice.noOfDaysAbsent          = Number(noOfDaysAbsent || 0);
+    invoice.noOfDaysPresent         = Number(noOfDaysPresent ?? noOfDaysWorked ?? 0);
+    invoice.forgivenAbsent          = Number(forgivenAbsent ?? 0);
     invoice.monthWorkingDays        = monthWorkingDays;
     invoice.payableDays             = payableDays;
     invoice.incentive               = Number(incentive || 0);

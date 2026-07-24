@@ -46,6 +46,7 @@ const invoiceSchema = new mongoose.Schema(
     month: { type: String, req: true },
     noOfDaysWorked: { type: Number },    // weekday present days in agent's period
     noOfDaysAbsent: { type: Number },    // weekday absent days in agent's period
+    noOfDaysPresent: { type: Number },   // manually overridden present days
     totalWorkingDays: { type: Number },  // Mon-Fri in agent's actual sub-period
     monthWorkingDays: { type: Number },  // Mon-Fri in full salary cycle (divisor for per-day rate)
     forgivenAbsent: { type: Number, default: 1 },
