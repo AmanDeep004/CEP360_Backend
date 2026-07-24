@@ -16,6 +16,7 @@ import {
   getInvoicesOfAgent,
   getAllInvoicesOfPmMonthWise,
   getSalaryDashboard,
+  downloadInvoicesZip,
 } from "../controllers/invoiceController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
@@ -45,5 +46,6 @@ router.get(
   getAllInvoicesOfPmMonthWise
 );
 router.get("/salaryDashboard", protect, getSalaryDashboard);
+router.post("/downloadZip", protect, downloadInvoicesZip);
 
 export default router;

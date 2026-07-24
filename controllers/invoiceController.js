@@ -729,7 +729,7 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
       salaryModBy,
     } = req.body;
 
-    if (!startDate || !endDate || !ctc || !genBy) {
+    if (!startDate || !endDate || ctc === undefined || ctc === null || !genBy) {
       return sendError(next, "Missing required fields", 400);
     }
 
@@ -1404,6 +1404,44 @@ const getSalaryDashboard = asyncHandler(async (req, res, next) => {
   }
 });
 
+const downloadInvoicesZip = asyncHandler(async (req, res, next) => {
+  try {
+    const { invoiceIds } = req.body;
+    if (!Array.isArray(invoiceIds) || !invoiceIds.length) {
+      return sendError(next, "invoiceIds array is required", 400);
+    }
+
+    const invoices = await Invoice.find({ _id: { $in: invoiceIds } })
+      .populate("employeeId", "employeeName employeeCode")
+      .populate("campaign_id", "name")
+      .lean();
+
+    const JSZip = (await import("jszip")).default;
+    const zip = new JSZip();
+
+    await Promise.all(
+      invoices.map(async (inv) => {
+        const url = inv.invoiceGenerated?.invoiceUrl;
+        if (!url) return;
+        try {
+          const response = await axios.get(url, { responseType: "arraybuffer" });
+          const name = `${(inv.employeeId?.employeeName || "Agent").replace(/\s+/g, "_")}_${(inv.campaign_id?.name || "Campaign").replace(/\s+/g, "_")}.pdf`;
+          zip.file(name, response.data);
+        } catch (e) {
+          console.error("Failed to fetch PDF:", url, e.message);
+        }
+      })
+    );
+
+    const buffer = await zip.generateAsync({ type: "nodebuffer" });
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="Invoices.zip"`);
+    res.send(buffer);
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
 export {
   createInvoice,
   updateInvoice,
@@ -1420,4 +1458,5 @@ export {
   getInvoicesOfAgent,
   getAllInvoicesOfPmMonthWise,
   getSalaryDashboard,
+  downloadInvoicesZip,
 };
