@@ -19,6 +19,7 @@ import {
   priorityPreview,
   assignPriorityGroup,
   getPriorityGroups,
+  getDistinctFilterValues,
   deletePriorityGroup,
   swapPriorityGroups,
   getPrioritySlots,
@@ -127,6 +128,7 @@ router.put("/closePriority/:id", protect, closePriority);
 router.get("/:campaignId/priorityFilterOptions", protect, priorityFilterOptions);
 router.get("/:campaignId/priorityPreview",        protect, priorityPreview);
 router.get("/:campaignId/priorityGroups",         protect, getPriorityGroups);
+router.get("/:campaignId/distinctFilterValues",   protect, getDistinctFilterValues);
 router.post("/:campaignId/assignPriorityGroup",   protect, assignPriorityGroup);
 router.delete("/:campaignId/priorityGroup/:groupNo", protect, deletePriorityGroup);
 router.patch("/:campaignId/swapPriorityGroups",   protect, swapPriorityGroups);

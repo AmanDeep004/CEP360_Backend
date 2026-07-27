@@ -349,14 +349,17 @@ const getMailercloudTemplateByName = asyncHandler(async (req, res, next) => {
 //////////////////sending all data /////////////////////////
 
 // here
+const MAX_RANGE = 100000;
+
 const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
   try {
     const {
       callingDataIds,
+      filterParams,   // range-based mode: { range, batch, remark, isRegistered, priorityGroup }
       templateName,
       campaignId,
       campignType,
-      campaignName,
+      fromName: senderName,
     } = req.body;
 
     const fromEmail =
@@ -364,23 +367,64 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
       process.env.DEFAULT_SENDER_EMAIL ||
       process.env.MS_GRAPH_SENDER_EMAIL;
 
-    if (!callingDataIds?.length || !templateName || !campaignId || !fromEmail) {
-      return sendError(
-        next,
-        "callingDataIds, templateName, SenderEmail  and campaignId are required",
-        400
-      );
+    const hasIds    = callingDataIds?.length > 0;
+    const hasFilter = filterParams?.range && campaignId;
+
+    if (!templateName || !campaignId || !fromEmail || (!hasIds && !hasFilter)) {
+      return sendError(next, "templateName, campaignId, fromEmail and either callingDataIds or filterParams.range are required", 400);
     }
+
+    // ── Resolve IDs from filterParams (range mode) ────────────────────────────
+    let resolvedIds = hasIds ? callingDataIds : [];
+
+    if (hasFilter) {
+      const { range, batch, remark, isRegistered, priorityGroup } = filterParams;
+      const parts = String(range).split("-").map((v) => parseInt(v.trim(), 10));
+      if (parts.length !== 2 || parts.some((n) => isNaN(n))) {
+        return sendError(next, "Invalid range format. Use 1-1000", 400);
+      }
+      const [rangeMin, rangeMax] = parts;
+      const rangeSize = Math.min(rangeMax - rangeMin + 1, MAX_RANGE);
+      const rangeSkip = rangeMin - 1;
+
+      const dbFilter = { CampaignId: campaignId, "discrepencyInData.status": { $ne: true } };
+      if (batch)        dbFilter.batch = { $regex: new RegExp(batch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") };
+      if (isRegistered !== undefined && isRegistered !== "") dbFilter.isRegistered = isRegistered === "true" || isRegistered === true;
+      if (priorityGroup === "unassigned") dbFilter["priorityGroup.no"] = null;
+      else if (priorityGroup)             dbFilter["priorityGroup.label"] = priorityGroup;
+      if (remark) {
+        dbFilter.lastRemarks = remark === "Yet to Call" ? { $in: [null, "", "Yet to Call"] } : remark;
+      }
+
+      const DISPLAY_SORT = { "priorityGroup.no": 1, _id: 1 };
+      const docs = await CallingData.find(dbFilter)
+        .sort(DISPLAY_SORT)
+        .hint({ CampaignId: 1, "priorityGroup.no": 1, _id: 1 })
+        .skip(rangeSkip)
+        .limit(rangeSize)
+        .select("_id")
+        .lean();
+
+      resolvedIds = docs.map((d) => d._id);
+      console.log(`[EMAIL_SEND] Range mode: ${range} → resolved ${resolvedIds.length} IDs`);
+    }
+
+    if (!resolvedIds.length) {
+      return sendError(next, "No records found for the given filter/range", 400);
+    }
+
     // Create Redis job and respond immediately
-    const jobId = await createJob("email", callingDataIds.length);
+    const jobId = await createJob("email", resolvedIds.length);
     sendResponse(res, 200, "Email sending started", {
       jobId,
-      totalContacts: callingDataIds.length,
+      totalContacts: resolvedIds.length,
       templateName,
     });
 
     // Increment campaign email sent counter (fire-and-forget)
-    Campaign.findByIdAndUpdate(campaignId, { $inc: { totalEmailSent: callingDataIds.length } }).catch(() => {});
+    Campaign.findByIdAndUpdate(campaignId, {
+      $inc: { totalEmailSent: resolvedIds.length },
+    }).catch(() => {});
 
     // ---- BACKGROUND PROCESSING ----
     (async () => {
@@ -409,7 +453,7 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
         }
 
         const callingDataList = await CallingData.find({
-          _id: { $in: callingDataIds },
+          _id: { $in: resolvedIds },
         }).select(
           "Full_Name Office_Email_1 Office_Email_2 Personal_Email1 Personal_Email2  emailTemplates"
         );
@@ -532,7 +576,7 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
                   requestPayload: {
                     templateName,
                     fromEmail,
-                    campaignName: campaignName || "Campaign Team",
+                    fromName: senderName || fromEmail,
                     campaignType: campignType,
                     campaignId: String(campaignId),
                   },
@@ -556,7 +600,7 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
               const providerPayload = {
                 email: {
                   from: fromEmail,
-                  fromName: campaignName || "Campaign Team",
+                  fromName: senderName || fromEmail,
                   subject: template.name,
                   text: personalizedText,
                   html: personalizedHTML,
@@ -703,7 +747,7 @@ const sendTemplateEmailToCallingData = asyncHandler(async (req, res, next) => {
                 requestPayload: {
                   templateName,
                   fromEmail,
-                  campaignName: campaignName || "Campaign Team",
+                  fromName: senderName || fromEmail,
                   campaignType: campignType,
                   campaignId: String(campaignId),
                   recipientEmail,
@@ -836,20 +880,41 @@ const getMailerCloudSenders = asyncHandler(async (req, res, next) => {
 
     const response = await axios.post(
       "https://cloudapi.mailercloud.com/v1/senders/search",
-      { limit: 100, page: 1, search: "", sort_field: "sender_email", sort_order: "asc" },
-      { headers: { Authorization: API_KEY, "Content-Type": "application/json", Accept: "application/json" } }
+      {
+        limit: 100,
+        page: 1,
+        search: "",
+        sort_field: "sender_email",
+        sort_order: "asc",
+      },
+      {
+        headers: {
+          Authorization: API_KEY,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+      }
     );
 
     const list = response.data?.data || response.data || [];
-    const senders = (Array.isArray(list) ? list : []).map((s) => ({
-      email: s.sender_email || s.email || "",
-      name:  s.sender_name  || s.name  || "",
-    })).filter((s) => s.email);
+    const senders = (Array.isArray(list) ? list : [])
+      .map((s) => ({
+        email: s.sender_email || s.email || "",
+        name: s.sender_name || s.name || "",
+      }))
+      .filter((s) => s.email);
 
     return sendResponse(res, 200, "Senders fetched", senders);
   } catch (error) {
-    console.error("[MailerCloud] senders/search error:", error.response?.data || error.message);
-    return sendError(next, error.response?.data?.message || error.message, error.response?.status || 500);
+    console.error(
+      "[MailerCloud] senders/search error:",
+      error.response?.data || error.message
+    );
+    return sendError(
+      next,
+      error.response?.data?.message || error.message,
+      error.response?.status || 500
+    );
   }
 });
 

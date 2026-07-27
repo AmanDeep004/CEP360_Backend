@@ -629,6 +629,9 @@ const getDatabaseByAssignmentUnmasked = asyncHandler(async (req, res, next) => {
       remark,
       source,
       range,
+      batch,
+      isRegistered,
+      priorityGroup,
       page = 1,
       limit = 20,
     } = req.query;
@@ -641,43 +644,100 @@ const getDatabaseByAssignmentUnmasked = asyncHandler(async (req, res, next) => {
 
     if (assignment === "assigned") filter.agentId = { $ne: null };
     if (assignment === "notassigned") filter.agentId = null;
-
     if (agentId) filter.agentId = agentId;
 
-    if (source) {
-      filter.source = { $regex: source, $options: "i" };
+    if (source) filter.source = { $regex: source, $options: "i" };
+
+    if (batch) filter.batch = { $regex: new RegExp(batch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") };
+
+    if (isRegistered !== undefined && isRegistered !== "") {
+      filter.isRegistered = isRegistered === "true";
     }
 
-    // Validate range early before hitting the DB
-    let rangeMin, rangeMax;
+    if (priorityGroup) {
+      if (priorityGroup === "unassigned") filter["priorityGroup.no"] = null;
+      else filter["priorityGroup.label"] = priorityGroup;
+    }
+
+    // Remark filter — use denormalised lastRemarks field for DB-level filtering
+    if (remark) {
+      if (remark === "Yet to Call") {
+        filter.lastRemarks = { $in: [null, "", "Yet to Call"] };
+      } else {
+        filter.lastRemarks = remark;
+      }
+    }
+
+    // Display sort — must be identical for both range and normal paths
+    const DISPLAY_SORT = { "priorityGroup.no": 1, _id: 1 };
+
+    const MAX_RANGE = 100000;
+
+    // Range: slice row numbers X–Y in display order
     if (range) {
       const parts = range.split("-").map((v) => parseInt(v.trim(), 10));
       if (parts.length !== 2 || parts.some((n) => isNaN(n))) {
         return sendError(next, "Invalid range format. Use 100-200", 400);
       }
-      [rangeMin, rangeMax] = parts;
-      if (rangeMin > rangeMax) {
-        return sendError(next, "Range minimum should be less than maximum", 400);
+      const [rangeMin, rangeMax] = parts;
+      if (rangeMin < 1 || rangeMin > rangeMax) {
+        return sendError(next, "Range minimum should be ≥ 1 and ≤ maximum", 400);
       }
-    }
 
-    const baseQuery = CallingData.find(filter)
-      .populate({
-        path: "agentId",
-        select: "employeeName email",
-      })
-      .populate({
-        path: "callHistory",
-        populate: { path: "chatHistory", model: "CallHistory" },
-      })
-      .lean();
+      const rangeSize = Math.min(rangeMax - rangeMin + 1, MAX_RANGE); // cap at 1 lakh
+      const rangeSkip = rangeMin - 1;
 
-    // Fast path: no in-memory filtering needed — push skip/limit to DB
-    if (!remark && !range) {
-      const [data, total] = await Promise.all([
-        baseQuery.skip(skip).limit(limNum),
-        CallingData.countDocuments(filter),
-      ]);
+      // Count how many docs actually exist within this range window
+      const totalFiltered = await CallingData.countDocuments(filter);
+      const total = Math.max(0, Math.min(totalFiltered - rangeSkip, rangeSize));
+
+      // ── idsOnly mode: stream just _id array for bulk email/whatsapp triggering ──
+      // Used when frontend needs all IDs in a range (up to 1 lakh) for bulk send.
+      // Streams chunked JSON to avoid memory spike.
+      if (req.query.idsOnly === "true") {
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.setHeader("Transfer-Encoding", "chunked");
+        res.write(`{"status":"success","message":"IDs fetched successfully","data":{"total":${total},"ids":[`);
+
+        const cursor = CallingData.find(filter)
+          .sort(DISPLAY_SORT)
+          .skip(rangeSkip)
+          .limit(rangeSize)
+          .select("_id")
+          .lean()
+          .cursor({ batchSize: 2000 });
+
+        let first = true;
+        for await (const doc of cursor) {
+          if (!first) res.write(",");
+          res.write(JSON.stringify(doc._id));
+          first = false;
+        }
+        res.write(`]}}`);
+        res.end();
+        return;
+      }
+
+      // ── Normal paginated display within range (for DataGrid) ──
+      const pageSkip = (pageNum - 1) * limNum;
+      const effectiveSkip = rangeSkip + pageSkip;
+      const effectiveLimit = Math.min(rangeSize - pageSkip, limNum);
+
+      if (effectiveLimit <= 0) {
+        return sendResponse(res, 200, "Filtered database fetched successfully", {
+          total, page: pageNum, limit: limNum,
+          totalPages: Math.ceil(total / limNum),
+          data: [],
+        });
+      }
+
+      const data = await CallingData.find(filter)
+        .sort(DISPLAY_SORT)
+        .hint({ CampaignId: 1, "priorityGroup.no": 1, _id: 1 }) // use compound index for fast skip
+        .skip(effectiveSkip)
+        .limit(effectiveLimit)
+        .populate({ path: "agentId", select: "employeeName email" })
+        .lean();
 
       return sendResponse(res, 200, "Filtered database fetched successfully", {
         total,
@@ -688,38 +748,22 @@ const getDatabaseByAssignmentUnmasked = asyncHandler(async (req, res, next) => {
       });
     }
 
-    // In-memory filtering path (remark or range requires full fetch)
-    let data = await baseQuery;
-
-    if (remark) {
-      if (remark === "Yet to Call") {
-        data = data.filter((entry) => {
-          const history = entry.callHistory?.chatHistory;
-          return !history || history.length === 0;
-        });
-      } else {
-        data = data.filter((entry) => {
-          const history = entry.callHistory?.chatHistory;
-          if (!Array.isArray(history) || history.length === 0) return false;
-          const lastRemark = history[history.length - 1];
-          return lastRemark?.remarks === remark;
-        });
-      }
-    }
-
-    if (range) {
-      data = data.slice(rangeMin - 1, rangeMax);
-    }
-
-    const total = data.length;
-    const paginatedData = data.slice(skip, skip + limNum);
+    const [data, total] = await Promise.all([
+      CallingData.find(filter)
+        .sort(DISPLAY_SORT)
+        .skip(skip)
+        .limit(limNum)
+        .populate({ path: "agentId", select: "employeeName email" })
+        .lean(),
+      CallingData.countDocuments(filter),
+    ]);
 
     return sendResponse(res, 200, "Filtered database fetched successfully", {
       total,
       page: pageNum,
       limit: limNum,
       totalPages: Math.ceil(total / limNum),
-      data: paginatedData,
+      data,
     });
   } catch (err) {
     return sendError(next, err.message, 500);
@@ -1544,6 +1588,38 @@ const getPriorityGroups = asyncHandler(async (req, res, next) => {
 });
 
 /**
+ * GET /callingData/:campaignId/distinctFilterValues
+ * Returns distinct batch values and priority group labels for a campaign.
+ */
+const getDistinctFilterValues = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    if (!campaignId) return sendError(next, "campaignId is required", 400);
+
+    const campaignObjId = mongoose.Types.ObjectId.isValid(campaignId)
+      ? new mongoose.Types.ObjectId(campaignId)
+      : campaignId;
+
+    const [batches, priorities] = await Promise.all([
+      CallingData.distinct("batch", { CampaignId: campaignObjId, batch: { $nin: [null, ""] } }),
+      CallingData.aggregate([
+        { $match: { CampaignId: campaignObjId, "priorityGroup.no": { $ne: null } } },
+        { $group: { _id: "$priorityGroup.no", label: { $first: "$priorityGroup.label" } } },
+        { $sort: { _id: 1 } },
+        { $project: { _id: 0, no: "$_id", label: 1 } },
+      ]),
+    ]);
+
+    return sendResponse(res, 200, "Distinct filter values fetched", {
+      batches: batches.sort(),
+      priorities,
+    });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+/**
  * DELETE /callingData/:campaignId/priorityGroup/:groupNo
  * Resets priorityGroup to null for all records in this group.
  * Does NOT re-number other groups (gaps are left intentionally).
@@ -2197,6 +2273,7 @@ export {
   priorityPreview,
   assignPriorityGroup,
   getPriorityGroups,
+  getDistinctFilterValues,
   deletePriorityGroup,
   swapPriorityGroups,
   getPrioritySlots,
