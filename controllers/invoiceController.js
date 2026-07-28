@@ -87,7 +87,7 @@ async function getAttendanceSummary(userId, startDate, endDate) {
   };
 }
 
-const insertSignatureFromUrl = (url, doc) => {
+const insertSignatureFromUrl = (url, doc, x, y, width, height) => {
   return new Promise((resolve, reject) => {
     https.get(url, (response) => {
       const chunks = [];
@@ -96,7 +96,7 @@ const insertSignatureFromUrl = (url, doc) => {
         .on("end", () => {
           const buffer = Buffer.concat(chunks);
           try {
-            doc.image(buffer, 40, 430, { width: 120, height: 60 });
+            doc.image(buffer, x, y, { width, height });
             resolve();
           } catch (err) {
             reject(err);
@@ -788,6 +788,9 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
     invoice.invoiceGenerated.genBy  = genBy;
     invoice.salary                  = gross;
 
+    // Persist all field updates immediately — independent of PDF generation
+    await invoice.save();
+
     // Generate PDF in memory
     const pdfFilename = `invoice-${invoice._id}-${Date.now()}.pdf`;
     const doc = new PDFDocument({ size: "A4", margin: 40 });
@@ -798,172 +801,132 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
       pdfBuffers.push(chunk);
     });
 
-    // Draw outer border
-    doc.rect(20, 20, 555, 800).stroke("#333");
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    const _ed           = new Date(endDate);
+    const _lastCal      = new Date(_ed.getFullYear(), _ed.getMonth() + 1, 0);
+    const lastDayStr    = _lastCal.toLocaleDateString("en-GB");
+    const invoiceMonth  = _ed.toLocaleString("default", { month: "long" });
+    const invoiceYear   = _ed.getFullYear();
+    const fy            = `${invoiceYear}-${invoiceYear + 1}`;
+    const agentName     = employee.employeeName || "Agent";
 
-    // HEADER
-    doc.rect(20, 20, 555, 30).fillAndStroke("#666", "#333");
-    doc
-      .fillColor("#fff")
-      .font("Helvetica-Bold")
-      .fontSize(18)
-      .text("INVOICE", 20, 28, { align: "center", width: 555 });
-    doc.fillColor("#000");
+    // ── Layout ───────────────────────────────────────────────────────────────
+    const L   = 20;        // left edge
+    const W   = 555;       // total width
+    const MX  = L + 10;   // content left padding
+    const COL = W / 2;    // 277.5 — column width
+    const R2  = L + COL;  // right column x = 297.5
 
-    // --- TOP INFO BLOCKS ---
+    // ── OUTER BORDER ─────────────────────────────────────────────────────────
     doc.lineWidth(1).strokeColor("#333");
+    doc.rect(L, 15, W, 808).stroke();
 
-    // Left block
-    doc.rect(20, 50, 277.5, 110).stroke();
-    doc.font("Helvetica-Bold").fontSize(10).text("From :", 30, 60);
-    doc
-      .font("Helvetica")
-      .fontSize(10)
-      .text(employee.employeeName || "N/A", 80, 60);
-    doc.font("Helvetica-Bold").text("Employee Code:", 30, 80);
-    doc.font("Helvetica").text(employee.employeeCode || "N/A", 120, 80);
-    doc.font("Helvetica-Bold").text("Address:", 30, 100);
-    doc
-      .font("Helvetica")
-      .text(employee.location || "N/A", 80, 100, { width: 200 });
-
-    // Right block
-    doc.rect(297.5, 50, 277.5, 110).stroke();
-    doc.font("Helvetica-Bold").text("Contact Number:", 307.5, 60);
-    doc.font("Helvetica").text(employee.mobile || "N/A", 410, 60);
-    doc.font("Helvetica-Bold").text("Mobile Number:", 307.5, 75);
-    doc.font("Helvetica").text(employee.mobile || "N/A", 410, 75);
-    doc.font("Helvetica-Bold").text("Permanent Account Number:", 307.5, 90);
-    doc.font("Helvetica").text(employee.pan || "N/A", 470, 90);
-    doc.font("Helvetica-Bold").text("GSTIN Number:", 307.5, 105);
-    doc.font("Helvetica").text(employee.gstin || "N/A", 410, 105);
-
-    // --- TO & INVOICE INFO BLOCKS ---
-    doc.rect(20, 160, 277.5, 80).stroke();
-    doc.font("Helvetica-Bold").text("TO", 30, 170);
-    doc
-      .font("Helvetica")
-      .text("Kestone IMS – A Division of CL Educate Limited", 60, 170, {
-        width: 220,
-      });
-    doc
-      .font("Helvetica")
-      .text(
-        "#37, 7th Cross, RMJ Mandoth Towers, 3rd Floor, Vasanth Nagar, Bangalore-5600052",
-        30,
-        190,
-        { width: 260 }
-      );
-
-    doc.rect(297.5, 160, 277.5, 80).stroke();
-    doc.font("Helvetica-Bold").text("Invoice No :", 307.5, 170);
-    doc.font("Helvetica").text(invoice._id, 370, 170);
-    doc.font("Helvetica-Bold").text("FY :", 307.5, 185);
-    doc
-      .font("Helvetica")
-      .text(
-        new Date(startDate).getFullYear() +
-          "-" +
-          (new Date(startDate).getFullYear() + 1) +
-          "/" +
-          new Date(startDate).toLocaleString("default", { month: "long" }),
-        340,
-        185
-      );
-    doc.font("Helvetica-Bold").text("Date :", 307.5, 200);
-    doc
-      .font("Helvetica")
-      .text(new Date(endDate).toLocaleDateString("en-GB"), 350, 200);
-    doc.font("Helvetica-Bold").text("GSTIN No :", 307.5, 215);
-    doc.font("Helvetica").text("29AACCB3885C2ZO", 370, 215);
-
-    // --- PARTICULARS & AMOUNT TABLE HEADER ---
-    doc.rect(20, 240, 370, 30).fillAndStroke("#666", "#333");
-    doc.rect(390, 240, 185, 30).fillAndStroke("#666", "#333");
-    doc
-      .fillColor("#fff")
-      .font("Helvetica-Bold")
-      .fontSize(12)
-      .text("PARTICULARS", 25, 250, { width: 360 })
-      .text("AMOUNT (Rs)", 395, 250, { width: 175, align: "right" });
+    // ── HEADER  y=15 h=40 → 55 ───────────────────────────────────────────────
+    doc.rect(L, 15, W, 40).fillAndStroke("#666", "#333");
+    doc.fillColor("#fff").font("Helvetica-Bold").fontSize(20)
+      .text("INVOICE", L, 24, { align: "center", width: W });
     doc.fillColor("#000");
 
-    // --- PARTICULARS & AMOUNT TABLE BODY ---
-    doc.rect(20, 270, 370, 80).stroke();
-    doc.rect(390, 270, 185, 80).stroke();
-    doc
-      .font("Helvetica")
-      .fontSize(10)
+    // ── FROM (left) + CONTACT (right)  y=55 h=130 → 185 ─────────────────────
+    doc.lineWidth(1).strokeColor("#333");
+    doc.rect(L,  55, COL,     130).stroke();
+    doc.rect(R2, 55, W - COL, 130).stroke();
+
+    doc.font("Helvetica-Bold").fontSize(10).text("From :", MX, 65);
+    doc.font("Helvetica").fontSize(10).text(agentName, MX + 45, 65);
+    doc.font("Helvetica-Bold").text("Employee Code:", MX, 85);
+    doc.font("Helvetica").text(employee.employeeCode || "N/A", MX + 90, 85);
+    doc.font("Helvetica-Bold").text("Address:", MX, 105);
+    doc.font("Helvetica").text(employee.location || "N/A", MX + 55, 105, { width: COL - 65 });
+
+    doc.font("Helvetica-Bold").text("Contact Number:", R2 + 10, 65);
+    doc.font("Helvetica").text(employee.mobile || "N/A", R2 + 105, 65);
+    doc.font("Helvetica-Bold").text("Mobile Number:", R2 + 10, 82);
+    doc.font("Helvetica").text(employee.mobile || "N/A", R2 + 100, 82);
+    doc.font("Helvetica-Bold").text("Permanent Account Number:", R2 + 10, 99);
+    doc.font("Helvetica").text(employee.pan || "N/A", R2 + 168, 99);
+    doc.font("Helvetica-Bold").text("GSTIN Number:", R2 + 10, 116);
+    doc.font("Helvetica").text(employee.gstin || "N/A", R2 + 92, 116);
+
+    // ── TO (left) + INVOICE INFO (right)  y=185 h=95 → 280 ──────────────────
+    doc.rect(L,  185, COL,     95).stroke();
+    doc.rect(R2, 185, W - COL, 95).stroke();
+
+    doc.font("Helvetica-Bold").text("TO", MX, 196);
+    doc.font("Helvetica").text("Kestone IMS – A Division of CL Educate Limited", MX + 22, 196, { width: COL - 32 });
+    doc.font("Helvetica").text(
+      "#37, 7th Cross, RMJ Mandoth Towers, 3rd Floor, Vasanth Nagar, Bangalore-5600052",
+      MX, 218, { width: COL - 15 }
+    );
+
+    doc.font("Helvetica-Bold").text("Invoice No :", R2 + 10, 196);
+    doc.font("Helvetica").text(String(invoice._id).slice(-12).toUpperCase(), R2 + 80, 196);
+    doc.font("Helvetica-Bold").text("FY :", R2 + 10, 216);
+    doc.font("Helvetica").text(`${fy} / ${invoiceMonth}`, R2 + 30, 216);
+    doc.font("Helvetica-Bold").text("Date :", R2 + 10, 236);
+    doc.font("Helvetica").text(lastDayStr, R2 + 45, 236);
+    doc.font("Helvetica-Bold").text("GSTIN No :", R2 + 10, 256);
+    doc.font("Helvetica").text("29AACCB3885C2ZO", R2 + 72, 256);
+
+    // ── PARTICULARS TABLE HEADER  y=280 h=35 → 315 ───────────────────────────
+    doc.rect(L,     280, 370, 35).fillAndStroke("#666", "#333");
+    doc.rect(L+370, 280, 185, 35).fillAndStroke("#666", "#333");
+    doc.fillColor("#fff").font("Helvetica-Bold").fontSize(12)
+      .text("PARTICULARS", MX, 291, { width: 355 })
+      .text("AMOUNT (Rs)", L + 370, 291, { width: 180, align: "right" });
+    doc.fillColor("#000");
+
+    // ── PARTICULARS TABLE BODY  y=315 h=200 → 515 ────────────────────────────
+    doc.lineWidth(1).strokeColor("#333");
+    doc.rect(L,     315, 370, 200).stroke();
+    doc.rect(L+370, 315, 185, 200).stroke();
+
+    doc.font("Helvetica").fontSize(10)
       .text(
-        "Professional Charges for the M/O " +
-          new Date(startDate).toLocaleString("default", { month: "long" }) +
-          "' " +
-          new Date(startDate).getFullYear() +
-          " for rendering services as per below detail",
-        25,
-        275,
-        { width: 360, height: 100 }
+        `Professional Charges for the M/O ${invoiceMonth}' ${invoiceYear} for rendering services as per below detail`,
+        MX, 322, { width: 355 }
       );
-    doc.text(`Gross Fees: INR. ${gross}/-`, 25, 295);
-    doc.text(`Incentive or other payment: ${incentive}`, 25, 310);
-    doc.text(`Extra Pay: ${extraPay}`, 25, 325);
-    doc.text(`Arrears: ${arrears}`, 25, 340);
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(16)
-      .text(`INR. ${finalCTC}/-`, 395, 310, { width: 175, align: "right" });
+    doc.text(`Gross Fees: INR. ${gross}/-`,                    MX, 360);
+    doc.text(`Incentive or other payment: ${incentive}`,       MX, 380);
+    doc.text(`Extra Pay: ${extraPay}`,                         MX, 400);
+    doc.text(`Arrears: ${arrears}`,                            MX, 420);
 
-    // --- TOTAL AMOUNT PAYABLE ---
-    doc.rect(20, 350, 370, 30).fillAndStroke("#666", "#333");
-    doc.rect(390, 350, 185, 30).fillAndStroke("#666", "#333");
-    doc
-      .fillColor("#fff")
-      .font("Helvetica-Bold")
-      .fontSize(12)
-      .text("TOTAL AMOUNT PAYABLE", 25, 360, { width: 360 })
-      .text(`INR. ${finalCTC}/-`, 395, 360, { width: 175, align: "right" });
+    doc.font("Helvetica-Bold").fontSize(16)
+      .text(`INR. ${finalCTC}/-`, L + 370, 390, { width: 180, align: "right" });
+
+    // ── TOTAL AMOUNT PAYABLE  y=515 h=40 → 555 ───────────────────────────────
+    doc.rect(L,     515, 370, 40).fillAndStroke("#666", "#333");
+    doc.rect(L+370, 515, 185, 40).fillAndStroke("#666", "#333");
+    doc.fillColor("#fff").font("Helvetica-Bold").fontSize(12)
+      .text("TOTAL AMOUNT PAYABLE", MX, 529, { width: 355 })
+      .text(`INR. ${finalCTC}/-`, L + 370, 529, { width: 180, align: "right" });
     doc.fillColor("#000");
 
-    // --- AMOUNT IN WORDS ---
-    doc.rect(20, 380, 555, 30).fillAndStroke("#666", "#333");
-    doc
-      .fillColor("#fff")
-      .font("Helvetica-Bold")
-      .fontSize(11)
-      .text(`AMOUNT IN WORDS : ${finalCTC} ONLY`, 25, 390, { width: 545 });
+    // ── AMOUNT IN WORDS  y=555 h=40 → 595 ────────────────────────────────────
+    doc.rect(L, 555, W, 40).fillAndStroke("#666", "#333");
+    doc.fillColor("#fff").font("Helvetica-Bold").fontSize(11)
+      .text(`AMOUNT IN WORDS : ${finalCTC} ONLY`, MX, 569, { width: W - 20 });
     doc.fillColor("#000");
 
-    // --- SIGNATURE & NAME BLOCK ---
-    doc.rect(20, 410, 277.5, 100).stroke();
-    doc.rect(297.5, 410, 277.5, 100).stroke();
+    // ── SIGNATURE BOXES  y=595 h=228 → 823 ───────────────────────────────────
+    doc.lineWidth(1).strokeColor("#333");
+    doc.rect(L,  595, COL,     228).stroke();
+    doc.rect(R2, 595, W - COL, 228).stroke();
 
-    // Signature image (if available)
+    // Left box — SIGNATURE label at top, image centered in remaining space
+    doc.font("Helvetica-Bold").fontSize(10)
+      .text(`SIGNATURE - ${agentName}`, MX, 605);
+
     try {
-      const signaturePath = await insertSignatureFromUrl(
-        employee?.signature,
-        doc
-      );
-      if (signaturePath && fs.existsSync(signaturePath)) {
-        doc.image(signaturePath, 40, 430, { width: 120, height: 60 });
-      }
+      await insertSignatureFromUrl(employee?.signature, doc, MX + 10, 670, 140, 100);
     } catch (signatureError) {
       console.error("Signature insertion failed:", signatureError);
-      // Continue without signature
     }
 
-    // Name and signature info
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(10)
-      .text("NAME - Ishant Hingorani", 310, 430);
-    doc
-      .font("Helvetica-Bold")
-      .text(
-        "DATE - " + new Date(endDate).toLocaleDateString("en-GB"),
-        310,
-        450
-      );
-    doc.font("Helvetica-Bold").text("SIGNATURE - Ishant Hingorani", 310, 470);
+    // Right box — NAME, DATE centered
+    doc.font("Helvetica-Bold").fontSize(10)
+      .text(`NAME - ${agentName}`,  R2, 695, { width: W - COL, align: "center" })
+      .text(`DATE - ${lastDayStr}`, R2, 712, { width: W - COL, align: "center" });
 
     doc.end();
 
@@ -1300,7 +1263,9 @@ const getSalaryDashboard = asyncHandler(async (req, res, next) => {
     }
 
     // All invoices for these agents this month (to compute already-generated payable days)
-    const existingInvoices = await Invoice.find({ employeeId: { $in: agentIds }, month }).lean();
+    const existingInvoices = await Invoice.find({ employeeId: { $in: agentIds }, month })
+      .populate({ path: "invoiceGenerated.genBy", select: "employeeName" })
+      .lean();
 
     // Per-agent total payable days already generated across ALL campaigns this month
     const agentGenDays = {};
@@ -1379,13 +1344,17 @@ const getSalaryDashboard = asyncHandler(async (req, res, next) => {
         presentDates,
         absentDates,
         existingInvoice: existingInvoice ? {
-          _id: existingInvoice._id,
-          payableDays:    existingInvoice.payableDays,
-          salary:         existingInvoice.salary,
-          noOfDaysWorked: existingInvoice.noOfDaysWorked,
-          incentive:      existingInvoice.incentive,
-          arrears:        existingInvoice.arrears,
-          extraPay:       existingInvoice.extraPay,
+          _id:             existingInvoice._id,
+          payableDays:     existingInvoice.payableDays,
+          salary:          existingInvoice.salary,
+          noOfDaysWorked:  existingInvoice.noOfDaysWorked,
+          noOfDaysPresent: existingInvoice.noOfDaysPresent,
+          noOfDaysAbsent:  existingInvoice.noOfDaysAbsent,
+          incentive:       existingInvoice.incentive,
+          arrears:         existingInvoice.arrears,
+          extraPay:        existingInvoice.extraPay,
+          ctc:             existingInvoice.ctc,
+          endDate:         existingInvoice.endDate,
           invoiceGenerated: existingInvoice.invoiceGenerated,
         } : null,
       });
