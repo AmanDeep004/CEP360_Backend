@@ -234,60 +234,88 @@ const getSharedReport = asyncHandler(async (req, res, next) => {
   });
 });
 
-// Column definitions for Excel download: { key, header, width }
-const DOWNLOAD_COLUMNS = [
+// Static columns for Excel download
+const STATIC_COLUMNS = [
   // Contact
-  { key: "Contact_ID",      header: "Contact ID",      width: 18 },
-  { key: "Full_Name",       header: "Full Name",        width: 24 },
-  { key: "Gender",          header: "Gender",           width: 10 },
-  { key: "Job_Title",       header: "Job Title",        width: 28 },
-  { key: "Job_Seniority",   header: "Job Seniority",    width: 18 },
-  { key: "Job_Function",    header: "Job Function",     width: 20 },
-  { key: "Contact_City",    header: "City",             width: 16 },
-  { key: "Contact_State",   header: "State",            width: 16 },
-  { key: "Contact_Country", header: "Country",          width: 16 },
-  { key: "Contact_Region",  header: "Region",           width: 16 },
+  { key: "Contact_ID",      header: "Contact ID",       width: 18 },
+  { key: "Full_Name",       header: "Full Name",         width: 24 },
+  { key: "Gender",          header: "Gender",            width: 10 },
+  { key: "Job_Title",       header: "Job Title",         width: 28 },
+  { key: "Job_Seniority",   header: "Job Seniority",     width: 18 },
+  { key: "Job_Function",    header: "Job Function",      width: 20 },
+  { key: "Contact_City",    header: "City",              width: 16 },
+  { key: "Contact_State",   header: "State",             width: 16 },
+  { key: "Contact_Country", header: "Country",           width: 16 },
+  { key: "Contact_Region",  header: "Region",            width: 16 },
   // Company
-  { key: "Company_Name",    header: "Company Name",     width: 28 },
-  { key: "Company_Segment", header: "Company Segment",  width: 18 },
-  { key: "Industry",        header: "Industry",         width: 22 },
-  { key: "Sub_Industry",    header: "Sub Industry",     width: 22 },
-  { key: "Employees_Range", header: "Employees Range",  width: 16 },
-  { key: "Turnover_Range",  header: "Turnover Range",   width: 18 },
+  { key: "Company_Name",    header: "Company Name",      width: 28 },
+  { key: "Company_Segment", header: "Company Segment",   width: 18 },
+  { key: "Industry",        header: "Industry",          width: 22 },
+  { key: "Sub_Industry",    header: "Sub Industry",      width: 22 },
+  { key: "Employees_Range", header: "Employees Range",   width: 16 },
+  { key: "Turnover_Range",  header: "Turnover Range",    width: 18 },
   // CRM Status
-  { key: "isRegistered",    header: "Registered",       width: 12 },
-  { key: "lastRemarks",     header: "Last Remarks",     width: 28 },
-  { key: "lastCallingDate", header: "Last Calling Date", width: 20 },
+  { key: "isRegistered",    header: "Registered",        width: 12 },
+  { key: "lastRemarks",     header: "Last Remarks",      width: 28 },
+  { key: "lastCallingDate", header: "Last Calling Date",  width: 20 },
+  // Agent
+  { key: "agentName",       header: "Agent Name",        width: 22 },
+  { key: "agentEmail",      header: "Agent Email",       width: 28 },
+  { key: "agentId",         header: "Agent ID",          width: 18 },
+  { key: "agentMobile",     header: "Agent Mobile",      width: 16 },
 ];
 
-const SELECT_DOWNLOAD = DOWNLOAD_COLUMNS.map((c) => c.key).join(" ");
+const SELECT_DOWNLOAD = "Contact_ID Full_Name Gender Job_Title Job_Seniority Job_Function " +
+  "Contact_City Contact_State Contact_Country Contact_Region " +
+  "Company_Name Company_Segment Industry Sub_Industry Employees_Range Turnover_Range " +
+  "isRegistered lastRemarks lastCallingDate agentId callHistory";
+
+const fmtDate = (d) => d ? new Date(d).toLocaleString("en-GB") : "";
 
 /**
  * GET /api/campaignReport/:reportId/download
- * Returns an Excel (.xlsx) of all filtered rows, excluding mobile/email/first/last name.
+ * Returns an Excel (.xlsx) of all filtered rows with agent info and full call history.
  */
 const downloadReport = asyncHandler(async (req, res, next) => {
   const report = await CampaignReport.findById(req.params.reportId).lean();
   if (!report) return sendError(next, "Report not found", 404);
 
   const { segment, registered, called } = req.query;
-  const filters = {};
-  if (segment)    filters.segment    = segment;
-  if (registered) filters.registered = registered;
-  if (called)     filters.called     = called;
 
   const query = buildBaseQuery(
     report.campaignId, report.reportType,
     report.dateFrom, report.dateTo,
     report.timeFrom, report.timeTo
   );
-  if (filters.segment)                         query.Company_Segment = filters.segment;
-  if (filters.registered === "Registered")     query.isRegistered = true;
-  if (filters.registered === "Not Registered") query.isRegistered = false;
-  if (filters.called === "Called")             query.lastCallingDate = { ...(query.lastCallingDate || {}), $ne: null };
-  if (filters.called === "Not Called")         query.lastCallingDate = null;
+  if (segment)                         query.Company_Segment = segment;
+  if (registered === "Registered")     query.isRegistered = true;
+  if (registered === "Not Registered") query.isRegistered = false;
+  if (called === "Called")             query.lastCallingDate = { ...(query.lastCallingDate || {}), $ne: null };
+  if (called === "Not Called")         query.lastCallingDate = null;
 
-  const records = await CallingData.find(query).select(SELECT_DOWNLOAD).lean();
+  // Populate agentId (user info) and callHistory (chat entries)
+  const records = await CallingData.find(query)
+    .select(SELECT_DOWNLOAD)
+    .populate({ path: "agentId",     select: "employeeName email mobile employeeCode" })
+    .populate({ path: "callHistory", select: "chatHistory", options: { lean: true } })
+    .lean();
+
+  // Find max number of calls across all records for dynamic call columns
+  let maxCalls = 0;
+  for (const r of records) {
+    const n = r.callHistory?.chatHistory?.length || 0;
+    if (n > maxCalls) maxCalls = n;
+  }
+
+  // Build dynamic call columns: Call 1 Date, Call 1 Duration, Call 1 Remark, Call 1 Recording, ...
+  const callColumns = [];
+  for (let i = 1; i <= maxCalls; i++) {
+    callColumns.push({ key: `call${i}_date`,     header: `Call ${i} Date`,     width: 20 });
+    callColumns.push({ key: `call${i}_duration`, header: `Call ${i} Duration`, width: 16 });
+    callColumns.push({ key: `call${i}_remark`,   header: `Call ${i} Remark`,   width: 30 });
+  }
+
+  const allColumns = [...STATIC_COLUMNS, ...callColumns];
 
   // Build workbook
   const wb = new ExcelJS.Workbook();
@@ -295,24 +323,42 @@ const downloadReport = asyncHandler(async (req, res, next) => {
   wb.created = new Date();
 
   const ws = wb.addWorksheet("Campaign Report");
-  ws.columns = DOWNLOAD_COLUMNS;
+  ws.columns = allColumns;
 
   // Style header row
   const headerRow = ws.getRow(1);
-  headerRow.font    = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
-  headerRow.fill    = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0D9A8F" } };
+  headerRow.font      = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+  headerRow.fill      = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0D9A8F" } };
   headerRow.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
-  headerRow.height  = 28;
+  headerRow.height    = 28;
 
   // Add data rows
   for (const r of records) {
     const row = {};
-    for (const col of DOWNLOAD_COLUMNS) {
+
+    // Static fields
+    for (const col of STATIC_COLUMNS) {
       const k = col.key;
       if (k === "isRegistered")    { row[k] = r[k] ? "Yes" : "No"; continue; }
-      if (k === "lastCallingDate") { row[k] = r[k] ? new Date(r[k]).toLocaleString("en-GB") : ""; continue; }
+      if (k === "lastCallingDate") { row[k] = fmtDate(r[k]); continue; }
+      if (k === "agentName")       { row[k] = r.agentId?.employeeName  || ""; continue; }
+      if (k === "agentEmail")      { row[k] = r.agentId?.email         || ""; continue; }
+      if (k === "agentId")         { row[k] = r.agentId?.employeeCode  || String(r.agentId?._id || ""); continue; }
+      if (k === "agentMobile")     { row[k] = r.agentId?.mobile        || ""; continue; }
       row[k] = r[k] != null ? r[k] : "";
     }
+
+    // Dynamic call history columns
+    const chatHistory = r.callHistory?.chatHistory || [];
+    for (let i = 0; i < maxCalls; i++) {
+      const entry = chatHistory[i];
+      row[`call${i + 1}_date`]      = entry ? fmtDate(entry.callingDate) : "";
+      row[`call${i + 1}_duration`]  = entry?.overallTime != null
+        ? (() => { const s = entry.overallTime; return s >= 60 ? `${Math.floor(s/60)}m ${s%60}s` : `${s}s`; })()
+        : "";
+      row[`call${i + 1}_remark`]    = entry ? (entry.remarks || "") : "";
+    }
+
     const dataRow = ws.addRow(row);
     dataRow.alignment = { vertical: "middle", wrapText: false };
   }
@@ -321,7 +367,7 @@ const downloadReport = asyncHandler(async (req, res, next) => {
   ws.views = [{ state: "frozen", ySplit: 1 }];
 
   const safeName = (report.campaignName || "report").replace(/[^a-zA-Z0-9_-]/g, "_");
-  const filename = `campaign_report_${safeName}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  const filename  = `campaign_report_${safeName}_${new Date().toISOString().slice(0, 10)}.xlsx`;
 
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
