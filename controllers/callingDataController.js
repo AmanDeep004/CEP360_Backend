@@ -1223,6 +1223,7 @@ const CALLING_DATA_ALLOWED_FIELDS = [
   "Company_Segment", "Website", "Company_LinkedIn_Profile",
   "Company_Phone1", "Company_Phone2",
   "source", "batch", "dataSourceType",
+  "lastRemarks",
 ];
 
 const UpdateCallingData = asyncHandler(async (req, res, next) => {
