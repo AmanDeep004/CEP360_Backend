@@ -238,6 +238,13 @@ const getCallingDataByAgentAndCampaign = asyncHandler(
         return sendError(next, "Both agentId and campaignId are required", 400);
       }
 
+      // Only show calling data for active campaigns
+      const campaign = await campaignModel.findById(campaignId).select("status").lean();
+      if (!campaign) return sendError(next, "Campaign not found", 404);
+      if (campaign.status !== "active") {
+        return sendResponse(res, 200, "Campaign is not active", []);
+      }
+
       const callingData = await callingDataModal
         .find({
           agentId: agentId.trim(),
@@ -534,6 +541,15 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
 
     if (!campaignId) {
       return sendError(next, "campaignId is required", 400);
+    }
+
+    // Only show calling data for active campaigns
+    const campaign = await campaignModel.findById(campaignId).select("status").lean();
+    if (!campaign) return sendError(next, "Campaign not found", 404);
+    if (campaign.status !== "active") {
+      return sendResponse(res, 200, "Campaign is not active", {
+        data: [], total: 0, page: 1, totalPages: 0,
+      });
     }
 
     const pageNum = parseInt(page, 10);

@@ -1292,11 +1292,16 @@ const getPriorityList = asyncHandler(async (req, res, next) => {
   try {
     const { agentId } = req.params;
 
+    // Only show priority items from active campaigns
+    const activeCampaigns = await Campaign.find({ status: "active" }).select("_id").lean();
+    const activeCampaignIds = activeCampaigns.map((c) => c._id);
+
     const endOfDay = new Date();
     endOfDay.setHours(23, 59, 59, 999);
 
     const priorities = await CallingData.find({
       agentId: new mongoose.Types.ObjectId(agentId),
+      CampaignId: { $in: activeCampaignIds },
       "priority.isActive": true,
       "priority.priorityDate": { $lte: endOfDay },
     })
