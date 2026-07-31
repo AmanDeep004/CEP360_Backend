@@ -14,9 +14,10 @@ const { asyncHandler, sendError, sendResponse } = errorHandler;
 
 const getAsset = () => AssetModel();
 
-const POPULATE_AGENT = { path: "assignedAgent", select: "employeeName employeeCode email mobile" };
-const POPULATE_PM    = { path: "associatedPM",  select: "employeeName email" };
-const POPULATE_BY    = { path: "assignedBy",    select: "employeeName" };
+const POPULATE_AGENT    = { path: "assignedAgent", select: "employeeName employeeCode email mobile" };
+const POPULATE_PM       = { path: "associatedPM",  select: "employeeName email" };
+const POPULATE_BY       = { path: "assignedBy",    select: "employeeName" };
+const POPULATE_ADDED_BY = { path: "addedBy",       select: "employeeName" };
 
 // ── GET /asset  — list with filters & pagination ──────────────────────────────
 export const getAssets = asyncHandler(async (req, res, next) => {
@@ -24,7 +25,7 @@ export const getAssets = asyncHandler(async (req, res, next) => {
     const Asset = getAsset();
     const { status, pmId, search, page = 1, limit = 20 } = req.query;
 
-    const filter = {};
+    const filter = { isDeleted: { $ne: true } };
     if (status === "assigned" || status === "unassigned") filter.status = status;
     if (pmId) filter.associatedPM = pmId;
     if (search) {
@@ -44,6 +45,7 @@ export const getAssets = asyncHandler(async (req, res, next) => {
       .populate(POPULATE_AGENT)
       .populate(POPULATE_PM)
       .populate(POPULATE_BY)
+      .populate(POPULATE_ADDED_BY)
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit))
@@ -65,8 +67,8 @@ export const getAssetStats = asyncHandler(async (req, res, next) => {
   try {
     const Asset = getAsset();
     const [total, assigned] = await Promise.all([
-      Asset.countDocuments(),
-      Asset.countDocuments({ status: "assigned" }),
+      Asset.countDocuments({ isDeleted: { $ne: true } }),
+      Asset.countDocuments({ isDeleted: { $ne: true }, status: "assigned" }),
     ]);
     return sendResponse(res, 200, "Asset stats", {
       total,
@@ -84,22 +86,23 @@ export const createAsset = asyncHandler(async (req, res, next) => {
     const Asset = getAsset();
     const { assetNo, vendorName, assetBrand, assetModel, assetSerialNumber } = req.body;
 
-    if (!assetNo) return sendError(next, "Asset No is required", 400);
+    if (!assetSerialNumber?.trim()) return sendError(next, "Asset Serial Number is required", 400);
 
-    const exists = await Asset.findOne({ assetNo: assetNo.trim() }).lean();
-    if (exists) return sendError(next, "Asset No already exists", 400);
+    const exists = await Asset.findOne({ assetSerialNumber: assetSerialNumber.trim() }).lean();
+    if (exists) return sendError(next, "Asset Serial Number already exists", 400);
 
     const asset = await Asset.create({
-      assetNo:           assetNo.trim(),
+      assetNo:           assetNo?.trim() || "",
       vendorName:        vendorName?.trim() || "",
       assetBrand:        assetBrand?.trim() || "",
       assetModel:        assetModel?.trim() || "",
-      assetSerialNumber: assetSerialNumber?.trim() || null,
+      assetSerialNumber: assetSerialNumber.trim(),
+      addedBy:           req.user._id,
     });
 
     return sendResponse(res, 201, "Asset created", asset);
   } catch (err) {
-    if (err.code === 11000) return sendError(next, "Asset No or Serial Number already exists", 400);
+    if (err.code === 11000) return sendError(next, "Asset Serial Number already exists", 400);
     return sendError(next, err.message, 500);
   }
 });
@@ -114,17 +117,21 @@ export const updateAsset = asyncHandler(async (req, res, next) => {
     const asset = await Asset.findById(id);
     if (!asset) return sendError(next, "Asset not found", 404);
 
-    // Check assetNo uniqueness if changed
-    if (assetNo && assetNo.trim() !== asset.assetNo) {
-      const dup = await Asset.findOne({ assetNo: assetNo.trim(), _id: { $ne: id } }).lean();
-      if (dup) return sendError(next, "Asset No already exists", 400);
-      asset.assetNo = assetNo.trim();
+    // Check serial number uniqueness if changed
+    if (assetSerialNumber !== undefined) {
+      const sn = assetSerialNumber.trim();
+      if (!sn) return sendError(next, "Asset Serial Number cannot be empty", 400);
+      if (sn !== asset.assetSerialNumber) {
+        const dup = await Asset.findOne({ assetSerialNumber: sn, _id: { $ne: id } }).lean();
+        if (dup) return sendError(next, "Asset Serial Number already exists", 400);
+      }
+      asset.assetSerialNumber = sn;
     }
 
-    if (vendorName        !== undefined) asset.vendorName        = vendorName.trim();
-    if (assetBrand        !== undefined) asset.assetBrand        = assetBrand.trim();
-    if (assetModel        !== undefined) asset.assetModel        = assetModel.trim();
-    if (assetSerialNumber !== undefined) asset.assetSerialNumber = assetSerialNumber.trim() || null;
+    if (assetNo    !== undefined) asset.assetNo    = assetNo.trim();
+    if (vendorName !== undefined) asset.vendorName = vendorName.trim();
+    if (assetBrand !== undefined) asset.assetBrand = assetBrand.trim();
+    if (assetModel !== undefined) asset.assetModel = assetModel.trim();
 
     await asset.save();
 
@@ -135,23 +142,78 @@ export const updateAsset = asyncHandler(async (req, res, next) => {
 
     return sendResponse(res, 200, "Asset updated", populated);
   } catch (err) {
-    if (err.code === 11000) return sendError(next, "Serial Number already exists", 400);
+    if (err.code === 11000) return sendError(next, "Asset Serial Number already exists", 400);
     return sendError(next, err.message, 500);
   }
 });
 
-// ── DELETE /asset/:id  — delete only if unassigned ───────────────────────────
+// ── DELETE /asset/:id  — soft delete (preserves history for recovery) ─────────
 export const deleteAsset = asyncHandler(async (req, res, next) => {
   try {
     const Asset = getAsset();
     const { id } = req.params;
-    const asset = await Asset.findById(id).lean();
+    const { note } = req.body;
+
+    const asset = await Asset.findOne({ _id: id, isDeleted: { $ne: true } });
     if (!asset) return sendError(next, "Asset not found", 404);
     if (asset.status === "assigned")
       return sendError(next, "Cannot delete an assigned asset. Release it first.", 400);
 
-    await Asset.findByIdAndDelete(id);
+    const itAdmin = await User.findById(req.user._id).select("employeeName").lean();
+
+    asset.isDeleted  = true;
+    asset.deletedAt  = new Date();
+    asset.deletedBy  = req.user._id;
+    asset.deleteNote = note?.trim() || "";
+
+    asset.history.push({
+      action:          "released",   // reuse released action type for schema compat
+      performedBy:     req.user._id,
+      performedByName: itAdmin?.employeeName || "IT Admin",
+      note:            `[DELETED] ${note?.trim() || ""}`,
+      timestamp:       new Date(),
+    });
+
+    await asset.save();
     return sendResponse(res, 200, "Asset deleted", { _id: id });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+// ── PUT /asset/:id/restore  — undo a soft delete ──────────────────────────────
+export const restoreAsset = asyncHandler(async (req, res, next) => {
+  try {
+    const Asset = getAsset();
+    const { id } = req.params;
+
+    const asset = await Asset.findOne({ _id: id, isDeleted: true });
+    if (!asset) return sendError(next, "Deleted asset not found", 404);
+
+    const itAdmin = await User.findById(req.user._id).select("employeeName").lean();
+
+    asset.isDeleted  = false;
+    asset.deletedAt  = null;
+    asset.deletedBy  = null;
+    asset.deleteNote = "";
+
+    asset.history.push({
+      action:          "released",
+      performedBy:     req.user._id,
+      performedByName: itAdmin?.employeeName || "IT Admin",
+      note:            "[RESTORED]",
+      timestamp:       new Date(),
+    });
+
+    await asset.save();
+
+    const populated = await Asset.findById(id)
+      .populate(POPULATE_AGENT)
+      .populate(POPULATE_PM)
+      .populate(POPULATE_ADDED_BY)
+      .lean();
+
+    return sendResponse(res, 200, "Asset restored successfully", populated);
   } catch (err) {
     return sendError(next, err.message, 500);
   }
@@ -289,7 +351,7 @@ export const getPMReport = asyncHandler(async (req, res, next) => {
   try {
     const Asset = getAsset();
     const report = await Asset.aggregate([
-      { $match: { status: "assigned", associatedPM: { $ne: null } } },
+      { $match: { status: "assigned", associatedPM: { $ne: null }, isDeleted: { $ne: true } } },
       {
         $group: {
           _id:   "$associatedPM",
@@ -304,7 +366,7 @@ export const getPMReport = asyncHandler(async (req, res, next) => {
           as:           "pmDetails",
         },
       },
-      { $unwind: { path: "$pmDetails", preserveNullAndEmpty: true } },
+      { $unwind: { path: "$pmDetails", preserveNullAndEmptyArrays: true } },
       {
         $project: {
           _id:            0,
@@ -327,7 +389,7 @@ export const getPMReport = asyncHandler(async (req, res, next) => {
 export const getAgentsForAssignment = asyncHandler(async (req, res, next) => {
   try {
     const agents = await User.find({ role: "agent" })
-      .select("employeeName employeeCode email mobile")
+      .select("employeeName employeeCode email mobile associatedProgramManager")
       .sort({ employeeName: 1 })
       .lean();
     return sendResponse(res, 200, "Agents", agents);
@@ -355,7 +417,7 @@ export const getPMAgents = asyncHandler(async (req, res, next) => {
     const Asset = getAsset();
     const { pmId } = req.params;
 
-    const assets = await Asset.find({ status: "assigned", associatedPM: pmId })
+    const assets = await Asset.find({ status: "assigned", associatedPM: pmId, isDeleted: { $ne: true } })
       .populate({ path: "assignedAgent", select: "employeeName employeeCode email mobile" })
       .populate({ path: "assignedBy",    select: "employeeName" })
       .select("assetNo assetBrand assetModel assetSerialNumber assignedAgent assignedBy assignedAt")

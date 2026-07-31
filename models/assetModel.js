@@ -21,11 +21,13 @@ const assetHistorySchema = new Schema(
 
 const assetSchema = new Schema(
   {
-    assetNo:           { type: String, required: true, unique: true, trim: true },
+    assetNo:           { type: String, trim: true, default: "" },
     vendorName:        { type: String, trim: true, default: "" },
     assetBrand:        { type: String, trim: true, default: "" },
     assetModel:        { type: String, trim: true, default: "" },
-    assetSerialNumber: { type: String, trim: true, unique: true, sparse: true, default: null },
+    assetSerialNumber: { type: String, trim: true, required: true, unique: true },
+
+    addedBy:           { type: Schema.Types.ObjectId, ref: "User", required: true },
 
     status:        { type: String, enum: ["assigned", "unassigned"], default: "unassigned" },
     assignedAgent: { type: Schema.Types.ObjectId, ref: "User", default: null },
@@ -34,6 +36,12 @@ const assetSchema = new Schema(
     assignedAt:    { type: Date, default: null },
 
     history: [assetHistorySchema],
+
+    // Soft delete
+    isDeleted:  { type: Boolean, default: false, index: true },
+    deletedAt:  { type: Date, default: null },
+    deletedBy:  { type: Schema.Types.ObjectId, ref: "User", default: null },
+    deleteNote: { type: String, default: "" },
   },
   { timestamps: true }
 );
