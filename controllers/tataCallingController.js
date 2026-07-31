@@ -391,6 +391,33 @@ const getRecordingsByContact = asyncHandler(async (req, res, next) => {
   }
 });
 
+// ── GET /tataCalling/agentLiveStatus?agentIds=id1,id2 ────────────────────────
+// Returns which of the given agents currently have an active (connected) call.
+// Uses CallRecording.callStatus === "connected" as the source of truth.
+// Auto-ignores stale records older than 2 hours.
+const getAgentLiveStatus = asyncHandler(async (req, res, next) => {
+  try {
+    const raw = req.query.agentIds || "";
+    const agentIds = raw.split(",").map((s) => s.trim()).filter(Boolean);
+    if (!agentIds.length)
+      return sendResponse(res, 200, "Live status", { liveAgents: [] });
+
+    const staleThreshold = new Date(Date.now() - 2 * 60 * 60 * 1000); // 2 hrs ago
+    const liveRecords = await CallRecording.find({
+      agent_id: { $in: agentIds },
+      callStatus: "connected",
+      callingDate: { $gte: staleThreshold },
+    })
+      .select("agent_id")
+      .lean();
+
+    const liveAgents = [...new Set(liveRecords.map((r) => String(r.agent_id)))];
+    return sendResponse(res, 200, "Live status", { liveAgents });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
 export {
   initiateCall,
   getLiveCalls,
@@ -399,4 +426,5 @@ export {
   getCallStatus,
   getRecordingsByContact,
   tataSmartFloWebhook,
+  getAgentLiveStatus,
 };
