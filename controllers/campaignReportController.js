@@ -236,6 +236,7 @@ const getSharedReport = asyncHandler(async (req, res, next) => {
 
 // Static columns for Excel download
 const STATIC_COLUMNS = [
+  { key: "uniqueId",        header: "Unique ID",         width: 26 },
   // Contact
   { key: "Contact_ID",      header: "Contact ID",       width: 18 },
   { key: "Full_Name",       header: "Full Name",         width: 24 },
@@ -339,6 +340,7 @@ const downloadReport = asyncHandler(async (req, res, next) => {
     // Static fields
     for (const col of STATIC_COLUMNS) {
       const k = col.key;
+      if (k === "uniqueId")        { row[k] = String(r._id); continue; }
       if (k === "isRegistered")    { row[k] = r[k] ? "Yes" : "No"; continue; }
       if (k === "lastCallingDate") { row[k] = fmtDate(r[k]); continue; }
       if (k === "agentName")       { row[k] = r.agentId?.employeeName  || ""; continue; }
