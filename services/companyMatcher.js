@@ -479,6 +479,7 @@ export function matchBatch(
   const completeMap = new Map(); // _id (string) → entry (first match wins)
   const partiallyMatched = [];
   const notMatched = [];
+  const inBatchDuplicates = []; // same DB _id matched by multiple rows within this batch
 
   for (const { name, companySpecificId, segment, clientCompanyName } of rows) {
     const result = matchOne(name, dbIndex, maxCandidates);
@@ -493,6 +494,14 @@ export function matchBatch(
           companySpecificId: companySpecificId || "",
           segment: segment || "",
           clientCompanyName: clientCompanyName || "",
+        });
+      } else {
+        // Duplicate — same DB company already matched by another row in this batch
+        inBatchDuplicates.push({
+          name: name,
+          clientCompanyName: clientCompanyName || "",
+          companySpecificId: companySpecificId || "",
+          segment: segment || "",
         });
       }
     } else if (result.type === "partial") {
@@ -518,5 +527,6 @@ export function matchBatch(
     completelyMatched: [...completeMap.values()],
     partiallyMatched,
     notMatched,
+    inBatchDuplicates,
   };
 }

@@ -1580,10 +1580,24 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
     );
     await yieldControl();
 
-    const { completelyMatched: bc, notMatched: bn } = matchBatch(batch, dbIndex, getSuggestionsLimit, MAX_CANDIDATES);
+    const { completelyMatched: bc, notMatched: bn, inBatchDuplicates: bd } = matchBatch(batch, dbIndex, getSuggestionsLimit, MAX_CANDIDATES);
 
     for (const entry of bc) {
-      completeMap.set(String(entry._id), entry);
+      if (completeMap.has(String(entry._id))) {
+        // Cross-batch duplicate — same DB company already matched in a previous batch
+        dupBuffer.push(entry);
+        duplicatesCount++;
+        if (dupBuffer.length >= DUP_STREAM_SIZE) await flushDupBuffer();
+      } else {
+        completeMap.set(String(entry._id), entry);
+      }
+    }
+
+    // Within-batch duplicates — same DB company matched by multiple rows in this batch
+    for (const entry of bd) {
+      dupBuffer.push(entry);
+      duplicatesCount++;
+      if (dupBuffer.length >= DUP_STREAM_SIZE) await flushDupBuffer();
     }
 
     // Match failures — stream-persist with remark
@@ -1601,6 +1615,7 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
     if (nmBuffer.length >= NM_STREAM_SIZE) await flushNmBuffer();
   }
   await flushNmBuffer();
+  await flushDupBuffer(); // flush any remaining dedup duplicates from the matching loop
 
   const completelyMatched = [...completeMap.values()];
 
