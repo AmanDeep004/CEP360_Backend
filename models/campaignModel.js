@@ -25,7 +25,13 @@ const campaignSchema = new mongoose.Schema(
     category: {
       type: String,
       required: false,
-      enum: ["Virtual Event", "Webinar", "Physical Event"],
+      validate: {
+        validator: function (v) {
+          if (!v) return true;
+          return ["Virtual Event", "Webinar", "Physical Event"].includes(v);
+        },
+        message: "Invalid Program Category",
+      },
     },
 
     startDate: { type: Date, required: true },
