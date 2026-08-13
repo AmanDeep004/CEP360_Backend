@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import AgentAssigned from "../models/agentAssigned.js";
 import errorHandler from "../utils/index.js";
 import User from "../models/userModel.js";
@@ -404,6 +405,51 @@ const getCallingDataByAgentDataOld = asyncHandler(async (req, res, next) => {
   }
 });
 
+// Lazy search for a single field — used by Job_Title autocomplete
+const searchCallingDataFieldValues = asyncHandler(async (req, res, next) => {
+  try {
+    const { agentId } = req.params;
+    const { campaignId, field, q = "" } = req.query;
+
+    if (!campaignId) return sendError(next, "campaignId is required", 400);
+
+    const ALLOWED_FIELDS = [
+      "Job_Title", "Job_Seniority", "Job_Function",
+      "Contact_City", "Contact_State", "Contact_Region",
+    ];
+    if (!ALLOWED_FIELDS.includes(field)) {
+      return sendError(next, `Invalid field. Allowed: ${ALLOWED_FIELDS.join(", ")}`, 400);
+    }
+
+    const baseMatch = {
+      agentId:    new mongoose.Types.ObjectId(agentId),
+      CampaignId: new mongoose.Types.ObjectId(campaignId),
+      [field]:    { $nin: [null, ""] },
+    };
+
+    if (q.trim()) {
+      baseMatch[field] = {
+        $regex: q.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        $options: "i",
+      };
+    }
+
+    const results = await callingDataModal.aggregate([
+      { $match: baseMatch },
+      { $group: { _id: `$${field}`, count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 50 },
+      { $project: { _id: 1 } },
+    ]);
+
+    return sendResponse(res, 200, "Field values fetched", {
+      values: results.map((r) => r._id).sort(),
+    });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
 // here
 // const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
 //   try {
@@ -523,6 +569,53 @@ const getCallingDataByAgentDataOld = asyncHandler(async (req, res, next) => {
 //   }
 // });
 
+const getCallingDataFilterOptions = asyncHandler(async (req, res, next) => {
+  try {
+    const { agentId } = req.params;
+    const { campaignId } = req.query;
+    if (!campaignId) return sendError(next, "campaignId is required", 400);
+
+    const baseFilter = {
+      agentId:    new mongoose.Types.ObjectId(agentId),
+      CampaignId: new mongoose.Types.ObjectId(campaignId),
+    };
+
+    // Helper: top N most-frequent non-empty values for a field
+    const topValues = async (field, limit = 200) => {
+      const results = await callingDataModal.aggregate([
+        { $match: { ...baseFilter, [field]: { $nin: [null, ""] } } },
+        { $group: { _id: `$${field}`, count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: limit },
+        { $project: { _id: 1 } },
+      ]);
+      return results.map((r) => r._id).sort();
+    };
+
+    const [jobSeniorities, jobFunctions, cities, states, regions, priorityGroups] =
+      await Promise.all([
+        topValues("Job_Seniority",        200),
+        topValues("Job_Function",         200),
+        topValues("Contact_City",         200),
+        topValues("Contact_State",        200),
+        topValues("Contact_Region",       200),
+        topValues("priorityGroup.label",  50),
+      ]);
+
+    return sendResponse(res, 200, "Filter options fetched", {
+      jobTitles: [],   // loaded lazily via /callingDataFieldSearch
+      jobSeniorities,
+      jobFunctions,
+      cities,
+      states,
+      regions,
+      priorityGroups,
+    });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
 const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
   try {
     const { agentId } = req.params;
@@ -534,6 +627,12 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
       callRemarks,
       lastDateOfTelecalling,
       priorityGroup,
+      jobTitles,
+      jobSeniorities,
+      jobFunctions,
+      cities,
+      states,
+      regions,
       search = "",
       page = 1,
       limit = 20,
@@ -611,6 +710,24 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
       };
     }
 
+    // Multi-value filters — comma-separated (or pipe-separated for jobTitles) → $in array
+    const parseMulti = (val, sep = ",") =>
+      val ? val.split(sep).map((s) => s.trim()).filter(Boolean) : [];
+
+    const jobTitlesArr      = parseMulti(jobTitles, "|"); // pipe sep to handle commas in job titles
+    const jobSenioritiesArr = parseMulti(jobSeniorities);
+    const jobFunctionsArr   = parseMulti(jobFunctions);
+    const citiesArr         = parseMulti(cities);
+    const statesArr         = parseMulti(states);
+    const regionsArr        = parseMulti(regions);
+
+    if (jobTitlesArr.length)      filter.Job_Title      = { $in: jobTitlesArr };
+    if (jobSenioritiesArr.length) filter.Job_Seniority  = { $in: jobSenioritiesArr };
+    if (jobFunctionsArr.length)   filter.Job_Function   = { $in: jobFunctionsArr };
+    if (citiesArr.length)         filter.Contact_City   = { $in: citiesArr };
+    if (statesArr.length)         filter.Contact_State  = { $in: statesArr };
+    if (regionsArr.length)        filter.Contact_Region = { $in: regionsArr };
+
     let callingData;
     let total;
 
@@ -678,5 +795,7 @@ export {
   getCallingDataByAgentAndCampaign,
   getAllAssignedAgents,
   getCallingDataByAgentData,
+  getCallingDataFilterOptions,
+  searchCallingDataFieldValues,
   getEngagementHistoryByContactId,
 };
