@@ -242,8 +242,10 @@ const STATIC_COLUMNS = [
   { key: "Full_Name",       header: "Full Name",         width: 24 },
   { key: "Gender",          header: "Gender",            width: 10 },
   { key: "Job_Title",       header: "Job Title",         width: 28 },
-  { key: "Job_Seniority",   header: "Job Seniority",     width: 18 },
-  { key: "Job_Function",    header: "Job Function",      width: 20 },
+  { key: "Job_Seniority",           header: "Job Seniority",           width: 18 },
+  { key: "Job_Seniority_Secondary", header: "Job Seniority (Secondary)", width: 22 },
+  { key: "Job_Seniority_Tertiary",  header: "Job Seniority (Tertiary)",  width: 22 },
+  { key: "Job_Function",            header: "Job Function",              width: 20 },
   { key: "Contact_City",    header: "City",              width: 16 },
   { key: "Contact_State",   header: "State",             width: 16 },
   { key: "Contact_Country", header: "Country",           width: 16 },
@@ -266,7 +268,7 @@ const STATIC_COLUMNS = [
   { key: "agentMobile",     header: "Agent Mobile",      width: 16 },
 ];
 
-const SELECT_DOWNLOAD = "Contact_ID Full_Name Gender Job_Title Job_Seniority Job_Function " +
+const SELECT_DOWNLOAD = "Contact_ID Full_Name Gender Job_Title Job_Seniority Job_Seniority_Secondary Job_Seniority_Tertiary Job_Function " +
   "Contact_City Contact_State Contact_Country Contact_Region " +
   "Company_Name Company_Segment Industry Sub_Industry Employees_Range Turnover_Range " +
   "isRegistered lastRemarks lastCallingDate agentId callHistory";

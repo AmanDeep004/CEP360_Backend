@@ -414,7 +414,7 @@ const searchCallingDataFieldValues = asyncHandler(async (req, res, next) => {
     if (!campaignId) return sendError(next, "campaignId is required", 400);
 
     const ALLOWED_FIELDS = [
-      "Job_Title", "Job_Seniority", "Job_Function",
+      "Job_Title", "Job_Seniority", "Job_Seniority_Secondary", "Job_Seniority_Tertiary", "Job_Function",
       "Contact_City", "Contact_State", "Contact_Region",
     ];
     if (!ALLOWED_FIELDS.includes(field)) {
@@ -592,15 +592,18 @@ const getCallingDataFilterOptions = asyncHandler(async (req, res, next) => {
       return results.map((r) => r._id).sort();
     };
 
-    const [jobSeniorities, jobFunctions, cities, states, regions, priorityGroups] =
+    const [jobSenioritiesPrimary, jobSenioritiesSecondary, jobSenioritiesTertiary, jobFunctions, cities, states, regions, priorityGroups] =
       await Promise.all([
-        topValues("Job_Seniority",        200),
-        topValues("Job_Function",         200),
-        topValues("Contact_City",         200),
-        topValues("Contact_State",        200),
-        topValues("Contact_Region",       200),
-        topValues("priorityGroup.label",  50),
+        topValues("Job_Seniority",          200),
+        topValues("Job_Seniority_Secondary", 200),
+        topValues("Job_Seniority_Tertiary",  200),
+        topValues("Job_Function",           200),
+        topValues("Contact_City",           200),
+        topValues("Contact_State",          200),
+        topValues("Contact_Region",         200),
+        topValues("priorityGroup.label",    50),
       ]);
+    const jobSeniorities = [...new Set([...jobSenioritiesPrimary, ...jobSenioritiesSecondary, ...jobSenioritiesTertiary])].sort();
 
     return sendResponse(res, 200, "Filter options fetched", {
       jobTitles: [],   // loaded lazily via /callingDataFieldSearch
@@ -721,8 +724,21 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
     const statesArr         = parseMulti(states);
     const regionsArr        = parseMulti(regions);
 
-    if (jobTitlesArr.length)      filter.Job_Title      = { $in: jobTitlesArr };
-    if (jobSenioritiesArr.length) filter.Job_Seniority  = { $in: jobSenioritiesArr };
+    if (jobTitlesArr.length)      filter.Job_Title    = { $in: jobTitlesArr };
+    if (jobSenioritiesArr.length) {
+      const seniorityOr = [
+        { Job_Seniority:           { $in: jobSenioritiesArr } },
+        { Job_Seniority_Secondary: { $in: jobSenioritiesArr } },
+        { Job_Seniority_Tertiary:  { $in: jobSenioritiesArr } },
+      ];
+      if (filter.$or) {
+        // Combine search $or + seniority $or with $and so neither is lost
+        filter.$and = [{ $or: filter.$or }, { $or: seniorityOr }];
+        delete filter.$or;
+      } else {
+        filter.$or = seniorityOr;
+      }
+    }
     if (jobFunctionsArr.length)   filter.Job_Function   = { $in: jobFunctionsArr };
     if (citiesArr.length)         filter.Contact_City   = { $in: citiesArr };
     if (statesArr.length)         filter.Contact_State  = { $in: statesArr };

@@ -332,6 +332,8 @@ async function processChunk(rows, batchName, lastNumber, job) {
             Gender:                   safeStr(r.Gender),
             Job_Title:                safeStr(r.Job_Title),
             Job_Seniority:            safeStr(r.Job_Seniority),
+            Job_Seniority_Secondary:  safeStr(r.Job_Seniority_Secondary),
+            Job_Seniority_Tertiary:   safeStr(r.Job_Seniority_Tertiary),
             Job_Function:             safeStr(r.Job_Function),
             Contact_Address_1:        safeStr(r.Contact_Address_1),
             Contact_Address_2:        safeStr(r.Contact_Address_2),

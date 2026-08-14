@@ -10,7 +10,7 @@ const { asyncHandler, sendError } = errorHandler;
 // Template columns — exact order from reference file
 const COLUMNS = [
   "First_Name", "Last_Name", "Full_Name", "Salutation", "Gender",
-  "Job_Title", "Job_Seniority", "Job_Function",
+  "Job_Title", "Job_Seniority", "Job_Seniority_Secondary", "Job_Seniority_Tertiary", "Job_Function",
   "Mobile_No", "Contact_Direct_Phone1", "Contact_Direct_Phone2", "Contact_Extn_No",
   "Office_Email_1", "Office_Email_2", "Personal_Email1", "Personal_Email2",
   "Contact_City", "Contact_State", "Contact_Country", "Contact_Region", "Contact_Pin",
@@ -181,6 +181,8 @@ const uploadExternalCallingData = asyncHandler(async (req, res, next) => {
         Gender:                   row.Gender                   || "",
         Job_Title:                row.Job_Title                || "",
         Job_Seniority:            row.Job_Seniority            || "",
+        Job_Seniority_Secondary:  row.Job_Seniority_Secondary  || "",
+        Job_Seniority_Tertiary:   row.Job_Seniority_Tertiary   || "",
         Job_Function:             row.Job_Function             || "",
         Contact_Address_1:        row.Contact_Address_1        || "",
         Contact_Address_2:        row.Contact_Address_2        || "",

@@ -13,6 +13,8 @@ const CallingDataSchema = new mongoose.Schema(
     Gender: { type: String, trim: true },
     Job_Title: { type: String, trim: true },
     Job_Seniority: { type: String, trim: true },
+    Job_Seniority_Secondary: { type: String, trim: true },
+    Job_Seniority_Tertiary: { type: String, trim: true },
     Job_Function: { type: String, trim: true },
     Contact_Address_1: { type: String, trim: true },
     Contact_Address_2: { type: String, trim: true },

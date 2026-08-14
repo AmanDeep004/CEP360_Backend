@@ -465,7 +465,7 @@ const updateCampaignStage = asyncHandler(async (req, res, next) => {
 const CONTACT_FIELDS = [
   "Contact_ID", "Contact_Source", "Contact_Create_Date",
   "Salutation", "First_Name", "Last_Name", "Full_Name",
-  "Gender", "Job_Title", "Job_Seniority", "Job_Function",
+  "Gender", "Job_Title", "Job_Seniority", "Job_Seniority_Secondary", "Job_Seniority_Tertiary", "Job_Function",
   "Contact_Address_1", "Contact_Address_2", "Contact_Address_3",
   "Contact_City", "Contact_Pin", "Contact_State", "Contact_Region", "Contact_Country",
   "Contact_STD_ISD_Code", "Contact_Location_Tier",

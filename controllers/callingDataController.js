@@ -83,6 +83,8 @@ const uploadcallingData = asyncHandler(async (req, res, next) => {
       Gender: row.Gender || "",
       Job_Title: row.Job_Title || "",
       Job_Seniority: row.Job_Seniority || "",
+      Job_Seniority_Secondary: row.Job_Seniority_Secondary || "",
+      Job_Seniority_Tertiary: row.Job_Seniority_Tertiary || "",
       Job_Function: row.Job_Function || "",
       Contact_Address_1: row.Contact_Address_1 || "",
       Contact_Address_2: row.Contact_Address_2 || "",
@@ -233,7 +235,7 @@ const addSingleContact = asyncHandler(async (req, res, next) => {
       // Personal
       Salutation, First_Name, Last_Name, Full_Name, Gender,
       // Job
-      Job_Title, Job_Seniority, Job_Function,
+      Job_Title, Job_Seniority, Job_Seniority_Secondary, Job_Seniority_Tertiary, Job_Function,
       // Contact
       Mobile_No, Contact_Direct_Phone1, Contact_Direct_Phone2, Contact_Extn_No,
       Office_Email_1, Office_Email_2, Personal_Email1, Personal_Email2,
@@ -266,7 +268,7 @@ const addSingleContact = asyncHandler(async (req, res, next) => {
       Salutation: str(Salutation), First_Name: str(First_Name), Last_Name: str(Last_Name),
       Full_Name:  str(Full_Name),  Gender: str(Gender),
       // Job
-      Job_Title: str(Job_Title), Job_Seniority: str(Job_Seniority), Job_Function: str(Job_Function),
+      Job_Title: str(Job_Title), Job_Seniority: str(Job_Seniority), Job_Seniority_Secondary: str(Job_Seniority_Secondary), Job_Seniority_Tertiary: str(Job_Seniority_Tertiary), Job_Function: str(Job_Function),
       // Contact
       Mobile_No: str(Mobile_No),
       Contact_Direct_Phone1: str(Contact_Direct_Phone1), Contact_Direct_Phone2: str(Contact_Direct_Phone2),
@@ -1212,7 +1214,7 @@ const reassignCallingDatatoAgents = asyncHandler(async (req, res, next) => {
 });
 const CALLING_DATA_ALLOWED_FIELDS = [
   "Salutation", "First_Name", "Last_Name", "Full_Name", "Gender",
-  "Job_Title", "Job_Seniority", "Job_Function",
+  "Job_Title", "Job_Seniority", "Job_Seniority_Secondary", "Job_Seniority_Tertiary", "Job_Function",
   "Contact_Address_1", "Contact_Address_2", "Contact_Address_3",
   "Contact_City", "Contact_Pin", "Contact_State", "Contact_Region", "Contact_Country",
   "Contact_STD_ISD_Code", "Contact_Location_Tier",
@@ -1351,6 +1353,8 @@ const PRIORITY_FILTER_FIELDS = [
   "Company_Segment",
   "Job_Title",
   "Job_Seniority",
+  "Job_Seniority_Secondary",
+  "Job_Seniority_Tertiary",
   "Job_Function",
   "Employees_Range",
   "Turnover_Range",
@@ -1781,7 +1785,7 @@ const EXTERNAL_UPLOAD_MANDATORY = [
 const EXTERNAL_UPLOAD_COLUMNS = [
   // ── Mandatory fields ──
   "First_Name", "Last_Name", "Full_Name", "Salutation", "Gender",
-  "Job_Title", "Job_Seniority", "Job_Function",
+  "Job_Title", "Job_Seniority", "Job_Seniority_Secondary", "Job_Seniority_Tertiary", "Job_Function",
   "Mobile_No", "Contact_Direct_Phone1", "Contact_Direct_Phone2", "Contact_Extn_No",
   "Office_Email_1", "Office_Email_2", "Personal_Email1", "Personal_Email2",
   "Contact_City", "Contact_State", "Contact_Country", "Contact_Region", "Contact_Pin",
@@ -1961,6 +1965,8 @@ const externalUploadCallingData = asyncHandler(async (req, res, next) => {
       Gender:                   row.Gender                          || "",
       Job_Title:                row.Job_Title                       || "",
       Job_Seniority:            row.Job_Seniority                   || "",
+      Job_Seniority_Secondary:  row.Job_Seniority_Secondary         || "",
+      Job_Seniority_Tertiary:   row.Job_Seniority_Tertiary          || "",
       Job_Function:             row.Job_Function                    || "",
       Contact_Address_1:        row.Contact_Address_1               || "",
       Contact_Address_2:        row.Contact_Address_2               || "",

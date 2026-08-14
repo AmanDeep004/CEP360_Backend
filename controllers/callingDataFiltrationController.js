@@ -93,6 +93,8 @@ const CONTACT_ONLY_FIELDS = new Set([
   "Contact_City",
   "Job_Function",
   "Job_Seniority",
+  "Job_Seniority_Secondary",
+  "Job_Seniority_Tertiary",
   "Job_Title",
   "Gender",
 ]);
@@ -110,24 +112,39 @@ const COMPANY_FIELD_MAP = {
  * $match stage that runs BEFORE $lookup.
  * Covers: discrepency check, contact-only field filters, optional Company_ID filter.
  */
+/** Values that should be treated as "blank" for seniority matching */
+const SENIORITY_BLANK = [null, "", "Blank"];
+
 function buildPreLookupMatch(filters = [], exclusions = [], companyIds = []) {
   const q = { "discrepencyInData.status": { $ne: true } };
 
   for (const { field, value } of filters) {
-    if (
-      CONTACT_ONLY_FIELDS.has(field) &&
-      Array.isArray(value) &&
-      value.length
-    ) {
+    if (!CONTACT_ONLY_FIELDS.has(field) || !Array.isArray(value) || !value.length) continue;
+
+    if (field === "Job_Seniority") {
+      // Match if ANY of the three seniority fields contains the requested value(s)
+      q.$and = (q.$and || []).concat({
+        $or: [
+          { Job_Seniority:           { $in: value, $nin: SENIORITY_BLANK } },
+          { Job_Seniority_Secondary: { $in: value, $nin: SENIORITY_BLANK } },
+          { Job_Seniority_Tertiary:  { $in: value, $nin: SENIORITY_BLANK } },
+        ],
+      });
+    } else {
       q[field] = { $in: value };
     }
   }
   for (const { field, value } of exclusions) {
-    if (
-      CONTACT_ONLY_FIELDS.has(field) &&
-      Array.isArray(value) &&
-      value.length
-    ) {
+    if (!CONTACT_ONLY_FIELDS.has(field) || !Array.isArray(value) || !value.length) continue;
+
+    if (field === "Job_Seniority") {
+      // Exclude only if ALL three seniority fields are NOT in the exclusion list (or blank)
+      q.$and = (q.$and || []).concat({
+        Job_Seniority:           { $nin: value },
+        Job_Seniority_Secondary: { $nin: value },
+        Job_Seniority_Tertiary:  { $nin: value },
+      });
+    } else {
       if (q[field]) {
         q.$and = (q.$and || []).concat({ [field]: { $nin: value } });
       } else {
@@ -174,6 +191,8 @@ const ASSIGN_PROJECT = {
   Gender: 1,
   Job_Title: 1,
   Job_Seniority: 1,
+  Job_Seniority_Secondary: 1,
+  Job_Seniority_Tertiary: 1,
   Job_Function: 1,
   Contact_Address_1: 1,
   Contact_Address_2: 1,
@@ -283,6 +302,8 @@ function mapContactToEntry(
     Gender: row.Gender,
     Job_Title: row.Job_Title,
     Job_Seniority: row.Job_Seniority,
+    Job_Seniority_Secondary: row.Job_Seniority_Secondary,
+    Job_Seniority_Tertiary: row.Job_Seniority_Tertiary,
     Job_Function: row.Job_Function,
     Contact_Address_1: row.Contact_Address_1,
     Contact_Address_2: row.Contact_Address_2,
@@ -442,10 +463,23 @@ const callingDataFilterOld = asyncHandler(async (req, res, next) => {
     const buildMongoQuery = (filtersArr, operator = "$in") => {
       const q = {};
       filtersArr.forEach(({ field, value }) => {
-        const mappedField = fieldMapping[field] || field;
-        if (Array.isArray(value) && value.length > 0) {
-          q[mappedField] = { [operator]: value };
+        if (!Array.isArray(value) || !value.length) return;
+        if (field === "Job_Seniority") {
+          if (operator === "$in") {
+            q.$or = [
+              { Job_Seniority:           { $in: value } },
+              { Job_Seniority_Secondary: { $in: value } },
+              { Job_Seniority_Tertiary:  { $in: value } },
+            ];
+          } else {
+            q.Job_Seniority           = { $nin: value };
+            q.Job_Seniority_Secondary = { $nin: value };
+            q.Job_Seniority_Tertiary  = { $nin: value };
+          }
+          return;
         }
+        const mappedField = fieldMapping[field] || field;
+        q[mappedField] = { [operator]: value };
       });
       return q;
     };
@@ -594,10 +628,23 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
     const buildMongoQuery = (filtersArr, operator = "$in") => {
       const q = {};
       filtersArr.forEach(({ field, value }) => {
-        const mappedField = fieldMapping[field] || field;
-        if (Array.isArray(value) && value.length > 0) {
-          q[mappedField] = { [operator]: value };
+        if (!Array.isArray(value) || !value.length) return;
+        if (field === "Job_Seniority") {
+          if (operator === "$in") {
+            q.$or = [
+              { Job_Seniority:           { $in: value } },
+              { Job_Seniority_Secondary: { $in: value } },
+              { Job_Seniority_Tertiary:  { $in: value } },
+            ];
+          } else {
+            q.Job_Seniority           = { $nin: value };
+            q.Job_Seniority_Secondary = { $nin: value };
+            q.Job_Seniority_Tertiary  = { $nin: value };
+          }
+          return;
         }
+        const mappedField = fieldMapping[field] || field;
+        q[mappedField] = { [operator]: value };
       });
       return q;
     };

@@ -25,7 +25,7 @@ const REQUIRED_FIELDS = [
 // All template columns (in order)
 const TEMPLATE_COLUMNS = [
   "Salutation", "First_Name", "Last_Name", "Full_Name", "Gender",
-  "Job_Title", "Job_Seniority", "Job_Function",
+  "Job_Title", "Job_Seniority", "Job_Seniority_Secondary", "Job_Seniority_Tertiary", "Job_Function",
   "Contact_Address_1", "Contact_Address_2", "Contact_Address_3",
   "Contact_City", "Contact_Pin", "Contact_State", "Contact_Region",
   "Contact_Country", "Contact_STD_ISD_Code", "Contact_Location_Tier",
@@ -232,6 +232,8 @@ const uploadExternalDataControllerOld = asyncHandler(async (req, res, next) => {
           Gender: row.Gender,
           Job_Title: row.Job_Title,
           Job_Seniority: row.Job_Seniority,
+          Job_Seniority_Secondary: row.Job_Seniority_Secondary,
+          Job_Seniority_Tertiary: row.Job_Seniority_Tertiary,
           Job_Function: row.Job_Function,
           Contact_Address_1: row.Contact_Address_1,
           Contact_Address_2: row.Contact_Address_2,
@@ -345,106 +347,121 @@ const uploadExternalDataController = asyncHandler(async (req, res, next) => {
       notMatched: 0,
       inserted: 0,
       updated: 0,
-      skipped: [],   // rows skipped due to missing required fields
+      skipped: [],
       errors: [],
     };
 
-    // Process each row
-    for (let i = 0; i < excelData.length; i++) {
-      const row = excelData[i];
+    // ── Pre-parse all rows and collect phone numbers ───────────────────────
+    const allMobiles = [];
+    const allPhone1s = [];
+    const allPhone2s = [];
 
-      try {
-        // Extract mobile and email fields from Excel
-        const mobileNo = row.Mobile_No?.toString().trim();
-        const contact_Direct_Phone1 =
-          row.Contact_Direct_Phone1?.toString().trim();
-        const contact_Direct_Phone2 =
-          row.Contact_Direct_Phone2?.toString().trim();
-        const officeEmail1 = row.Office_Email_1?.toString()
-          .trim()
-          .toLowerCase();
-        const officeEmail2 = row.Office_Email_2?.toString()
-          .trim()
-          .toLowerCase();
-        const personalEmail1 = row.Personal_Email1?.toString()
-          .trim()
-          .toLowerCase();
-        const personalEmail2 = row.Personal_Email2?.toString()
-          .trim()
-          .toLowerCase();
+    const parsedRows = excelData.map((row, i) => {
+      const mobileNo              = row.Mobile_No?.toString().trim()                    || "";
+      const contact_Direct_Phone1 = row.Contact_Direct_Phone1?.toString().trim()        || "";
+      const contact_Direct_Phone2 = row.Contact_Direct_Phone2?.toString().trim()        || "";
+      const officeEmail1          = row.Office_Email_1?.toString().trim().toLowerCase() || "";
+      const officeEmail2          = row.Office_Email_2?.toString().trim().toLowerCase() || "";
+      const personalEmail1        = row.Personal_Email1?.toString().trim().toLowerCase() || "";
+      const personalEmail2        = row.Personal_Email2?.toString().trim().toLowerCase() || "";
 
-        // Build phone-only match conditions (emails are stored but never used for matching)
-        const orConditions = [
-          mobileNo              && { Mobile_No: mobileNo },
-          contact_Direct_Phone1 && { Contact_Direct_Phone1: contact_Direct_Phone1 },
-          contact_Direct_Phone2 && { Contact_Direct_Phone2: contact_Direct_Phone2 },
-        ].filter(Boolean);
+      if (mobileNo)              allMobiles.push(mobileNo);
+      if (contact_Direct_Phone1) allPhone1s.push(contact_Direct_Phone1);
+      if (contact_Direct_Phone2) allPhone2s.push(contact_Direct_Phone2);
 
-        // Skip if no phone identifier at all
-        if (orConditions.length === 0) {
-          results.errors.push({ row: i + 2, message: "No mobile or phone number found" });
-          continue;
-        }
+      return { row, i, mobileNo, contact_Direct_Phone1, contact_Direct_Phone2,
+               officeEmail1, officeEmail2, personalEmail1, personalEmail2 };
+    });
 
-        // --- Required field validation — skip row if any required field is missing ---
-        const missingFields = REQUIRED_FIELDS.filter((f) => {
-          const val = row[f];
-          return val === undefined || val === null || String(val).trim() === "";
-        });
-        if (missingFields.length > 0) {
-          results.skipped.push({
-            row: i + 2,
-            message: `Missing required fields: ${missingFields.join(", ")}`,
-          });
-          continue; // do not process this row further
-        }
+    // ── Bulk-fetch existing records with 2 queries instead of N×6 ─────────
+    const phoneOrConditions = [];
+    if (allMobiles.length)  phoneOrConditions.push({ Mobile_No:             { $in: [...new Set(allMobiles)] } });
+    if (allPhone1s.length)  phoneOrConditions.push({ Contact_Direct_Phone1: { $in: [...new Set(allPhone1s)] } });
+    if (allPhone2s.length)  phoneOrConditions.push({ Contact_Direct_Phone2: { $in: [...new Set(allPhone2s)] } });
 
-        // Parse registration fields
-        const regBool = ["true", "t", "yes", "y", "1"].includes(
-          String(row.Registration_Status || "").trim().toLowerCase()
-        );
-        const attendedBool = ["true", "t", "yes", "y", "1"].includes(
-          String(row.Is_Attended || "").trim().toLowerCase()
-        );
-        const regDate = parseFlexDate(row.Registration_Date);
+    const phoneProject = { _id: 1, Mobile_No: 1, Contact_Direct_Phone1: 1, Contact_Direct_Phone2: 1 };
+    const [existingCallingDocs, existingExtDocs] = await Promise.all([
+      phoneOrConditions.length
+        ? CallingData.find({ CampaignId, $or: phoneOrConditions }, phoneProject).lean()
+        : Promise.resolve([]),
+      phoneOrConditions.length
+        ? ExternalRegistration.find({ CampaignId, $or: phoneOrConditions }, phoneProject).lean()
+        : Promise.resolve([]),
+    ]);
 
-        // ── Step 1: Match CallingData using phone fields only (not emails) ──────
-        // We check each phone combination in isolation so a bad email can't cause
-        // a wrong match. Mobile_No first (highest specificity), then direct phones.
-        let existingCallingData = null;
-        const phonePriority = [
-          mobileNo              && { Mobile_No: mobileNo },
-          contact_Direct_Phone1 && { Contact_Direct_Phone1: contact_Direct_Phone1 },
-          contact_Direct_Phone2 && { Contact_Direct_Phone2: contact_Direct_Phone2 },
-        ].filter(Boolean);
+    // Build in-memory lookup maps: phone → doc
+    const cdByMobile  = new Map();
+    const cdByPhone1  = new Map();
+    const cdByPhone2  = new Map();
+    for (const doc of existingCallingDocs) {
+      if (doc.Mobile_No)             cdByMobile.set(doc.Mobile_No, doc);
+      if (doc.Contact_Direct_Phone1) cdByPhone1.set(doc.Contact_Direct_Phone1, doc);
+      if (doc.Contact_Direct_Phone2) cdByPhone2.set(doc.Contact_Direct_Phone2, doc);
+    }
 
-        for (const condition of phonePriority) {
-          existingCallingData = await CallingData.findOne({ CampaignId, ...condition });
-          if (existingCallingData) break;
-        }
+    const extByMobile = new Map();
+    const extByPhone1 = new Map();
+    const extByPhone2 = new Map();
+    for (const doc of existingExtDocs) {
+      if (doc.Mobile_No)             extByMobile.set(doc.Mobile_No, doc);
+      if (doc.Contact_Direct_Phone1) extByPhone1.set(doc.Contact_Direct_Phone1, doc);
+      if (doc.Contact_Direct_Phone2) extByPhone2.set(doc.Contact_Direct_Phone2, doc);
+    }
 
-        // isAvailableInCallingData = true ONLY when data already existed in CallingData
-        // and we are updating it. If we create a new record it stays false.
-        let isAvailableInCallingData = false;
+    // ── Build bulk operation lists (no DB calls in loop) ──────────────────
+    const callingDataBulkOps = [];
+    const extRegInserts      = [];
 
-        if (existingCallingData) {
-          // Pre-existed → update + mark as available
-          isAvailableInCallingData = true;
-          results.matched++;
-          await CallingData.findByIdAndUpdate(existingCallingData._id, {
-            $set: {
+    for (const { row, i, mobileNo, contact_Direct_Phone1, contact_Direct_Phone2,
+                 officeEmail1, officeEmail2, personalEmail1, personalEmail2 } of parsedRows) {
+
+      const hasPhone = mobileNo || contact_Direct_Phone1 || contact_Direct_Phone2;
+      if (!hasPhone) {
+        results.errors.push({ row: i + 2, message: "No mobile or phone number found" });
+        continue;
+      }
+
+      const missingFields = REQUIRED_FIELDS.filter((f) => {
+        const val = row[f];
+        return val === undefined || val === null || String(val).trim() === "";
+      });
+      if (missingFields.length > 0) {
+        results.skipped.push({ row: i + 2, message: `Missing required fields: ${missingFields.join(", ")}` });
+        continue;
+      }
+
+      const regBool      = ["true", "t", "yes", "y", "1"].includes(String(row.Registration_Status || "").trim().toLowerCase());
+      const attendedBool = ["true", "t", "yes", "y", "1"].includes(String(row.Is_Attended || "").trim().toLowerCase());
+      const regDate      = parseFlexDate(row.Registration_Date);
+
+      // Match CallingData via lookup map (mobile → phone1 → phone2 priority)
+      const existingCallingData =
+        (mobileNo              && cdByMobile.get(mobileNo)) ||
+        (contact_Direct_Phone1 && cdByPhone1.get(contact_Direct_Phone1)) ||
+        (contact_Direct_Phone2 && cdByPhone2.get(contact_Direct_Phone2)) ||
+        null;
+
+      let isAvailableInCallingData = false;
+
+      if (existingCallingData) {
+        isAvailableInCallingData = true;
+        results.matched++;
+        callingDataBulkOps.push({
+          updateOne: {
+            filter: { _id: existingCallingData._id },
+            update: { $set: {
               isRegistered:       regBool,
               registeredOn:       regDate,
               registrationSource: "External Registration",
               isAttended:         attendedBool,
-            },
-          });
-          console.log(`✓ Updated CallingData ID: ${existingCallingData._id}`);
-        } else {
-          // Did not exist → create new; isAvailableInCallingData remains false
-          results.notMatched++;
-          try {
-            await CallingData.create({
+            } },
+          },
+        });
+      } else {
+        results.notMatched++;
+        callingDataBulkOps.push({
+          insertOne: {
+            document: {
               CampaignId,
               UploadedBy:               req.user._id,
               Contact_Source:           row.Contact_Source || "External Registration",
@@ -455,6 +472,8 @@ const uploadExternalDataController = asyncHandler(async (req, res, next) => {
               Gender:                   row.Gender                   || "",
               Job_Title:                row.Job_Title                || "",
               Job_Seniority:            row.Job_Seniority            || "",
+              Job_Seniority_Secondary:  row.Job_Seniority_Secondary  || "",
+              Job_Seniority_Tertiary:   row.Job_Seniority_Tertiary   || "",
               Job_Function:             row.Job_Function             || "",
               Contact_Address_1:        row.Contact_Address_1        || "",
               Contact_Address_2:        row.Contact_Address_2        || "",
@@ -466,8 +485,8 @@ const uploadExternalDataController = asyncHandler(async (req, res, next) => {
               Contact_Country:          row.Contact_Country          || "",
               Contact_STD_ISD_Code:     String(row.Contact_STD_ISD_Code || ""),
               Contact_Location_Tier:    row.Contact_Location_Tier    || "",
-              Contact_Direct_Phone1:    String(row.Contact_Direct_Phone1 || ""),
-              Contact_Direct_Phone2:    String(row.Contact_Direct_Phone2 || ""),
+              Contact_Direct_Phone1:    String(contact_Direct_Phone1 || ""),
+              Contact_Direct_Phone2:    String(contact_Direct_Phone2 || ""),
               Contact_Extn_No:          String(row.Contact_Extn_No   || ""),
               Mobile_No:                String(mobileNo              || ""),
               Office_Email_1:           officeEmail1                 || "",
@@ -494,17 +513,26 @@ const uploadExternalDataController = asyncHandler(async (req, res, next) => {
               registeredOn:             regDate,
               registrationSource:       "External Registration",
               isAttended:               attendedBool,
-            });
-          } catch (cdErr) {
-            console.warn(`⚠ Could not create CallingData for row ${i + 2}:`, cdErr.message);
-            results.errors.push({ row: i + 2, message: `CallingData create failed: ${cdErr.message}` });
-          }
-        }
+            },
+          },
+        });
+        // Track locally so duplicate phones within the same file don't double-insert
+        if (mobileNo)              cdByMobile.set(mobileNo, { _id: "local" });
+        if (contact_Direct_Phone1) cdByPhone1.set(contact_Direct_Phone1, { _id: "local" });
+        if (contact_Direct_Phone2) cdByPhone2.set(contact_Direct_Phone2, { _id: "local" });
+      }
 
-        // ── Step 2: INSERT ExternalRegistration (always a new record) ────────────
-        // Only skip if the exact same phone already exists for this campaign
-        // (prevents exact re-uploads of the same row, not legitimate re-uploads).
-        const extPayload = {
+      // ExternalRegistration — skip if phone already exists for this campaign
+      const existingExtRecord =
+        (mobileNo              && extByMobile.get(mobileNo)) ||
+        (contact_Direct_Phone1 && extByPhone1.get(contact_Direct_Phone1)) ||
+        (contact_Direct_Phone2 && extByPhone2.get(contact_Direct_Phone2)) ||
+        null;
+
+      if (existingExtRecord) {
+        results.updated++;
+      } else {
+        extRegInserts.push({
           CampaignId,
           Contact_Source:           row.Contact_Source || "File",
           Salutation:               row.Salutation,
@@ -514,6 +542,8 @@ const uploadExternalDataController = asyncHandler(async (req, res, next) => {
           Gender:                   row.Gender,
           Job_Title:                row.Job_Title,
           Job_Seniority:            row.Job_Seniority,
+          Job_Seniority_Secondary:  row.Job_Seniority_Secondary,
+          Job_Seniority_Tertiary:   row.Job_Seniority_Tertiary,
           Job_Function:             row.Job_Function,
           Contact_Address_1:        row.Contact_Address_1,
           Contact_Address_2:        row.Contact_Address_2,
@@ -553,30 +583,32 @@ const uploadExternalDataController = asyncHandler(async (req, res, next) => {
           isAttended:               attendedBool,
           isAvailableInCallingData,
           registeredOn:             regBool ? regDate : null,
-        };
-
-        let existingExtRecord = null;
-        for (const condition of phonePriority) {
-          existingExtRecord = await ExternalRegistration.findOne({ CampaignId, ...condition });
-          if (existingExtRecord) break;
-        }
-
-        if (existingExtRecord) {
-          // Same phone already uploaded for this campaign — skip to avoid exact duplicate
-          results.updated++;
-          console.log(`↻ ExternalRegistration already exists for row ${i + 2}, skipping insert`);
-        } else {
-          await ExternalRegistration.create(extPayload);
-          results.inserted++;
-          console.log(`✓ Inserted new ExternalRegistration for row ${i + 2}`);
-        }
-      } catch (error) {
-        console.error(`✗ Error processing row ${i + 1}:`, error.message);
-        results.errors.push({
-          row: i + 1,
-          message: error.message,
-          data: row,
         });
+        // Track locally so re-uploads within the same file don't double-insert
+        if (mobileNo)              extByMobile.set(mobileNo, { _id: "local" });
+        if (contact_Direct_Phone1) extByPhone1.set(contact_Direct_Phone1, { _id: "local" });
+        if (contact_Direct_Phone2) extByPhone2.set(contact_Direct_Phone2, { _id: "local" });
+      }
+    }
+
+    // ── Execute bulk DB operations ─────────────────────────────────────────
+    if (callingDataBulkOps.length > 0) {
+      try {
+        await CallingData.bulkWrite(callingDataBulkOps, { ordered: false });
+      } catch (bulkErr) {
+        console.error("CallingData bulkWrite error:", bulkErr.message);
+        results.errors.push({ message: `CallingData bulk operation error: ${bulkErr.message}` });
+      }
+    }
+
+    if (extRegInserts.length > 0) {
+      try {
+        await ExternalRegistration.insertMany(extRegInserts, { ordered: false });
+        results.inserted = extRegInserts.length;
+      } catch (insertErr) {
+        console.error("ExternalRegistration insertMany error:", insertErr.message);
+        results.inserted = insertErr.result?.nInserted ?? 0;
+        results.errors.push({ message: `ExternalRegistration insert error: ${insertErr.message}` });
       }
     }
 
