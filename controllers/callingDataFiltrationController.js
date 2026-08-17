@@ -1517,7 +1517,7 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
     return;
   }
 
-  const MAX_UPLOAD_ROWS = 50_000;
+  const MAX_UPLOAD_ROWS = 20_000;
   if (companyRows.length > MAX_UPLOAD_ROWS) {
     failMatchJob(
       jobId,
@@ -1913,7 +1913,7 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
     const stats = statsResult[0] || { totalContacts: 0 };
     const uniqueCompanies = uniqueCompaniesCount[0]?.uniqueCompanies || 0;
 
-    // Map companyId → contactCount for easy lookup
+    // All per-company contact counts from the filter pipeline (for the live API response)
     const companyBreakdown = companyBreakdownRaw.map((r) => ({
       companyId: String(r._id),
       contactCount: r.contactCount,
@@ -1928,6 +1928,18 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
       contactCount: stats.totalContacts,
       summary: formattedStats,
       companyBreakdown,
+      contacts: [],
+    };
+
+    // DB copy: only store breakdown for the uploaded client's matched companies.
+    // Capped to companyIds (≤ 20k after upload limit) → at most ~1 MB → safe from MongoDB's 16 MB limit.
+    // filteredData is a Schema.Types.Object field so nested keys are saved freely by Mongoose.
+    const relevantIds = new Set(companyIds.map(String));
+    const storedBreakdown = companyBreakdown.filter((e) => relevantIds.has(e.companyId));
+    const filteredDataForDB = {
+      contactCount: stats.totalContacts,
+      summary: formattedStats,
+      companyBreakdown: storedBreakdown,
       contacts: [],
     };
 
@@ -1957,8 +1969,7 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
         {
           filters,
           exclusions,
-          filteredData,
-          contactCount: stats.totalContacts,
+          filteredData: filteredDataForDB,
           status: "Pending",
           "misc.companyIdsUsed": companyIds,
           "misc.companyNamesUsed": companyNamesUsed,
@@ -1981,10 +1992,8 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
         filters,
         exclusions,
         revisionNo,
-        listName,
-        filteredData,
+        filteredData: filteredDataForDB,
         dataType: datatype,
-        contactCount: stats.totalContacts,
         status: "Pending",
         misc: { companyIdsUsed: companyIds, companyNamesUsed, companyMetaMap },
       });
@@ -2968,6 +2977,11 @@ const getClientMatchSessionData = asyncHandler(async (req, res, next) => {
 
       return sendResponse(res, 200, "Historical session fetched", {
         uploadSession,
+        counts: {
+          completeCount:    counts.completeCount    ?? 0,
+          notMatchedCount:  counts.notMatchedCount  ?? 0,
+          duplicatesCount:  counts.duplicatesCount  ?? 0,
+        },
         completelyMatched: completeDocs.slice(0, PG).map((d) => ({
           _id: d.companyId,
           Company_Name: d.companyName,
