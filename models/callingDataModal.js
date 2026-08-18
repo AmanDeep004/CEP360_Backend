@@ -155,7 +155,6 @@ const CallingDataSchema = new mongoose.Schema(
         ],
       },
     ],
-    registrationSource: { type: Object },
     priority: {
       isActive: { type: Boolean, default: false },
       priorityDate: { type: Date, default: null },
@@ -267,6 +266,11 @@ CallingDataSchema.index({
 
 // Campaign-level priority group sorting
 CallingDataSchema.index({ CampaignId: 1, "priorityGroup.no": 1 });
+
+// PM assignment view multi-filter: CampaignId + agentId + priorityGroup.label + lastRemarks
+// Covers the most common combination of filters used together in getDatabaseByAssignment.
+// batch regex and registrationSource/$ne filters are applied post-index on the narrowed set.
+CallingDataSchema.index({ CampaignId: 1, agentId: 1, "priorityGroup.label": 1, lastRemarks: 1 });
 
 // Agent calling list sorted by priority group (agent page query)
 CallingDataSchema.index({ agentId: 1, "priorityGroup.no": 1 });

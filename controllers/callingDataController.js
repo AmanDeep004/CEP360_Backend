@@ -436,6 +436,7 @@ const getAllCallingDataWithoutMasking = asyncHandler(async (req, res, next) => {
     }
 
     // fetch data and count
+    if (skip > 100_000) return sendError(next, "Page too deep. Use additional filters to narrow results.", 400);
     const [total, data] = await Promise.all([
       CallingData.countDocuments(filter),
       CallingData.find(filter).skip(skip).limit(limit).lean(),
@@ -545,6 +546,7 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
     }
 
     // fetch data and count
+    if (skip > 100_000) return sendError(next, "Page too deep. Use additional filters to narrow results.", 400);
     const [total, data] = await Promise.all([
       CallingData.countDocuments(filter),
       CallingData.find(filter)
@@ -579,43 +581,6 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
       limit,
       totalPages: Math.ceil(total / limit),
       data: maskedData,
-    });
-  } catch (err) {
-    return sendError(next, err.message, 500);
-  }
-});
-
-const getDatabaseByAssignmentold = asyncHandler(async (req, res, next) => {
-  try {
-    const { CampaignId } = req.params;
-    const { assignment } = req.query;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const skip = (page - 1) * limit;
-
-    const filter = { CampaignId };
-
-    if (assignment === "assigned") {
-      filter.agentId = { $ne: null };
-    } else if (assignment === "notassigned") {
-      filter.agentId = null;
-    }
-
-    const [total, data] = await Promise.all([
-      CallingData.countDocuments(filter),
-      CallingData.find(filter)
-        .populate("agentId", "employeeName email")
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-    ]);
-
-    return sendResponse(res, 200, "Filtered database fetched successfully", {
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-      data,
     });
   } catch (err) {
     return sendError(next, err.message, 500);
@@ -735,7 +700,7 @@ const getDatabaseByAssignmentUnmasked = asyncHandler(async (req, res, next) => {
 
       const data = await CallingData.find(filter)
         .sort(DISPLAY_SORT)
-        .hint({ CampaignId: 1, "priorityGroup.no": 1, _id: 1 }) // use compound index for fast skip
+        .hint({ CampaignId: 1, "priorityGroup.no": 1 }) // use compound index for fast skip
         .skip(effectiveSkip)
         .limit(effectiveLimit)
         .populate({ path: "agentId", select: "employeeName email" })
@@ -750,6 +715,7 @@ const getDatabaseByAssignmentUnmasked = asyncHandler(async (req, res, next) => {
       });
     }
 
+    if (skip > 100_000) return sendError(next, "Page too deep. Use additional filters to narrow results.", 400);
     const [data, total] = await Promise.all([
       CallingData.find(filter)
         .sort(DISPLAY_SORT)
@@ -942,7 +908,7 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
 const assignCallingDataToAgents = asyncHandler(async (req, res, next) => {
   try {
     const { agentId, callingDataIds, pmId, pmName, campaignId } = req.body;
-    const { range } = req.query;
+    const { range, batch, remark, priorityGroup, dataSourceType } = req.query;
 
     if (!agentId || !pmId || !pmName) {
       return sendError(
@@ -972,16 +938,25 @@ const assignCallingDataToAgents = asyncHandler(async (req, res, next) => {
         return sendError(next, "Invalid range. Start must be >= 1 and end must be >= start", 400);
       }
 
+      // Build filter — same fields as getDatabaseByAssignment so display matches assignment
+      const rangeFilter = {
+        CampaignId: campaignId,
+        agentId: null,
+        "discrepencyInData.status": { $ne: true },
+      };
+      if (batch)         rangeFilter.batch = { $regex: new RegExp(escapeStringRegexp(batch), "i") };
+      if (remark) {
+        if (remark === "Yet to Call") rangeFilter.lastRemarks = { $in: [null, "", "Yet to Call"] };
+        else                          rangeFilter.lastRemarks = remark;
+      }
+      if (priorityGroup === "unassigned") rangeFilter["priorityGroup.no"] = null;
+      else if (priorityGroup)             rangeFilter["priorityGroup.label"] = priorityGroup;
+      if (dataSourceType === "External")    rangeFilter.registrationSource = "External Registration";
+      else if (dataSourceType === "nonExternal") rangeFilter.registrationSource = { $ne: "External Registration" };
+
       // Fetch only the _ids within the range — skip/limit is efficient even for large ranges
-      const rangeRecords = await CallingData.find(
-        {
-          CampaignId: campaignId,
-          agentId: null,
-          "discrepencyInData.status": { $ne: true },
-        },
-        { _id: 1 }
-      )
-        .sort({ createdAt: 1 })
+      const rangeRecords = await CallingData.find(rangeFilter, { _id: 1 })
+        .sort({ _id: 1 })
         .skip(start - 1)
         .limit(end - start + 1)
         .lean();
@@ -1063,14 +1038,66 @@ const assignCallingDataToAgents = asyncHandler(async (req, res, next) => {
 });
 const unassignCallingDataFromAgents = asyncHandler(async (req, res, next) => {
   try {
-    const { callingDataIds } = req.body;
+    const { callingDataIds, agentId, campaignId } = req.body;
+    const { range, batch, remark, priorityGroup, dataSourceType } = req.query;
 
-    if (!Array.isArray(callingDataIds) || callingDataIds.length === 0) {
-      return sendError(next, "callingDataIds are required", 400);
+    let finalCallingDataIds = [];
+
+    if (range) {
+      // Range mode — resolve by position within the agent's assigned records
+      if (!campaignId || !agentId) {
+        return sendError(next, "campaignId and agentId are required when using range unassignment", 400);
+      }
+
+      const match = range.match(/^(\d+)-(\d+)$/);
+      if (!match) {
+        return sendError(next, "Invalid range format. Use 'start-end' (e.g., 1-100)", 400);
+      }
+
+      const start = parseInt(match[1], 10);
+      const end   = parseInt(match[2], 10);
+
+      if (start < 1 || end < start) {
+        return sendError(next, "Invalid range. Start must be >= 1 and end must be >= start", 400);
+      }
+
+      // Build filter — assigned records of this agent matching active filters
+      const rangeFilter = {
+        CampaignId: campaignId,
+        agentId,
+        "discrepencyInData.status": { $ne: true },
+      };
+      if (batch)  rangeFilter.batch = { $regex: new RegExp(escapeStringRegexp(batch), "i") };
+      if (remark) {
+        if (remark === "Yet to Call") rangeFilter.lastRemarks = { $in: [null, "", "Yet to Call"] };
+        else                          rangeFilter.lastRemarks = remark;
+      }
+      if (priorityGroup === "unassigned") rangeFilter["priorityGroup.no"] = null;
+      else if (priorityGroup)             rangeFilter["priorityGroup.label"] = priorityGroup;
+      if (dataSourceType === "External")       rangeFilter.registrationSource = "External Registration";
+      else if (dataSourceType === "nonExternal") rangeFilter.registrationSource = { $ne: "External Registration" };
+
+      const rangeRecords = await CallingData.find(rangeFilter, { _id: 1 })
+        .sort({ _id: 1 })
+        .skip(start - 1)
+        .limit(end - start + 1)
+        .lean();
+
+      if (!rangeRecords.length) {
+        return sendError(next, `No assigned records found in range ${start}-${end}`, 404);
+      }
+
+      finalCallingDataIds = rangeRecords.map((item) => item._id.toString());
+    } else {
+      // Explicit IDs mode
+      if (!Array.isArray(callingDataIds) || callingDataIds.length === 0) {
+        return sendError(next, "Either 'range' query parameter or 'callingDataIds' in body is required", 400);
+      }
+      finalCallingDataIds = callingDataIds;
     }
 
     const result = await CallingData.updateMany(
-      { _id: { $in: callingDataIds } },
+      { _id: { $in: finalCallingDataIds } },
       { $unset: { agentId: "", pmId: "", pmName: "" } }
     );
 
@@ -1446,15 +1473,13 @@ const priorityFilterOptions = asyncHandler(async (req, res, next) => {
     const { campaignId } = req.params;
     if (!campaignId) return sendError(next, "campaignId is required", 400);
 
+    // distinct() already returns null/empty values — no separate exists() query needed.
+    // This halves the DB round-trips from 30 to 15.
     const results = await Promise.all(
       PRIORITY_FILTER_FIELDS.map(async (field) => {
         const vals = await CallingData.distinct(field, { CampaignId: campaignId });
+        const hasBlank = vals.some((v) => !v || String(v).trim() === "");
         const filled = vals.filter((v) => v && String(v).trim()).sort();
-        // Check if any records have null / empty for this field
-        const hasBlank = await CallingData.exists({
-          CampaignId: campaignId,
-          $or: [{ [field]: null }, { [field]: "" }, { [field]: { $exists: false } }],
-        });
         return { field, values: hasBlank ? [...filled, "__blank__"] : filled };
       })
     );
@@ -2217,6 +2242,8 @@ const reshuffleCallingData = asyncHandler(async (req, res, next) => {
     if (priorityGroup) filter["priorityGroup.label"] = priorityGroup;
 
     // Fetch _id + agentId (needed to prevent self-reassignment)
+    // Hard cap at 50,000 to prevent loading 1 lakh records into Node.js memory at once
+    const RESHUFFLE_MAX = 50_000;
     let query = CallingData.find(filter, { _id: 1, agentId: 1 }).sort({ _id: 1 });
 
     if (range) {
@@ -2226,7 +2253,11 @@ const reshuffleCallingData = asyncHandler(async (req, res, next) => {
       const end   = parseInt(parts[1], 10);
       if (isNaN(start) || isNaN(end) || start < 1 || end < start)
         return sendError(next, "Invalid range values", 400);
+      if (end - start + 1 > RESHUFFLE_MAX)
+        return sendError(next, `Range too large. Maximum ${RESHUFFLE_MAX} records per reshuffle.`, 400);
       query = query.skip(start - 1).limit(end - start + 1);
+    } else {
+      query = query.limit(RESHUFFLE_MAX);
     }
 
     const records = await query.lean();
