@@ -792,16 +792,26 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
     const skip    = (pageNum - 1) * limNum;
 
     // ── Base filter ──────────────────────────────────────────────────────────
-    const filter = { CampaignId, "discrepencyInData.status": { $ne: true } };
+    // Cast string IDs to ObjectId — Mongoose auto-casts for find/countDocuments
+    // but NOT for aggregate() pipeline $match stages, causing the range count
+    // aggregation to match 0 documents despite find() returning results.
+    const toObjId = (id) =>
+      id && mongoose.Types.ObjectId.isValid(id)
+        ? new mongoose.Types.ObjectId(id)
+        : id;
+
+    const filter = { CampaignId: toObjId(CampaignId), "discrepencyInData.status": { $ne: true } };
 
     if (assignment === "assigned")    filter.agentId = { $ne: null };
     if (assignment === "notassigned") filter.agentId = null;
-    if (agentId) filter.agentId = agentId;
+    if (agentId) filter.agentId = toObjId(agentId);
 
     if (dataSourceType) {
-      if (dataSourceType === "Kestone")     filter.dataSourceType = { $in: ["Kestone", "Both"] };
-      else if (dataSourceType === "Client") filter.dataSourceType = { $in: ["Client", "Both"] };
-      else                                  filter.dataSourceType = dataSourceType;
+      if (dataSourceType === "Kestone")          filter.dataSourceType = { $in: ["Kestone", "Both"] };
+      else if (dataSourceType === "Client")      filter.dataSourceType = { $in: ["Client", "Both"] };
+      else if (dataSourceType === "External")    filter.registrationSource = "External Registration";
+      else if (dataSourceType === "nonExternal") filter.registrationSource = { $ne: "External Registration" };
+      else                                       filter.dataSourceType = dataSourceType;
     }
 
     if (batch) {
@@ -833,8 +843,20 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
       Personal_Email2:       maskEmail(row.Personal_Email2),
     });
 
-    // ── PATH 1: no range — full DB-level pagination ──────────────────────────
+    // ── PATH 1: no range — parallel count + data queries ────────────────────
     if (!range) {
+      // Guard against pathologically deep skip: page 5001 @ limit 20 = skip 100k.
+      // At that depth MongoDB must scan 100k docs to reach the offset — use
+      // range or additional filters to narrow the dataset instead.
+      const MAX_SKIP = 100_000;
+      if (skip > MAX_SKIP) {
+        return sendError(
+          next,
+          "Page too deep. Use the range filter or narrow results with additional filters.",
+          400
+        );
+      }
+
       const [docs, total] = await Promise.all([
         CallingData.find(filter)
           .populate({ path: "agentId", select: "employeeName email" })
@@ -854,7 +876,7 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
       });
     }
 
-    // ── PATH 2: range (with optional remark already in filter) ───────────────
+    // ── PATH 2: range ─────────────────────────────────────────────────────────
     // Sort by _id asc so row positions are stable and consistent.
     const parts = range.split("-").map((v) => parseInt(v.trim(), 10));
     if (parts.length !== 2 || parts.some((n) => isNaN(n))) {
@@ -865,10 +887,26 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
       return sendError(next, "Range minimum must be >= 1 and <= maximum", 400);
     }
 
-    const totalInFilter = await CallingData.countDocuments(filter);
-    const clampedMin    = Math.min(min, totalInFilter);
-    const clampedMax    = Math.min(max, totalInFilter);
-    const totalInRange  = Math.max(0, clampedMax - clampedMin + 1);
+    // Count only up to `max` records — stops the scan early instead of
+    // counting all lakh records just to validate a small range (e.g., 1-1000).
+    const [countResult] = await CallingData.aggregate([
+      { $match: filter },
+      { $limit: max },          // ← stops scanning after `max` docs
+      { $count: "total" },
+    ]);
+    const totalInFilter = countResult?.total ?? 0;
+
+    // Early-exit: no records match, or range starts beyond the last matching row.
+    // Avoids a negative dbSkip that makes MongoDB throw a 500.
+    if (totalInFilter === 0 || min > totalInFilter) {
+      return sendResponse(res, 200, "Filtered database fetched successfully", {
+        total: 0, page: pageNum, limit: limNum, totalPages: 0, data: [],
+      });
+    }
+
+    const clampedMin   = Math.min(min, totalInFilter);
+    const clampedMax   = Math.min(max, totalInFilter);
+    const totalInRange = Math.max(0, clampedMax - clampedMin + 1);
 
     if (totalInRange === 0 || skip >= totalInRange) {
       return sendResponse(res, 200, "Filtered database fetched successfully", {
@@ -877,6 +915,8 @@ const getDatabaseByAssignment = asyncHandler(async (req, res, next) => {
       });
     }
 
+    // dbSkip is bounded by (max - 1), so it stays small regardless of total
+    // collection size — no deep-skip performance problem in PATH 2.
     const dbSkip  = (clampedMin - 1) + skip;
     const dbLimit = Math.min(limNum, totalInRange - skip);
 

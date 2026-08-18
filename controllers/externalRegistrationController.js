@@ -347,8 +347,9 @@ const uploadExternalDataController = asyncHandler(async (req, res, next) => {
       notMatched: 0,
       inserted: 0,
       updated: 0,
-      skipped: [],
-      errors: [],
+      withinFileDuplicates: [], // { row, Full_Name, Mobile_No, phone }
+      skipped: [],              // { row, Full_Name, Mobile_No, message }
+      errors: [],               // { row, Full_Name, Mobile_No, message }
     };
 
     // ── Pre-parse all rows and collect phone numbers ───────────────────────
@@ -417,7 +418,7 @@ const uploadExternalDataController = asyncHandler(async (req, res, next) => {
 
       const hasPhone = mobileNo || contact_Direct_Phone1 || contact_Direct_Phone2;
       if (!hasPhone) {
-        results.errors.push({ row: i + 2, message: "No mobile or phone number found" });
+        results.errors.push({ row: i + 2, Full_Name: String(row.Full_Name || ""), Mobile_No: "", message: "No mobile or phone number found" });
         continue;
       }
 
@@ -426,7 +427,7 @@ const uploadExternalDataController = asyncHandler(async (req, res, next) => {
         return val === undefined || val === null || String(val).trim() === "";
       });
       if (missingFields.length > 0) {
-        results.skipped.push({ row: i + 2, message: `Missing required fields: ${missingFields.join(", ")}` });
+        results.skipped.push({ row: i + 2, Full_Name: String(row.Full_Name || ""), Mobile_No: mobileNo, message: `Missing: ${missingFields.join(", ")}` });
         continue;
       }
 
@@ -440,6 +441,21 @@ const uploadExternalDataController = asyncHandler(async (req, res, next) => {
         (contact_Direct_Phone1 && cdByPhone1.get(contact_Direct_Phone1)) ||
         (contact_Direct_Phone2 && cdByPhone2.get(contact_Direct_Phone2)) ||
         null;
+
+      // If the phone was seen earlier IN THIS SAME FILE (tracked as "local"),
+      // skip the row — a real insert/update is already queued for that phone.
+      // Previously this was pushed as updateOne({ _id: "local" }) which is a
+      // silent no-op in MongoDB (the string never matches an ObjectId), causing
+      // these rows to vanish without any count.
+      if (existingCallingData?._id === "local") {
+        results.withinFileDuplicates.push({
+          row: i + 2,
+          Full_Name: String(row.Full_Name || ""),
+          Mobile_No: mobileNo,
+          phone: mobileNo || contact_Direct_Phone1 || contact_Direct_Phone2,
+        });
+        continue;
+      }
 
       let isAvailableInCallingData = false;
 
