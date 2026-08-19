@@ -13,14 +13,23 @@ const getPanKey = () => Buffer.from(process.env.PAN_ENCRYPTION_KEY, "hex");
 const encryptPAN = (pan) => {
   const iv = randomBytes(16);
   const cipher = createCipheriv(PAN_ALGO, getPanKey(), iv);
-  return iv.toString("hex") + ":" + cipher.update(pan, "utf8", "hex") + cipher.final("hex");
+  return (
+    iv.toString("hex") +
+    ":" +
+    cipher.update(pan, "utf8", "hex") +
+    cipher.final("hex")
+  );
 };
 
 const decryptPAN = (encrypted) => {
   try {
     const [ivHex, data] = encrypted.split(":");
     if (!ivHex || !data) return encrypted; // plaintext fallback for existing data
-    const decipher = createDecipheriv(PAN_ALGO, getPanKey(), Buffer.from(ivHex, "hex"));
+    const decipher = createDecipheriv(
+      PAN_ALGO,
+      getPanKey(),
+      Buffer.from(ivHex, "hex")
+    );
     return decipher.update(data, "hex", "utf8") + decipher.final("utf8");
   } catch {
     return encrypted; // return as-is if decryption fails (legacy plaintext)
@@ -35,6 +44,7 @@ const {
   AGENT,
   DATABASE_MANAGER,
   PRESALES_MANAGER,
+  IT_ADMINISTRATOR,
 } = UserRoleEnum;
 const userSchema = new Schema(
   {
@@ -84,6 +94,7 @@ const userSchema = new Schema(
           DATABASE_MANAGER,
           AGENT,
           PRESALES_MANAGER,
+          IT_ADMINISTRATOR,
         ],
         message: "{VALUE} is not a valid role",
       },
@@ -215,9 +226,13 @@ userSchema.pre("save", async function (next) {
 
 // Sign JWT and return
 userSchema.methods.getSignedJwtToken = function () {
-  return sign({ id: this._id, tokenVersion: this.tokenVersion }, process.env.JWT_SECRET, {
-    expiresIn: "12h",
-  });
+  return sign(
+    { id: this._id, tokenVersion: this.tokenVersion },
+    process.env.JWT_SECRET,
+    {
+      expiresIn: "12h",
+    }
+  );
 };
 
 // Match user entered password to hashed password in database

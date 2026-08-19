@@ -94,7 +94,7 @@ const COMPANY_FIELDS = [
 // Fields that belong to MasterDB Contact schema
 const CONTACT_FIELDS = [
   "First_Name", "Last_Name", "Full_Name", "Salutation", "Gender",
-  "Job_Title", "Job_Seniority", "Job_Function",
+  "Job_Title", "Job_Seniority", "Job_Seniority_Secondary", "Job_Seniority_Tertiary", "Job_Function",
   "Contact_Direct_Phone1", "Contact_Direct_Phone2", "Mobile_No",
   "Office_Email_1", "Office_Email_2", "Personal_Email1", "Personal_Email2",
   "Contact_LinkedIn_Profile",

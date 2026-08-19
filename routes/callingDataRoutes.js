@@ -3,6 +3,7 @@ import {
   uploadcallingData,
   getCallingDataById,
   editcallingData,
+  addSingleContact,
   deletecallingData,
   getAllCallingData,
   getDatabaseByAssignment,
@@ -18,16 +19,26 @@ import {
   priorityPreview,
   assignPriorityGroup,
   getPriorityGroups,
+  getDistinctFilterValues,
   deletePriorityGroup,
   swapPriorityGroups,
   getPrioritySlots,
   createPrioritySlot,
   deletePrioritySlotDef,
+  externalUploadCallingData,
+  downloadExternalUploadTemplate,
+  resetNoResponseToYetToCall,
+  reshuffleCallingData,
 } from "../controllers/callingDataController.js";
 import {
   uploadExternalDataController,
   getAllExternalRegistrations,
+  downloadExternalRegistrationTemplate,
 } from "../controllers/externalRegistrationController.js";
+import {
+  downloadExternalCallingDataTemplate,
+  uploadExternalCallingData,
+} from "../controllers/externalCallingDataController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
@@ -44,6 +55,7 @@ router.post(
 );
 router.get("/getCallingDataById/:id", protect, getCallingDataById);
 router.put("/", protect, editcallingData);
+router.post("/addContact", protect, addSingleContact);
 router.post("/assignCallingDataToAgents", protect, assignCallingDataToAgents);
 router.post(
   "/reassignCallingDatatoAgents",
@@ -54,6 +66,12 @@ router.post(
   "/unassignCallingDataFromAgents",
   protect,
   unassignCallingDataFromAgents
+);
+router.post(
+  "/reshuffleCallingData",
+  protect,
+  authorize(ADMIN, PROGRAM_MANAGER),
+  reshuffleCallingData
 );
 router.delete("/:id", protect, deletecallingData);
 router.get("/getAllCallingData/:CampaignId", protect, getAllCallingData);
@@ -79,6 +97,26 @@ router.get(
   getAllExternalRegistrations
 );
 
+router.get(
+  "/external-registration-template",
+  protect,
+  downloadExternalRegistrationTemplate
+);
+
+// ── External Upload ─────────────────────────────────────────────────────────
+router.get(
+  "/external-upload-template",
+  protect,
+  downloadExternalUploadTemplate
+);
+
+router.post(
+  "/external-upload",
+  protect,
+  upload.single("file"),
+  externalUploadCallingData
+);
+
 // here  need to add filter based  calling data as well
 // get all non assigned calling data
 
@@ -90,6 +128,7 @@ router.put("/closePriority/:id", protect, closePriority);
 router.get("/:campaignId/priorityFilterOptions", protect, priorityFilterOptions);
 router.get("/:campaignId/priorityPreview",        protect, priorityPreview);
 router.get("/:campaignId/priorityGroups",         protect, getPriorityGroups);
+router.get("/:campaignId/distinctFilterValues",   protect, getDistinctFilterValues);
 router.post("/:campaignId/assignPriorityGroup",   protect, assignPriorityGroup);
 router.delete("/:campaignId/priorityGroup/:groupNo", protect, deletePriorityGroup);
 router.patch("/:campaignId/swapPriorityGroups",   protect, swapPriorityGroups);
@@ -98,5 +137,16 @@ router.patch("/:campaignId/swapPriorityGroups",   protect, swapPriorityGroups);
 router.get("/:campaignId/prioritySlots",          protect, getPrioritySlots);
 router.post("/:campaignId/prioritySlots",         protect, createPrioritySlot);
 router.delete("/:campaignId/prioritySlots/:no",   protect, deletePrioritySlotDef);
+
+router.put("/resetNoResponse/:campaignId", protect, authorize(ADMIN, PROGRAM_MANAGER), resetNoResponseToYetToCall);
+
+// ── External Calling Data Upload (presales) ──────────────────────────────────
+router.get("/external-calling-data-template", protect, downloadExternalCallingDataTemplate);
+router.post(
+  "/external-calling-data-upload",
+  protect,
+  upload.single("file"),
+  uploadExternalCallingData
+);
 
 export default router;

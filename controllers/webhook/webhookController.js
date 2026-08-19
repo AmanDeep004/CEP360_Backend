@@ -43,10 +43,6 @@ const findCallingDataForNumber = async (mobile) => {
 const messageStatusUpdateOld = asyncHandler(async (req, res, next) => {
   try {
     const payload = req.body;
-    console.log(
-      "Received Message Status Webhook:",
-      JSON.stringify(payload, null, 2)
-    );
 
     if (!payload) {
       return sendError(next, "Payload missing", 400);
@@ -57,7 +53,6 @@ const messageStatusUpdateOld = asyncHandler(async (req, res, next) => {
     );
 
     if (!mobile) {
-      console.log("No mobile number found in payload");
       return sendResponse(res, 200, "No mobile number in payload", {
         received: true,
         mobile: null,
@@ -67,7 +62,6 @@ const messageStatusUpdateOld = asyncHandler(async (req, res, next) => {
     const callingDataContact = await findCallingDataForNumber(mobile);
 
     if (!callingDataContact) {
-      console.log(`CallingData contact not found for number: ${mobile}`);
 
       const waMessageId = payload?.messageId || payload?.message_id || "";
 
@@ -90,15 +84,8 @@ const messageStatusUpdateOld = asyncHandler(async (req, res, next) => {
       // Try to create, if duplicate, update the existing one
       try {
         await DoubleTickData.create(saveObj);
-        console.log(
-          `Created new DoubleTickData record for waMessageId: ${waMessageId}`
-        );
       } catch (err) {
         if (err.code === 11000) {
-          // Duplicate key error - update existing record
-          console.log(
-            `Updating existing DoubleTickData for waMessageId: ${waMessageId}`
-          );
 
           await DoubleTickData.findOneAndUpdate(
             { waMessageId: waMessageId },
@@ -137,7 +124,6 @@ const messageStatusUpdateOld = asyncHandler(async (req, res, next) => {
       "";
 
     if (!waMessageId) {
-      console.log("No message ID found in payload");
       return sendResponse(res, 200, "No message ID in payload", {
         received: true,
         contactId: callingDataContact._id,
@@ -161,9 +147,6 @@ const messageStatusUpdateOld = asyncHandler(async (req, res, next) => {
     const templateId = payload?.templateId || "";
     const templateName = payload?.templateName || "";
 
-    console.log(
-      `Found CallingData contact: ${callingDataContact._id}, updating status for message: ${waMessageId}`
-    );
 
     // First, try to update existing whatsappTemplate entry
     let updated = await CallingData.findOneAndUpdate(
@@ -198,10 +181,6 @@ const messageStatusUpdateOld = asyncHandler(async (req, res, next) => {
       });
 
       if (existingContact) {
-        // It exists but update failed - try again
-        console.log(
-          `WhatsApp template exists but update failed, retrying for message: ${waMessageId}`
-        );
         updated = await CallingData.findOneAndUpdate(
           {
             _id: callingDataContact._id,
@@ -224,10 +203,6 @@ const messageStatusUpdateOld = asyncHandler(async (req, res, next) => {
           { new: true }
         );
       } else {
-        // Doesn't exist - safe to create new entry
-        console.log(
-          `Creating new WhatsApp template entry for message: ${waMessageId}`
-        );
 
         updated = await CallingData.findByIdAndUpdate(
           callingDataContact._id,
@@ -270,15 +245,8 @@ const messageStatusUpdateOld = asyncHandler(async (req, res, next) => {
     // Try to create, if duplicate, update the existing one
     try {
       await DoubleTickData.create(saveObj);
-      console.log(
-        `Created new DoubleTickData record for waMessageId: ${waMessageId}`
-      );
     } catch (err) {
       if (err.code === 11000) {
-        // Duplicate key error - update existing record
-        console.log(
-          `Updating existing DoubleTickData for waMessageId: ${waMessageId}`
-        );
         await DoubleTickData.findOneAndUpdate(
           { waMessageId: waMessageId },
           {
@@ -301,9 +269,6 @@ const messageStatusUpdateOld = asyncHandler(async (req, res, next) => {
       }
     }
 
-    console.log(
-      `Updated CallingData WhatsApp Template for contact: ${callingDataContact._id}`
-    );
 
     return sendResponse(res, 200, "Message status updated successfully", {
       received: true,
@@ -324,10 +289,6 @@ const messageStatusUpdateOld = asyncHandler(async (req, res, next) => {
 const messageStatusUpdate = asyncHandler(async (req, res, next) => {
   try {
     const payload = req.body;
-    console.log(
-      "Received Message Status Webhook:",
-      JSON.stringify(payload, null, 2)
-    );
 
     if (!payload) {
       return sendError(next, "Payload missing", 400);
@@ -406,7 +367,6 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
     }
 
     if (!mobile && !waMessageId) {
-      console.log("No mobile number or message ID found in payload");
       await DoubleTickData.create({
         webhookType: "MessageStatus",
         mobileNumber: "",
@@ -476,7 +436,6 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
     };
 
     if (!callingDataContact) {
-      console.log(`CallingData contact not found for number: ${mobile}`);
       await persistDoubleTick(null);
 
       return sendResponse(res, 200, "Contact not found, webhook logged", {
@@ -487,7 +446,6 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
     }
 
     if (!waMessageId) {
-      console.log("No message ID found in payload");
       await persistDoubleTick(callingDataContact._id);
       return sendResponse(res, 200, "No message ID in payload", {
         received: true,
@@ -496,9 +454,6 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
       });
     }
 
-    console.log(
-      `Found CallingData contact: ${callingDataContact._id}, updating status for message: ${waMessageId}`
-    );
 
     // Build the update fields — include failureReason only when present
     const whatsappTemplateSetFields = {
@@ -538,10 +493,6 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
       });
 
       if (existingContact) {
-        // It exists but update failed - try again
-        console.log(
-          `WhatsApp template exists but update failed, retrying for message: ${waMessageId}`
-        );
         updated = await CallingData.findOneAndUpdate(
           {
             _id: callingDataContact._id,
@@ -554,10 +505,6 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
           { new: true }
         );
       } else {
-        // Doesn't exist - safe to create new entry
-        console.log(
-          `Creating new WhatsApp template entry for message: ${waMessageId}`
-        );
 
         const newEntry = {
           waMessageId,
@@ -580,9 +527,6 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
 
     await persistDoubleTick(callingDataContact._id);
 
-    console.log(
-      `Updated CallingData WhatsApp Template for contact: ${callingDataContact._id}`
-    );
 
     return sendResponse(res, 200, "Message status updated successfully", {
       received: true,
@@ -604,10 +548,6 @@ const messageStatusUpdate = asyncHandler(async (req, res, next) => {
 const messageReceiveUpdate = asyncHandler(async (req, res, next) => {
   try {
     const payload = req.body;
-    console.log(
-      "Received Message Receive Webhook:",
-      JSON.stringify(payload, null, 2)
-    );
 
     if (!payload) {
       return sendError(next, "Payload missing", 400);
@@ -647,7 +587,6 @@ const messageReceiveUpdate = asyncHandler(async (req, res, next) => {
       "text";
 
     if (!mobile) {
-      console.log("No mobile number found in payload");
       // Use upsert so DoubleTick retries don't create duplicate records.
       const noMobileDoc = {
         webhookType: "MessageReceived",
@@ -733,7 +672,6 @@ const messageReceiveUpdate = asyncHandler(async (req, res, next) => {
       );
     }
 
-    console.log(`Message receive webhook saved: ${saved._id}`);
 
     return sendResponse(
       res,

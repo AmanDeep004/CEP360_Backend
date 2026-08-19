@@ -10,6 +10,8 @@ import {
   getAllCampaignByAGentId,
   getCallingDataByAgentAndCampaign,
   getCallingDataByAgentData,
+  getCallingDataFilterOptions,
+  searchCallingDataFieldValues,
   getEngagementHistoryByContactId,
 } from "../controllers/agentController.js";
 
@@ -35,6 +37,16 @@ router.get(
   "/getCallingDataByAgentIdAndCampaignId/:agentId/:campaignId",
   protect,
   getCallingDataByAgentAndCampaign
+);
+router.get(
+  "/callingDataFilterOptions/:agentId",
+  protect,
+  getCallingDataFilterOptions
+);
+router.get(
+  "/callingDataFieldSearch/:agentId",
+  protect,
+  searchCallingDataFieldValues
 );
 router.post(
   "/getCallingDataByAgent/:agentId",

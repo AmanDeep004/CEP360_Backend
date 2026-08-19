@@ -12,7 +12,7 @@ const campaignSchema = new mongoose.Schema(
       type: String,
       required: [true, "Program Name is required"],
       trim: true,
-      maxlength: [50, "Program Name cannot be more than 50 characters"],
+      maxlength: [150, "Program Name cannot be more than 150 characters"],
       unique: [true, "Campaign name must be unique"],
     },
 
@@ -25,7 +25,13 @@ const campaignSchema = new mongoose.Schema(
     category: {
       type: String,
       required: false,
-      enum: ["Virtual Event", "Webinar", "Physical Event"],
+      validate: {
+        validator: function (v) {
+          if (!v) return true;
+          return ["Virtual Event", "Webinar", "Physical Event"].includes(v);
+        },
+        message: "Invalid Program Category",
+      },
     },
 
     startDate: { type: Date, required: true },
@@ -52,9 +58,11 @@ const campaignSchema = new mongoose.Schema(
 
     jcNumber: { type: String, required: false },
 
-    brandName: { type: String, required: false },
-
     clientName: { type: String, required: false },
+
+    brandName: { type: String, required: true },
+
+    brandId: { type: String, required: false },
 
     clientEmail: { type: String, required: false },
 
@@ -90,15 +98,8 @@ const campaignSchema = new mongoose.Schema(
       type: String,
       required: false,
       default: "Kestone",
-      enum: ["Kestone", "Client", "Both", "ThirdParty"],
+      enum: ["Kestone", "Client", "Both", "ThirdParty", "External"],
     },
-
-    senderEmail: [
-      {
-        email: { type: String, trim: true },
-        timestamp: { type: Date, default: Date.now },
-      },
-    ],
 
     stage: {
       type: String,
@@ -119,6 +120,30 @@ const campaignSchema = new mongoose.Schema(
       },
     },
     isCallingDataAssigned: { type: Boolean, default: false },
+    isExternalSheetUploadAllowed: { type: Boolean, default: true },
+
+    totalEmailSent:    { type: Number, default: 0 },
+    totalWhatsappSent: { type: Number, default: 0 },
+
+    allowedTemplates: {
+      whatsapp: [
+        {
+          templateName: { type: String },
+          displayName:  { type: String },
+          language:     { type: String },
+          variables:    { type: mongoose.Schema.Types.Mixed, default: {} },
+        },
+      ],
+      email: [
+        {
+          templateId:   { type: String },
+          templateName: { type: String },
+          fromEmail:    { type: String },
+          fromName:     { type: String },
+          variables:    { type: mongoose.Schema.Types.Mixed, default: {} },
+        },
+      ],
+    },
 
     // Set when this campaign is a reconfirmation of another campaign
     parentCampaignId: {

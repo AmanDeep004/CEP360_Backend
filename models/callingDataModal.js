@@ -13,6 +13,8 @@ const CallingDataSchema = new mongoose.Schema(
     Gender: { type: String, trim: true },
     Job_Title: { type: String, trim: true },
     Job_Seniority: { type: String, trim: true },
+    Job_Seniority_Secondary: { type: String, trim: true },
+    Job_Seniority_Tertiary: { type: String, trim: true },
     Job_Function: { type: String, trim: true },
     Contact_Address_1: { type: String, trim: true },
     Contact_Address_2: { type: String, trim: true },
@@ -97,7 +99,10 @@ const CallingDataSchema = new mongoose.Schema(
     isRegistered: { type: Boolean, default: false },
     registeredOn: { type: Date, default: null },
     registrationSource: { type: String, default: "Not Registered" },
+    isAttended: { type: Boolean, default: false },
     callHistory: { type: mongoose.Schema.Types.ObjectId, ref: "CallHistory" },
+    lastRemarks: { type: String, default: null },
+    lastCallingDate: { type: Date, default: null },
     dataSourceType: {
       type: String,
       enum: [
@@ -106,28 +111,31 @@ const CallingDataSchema = new mongoose.Schema(
         "Both",
         "ThirdParty",
         "IndividualSearchKestone",
+        "External",
       ],
       required: false,
     },
     isDataSourceApproved: { type: Boolean, default: false },
-    emailTemplates: {
-      templateId: { type: String },
-      templateName: { type: String, trim: true },
-      timestamp: { type: Date },
-      templateDetails: { type: Object },
-      status: { type: String, trim: true },
-      messageId: { type: String, trim: true },
-      history: [
-        {
-          status: { type: String, trim: true },
-          timestamp: { type: Date },
-          templateId: { type: String },
-          templateName: { type: String, trim: true },
-          data: { type: String, trim: true },
-          templateDetails: { type: Object },
-        },
-      ],
-    },
+    emailTemplates: [
+      {
+        messageId:       { type: String, trim: true, default: "" },
+        templateId:      { type: String },
+        templateName:    { type: String, trim: true },
+        campaignId:      { type: String },
+        recipientEmail:  { type: String, trim: true },
+        recipientSource: { type: String, trim: true },
+        status:          { type: String, trim: true },   // latest status
+        timestamp:       { type: Date, default: Date.now },
+        history: [
+          {
+            event:     { type: String, trim: true }, // sent|opened|clicked|failed|spam|unsubscribed|bounced
+            timestamp: { type: Date, default: Date.now },
+            reason:    { type: String, trim: true }, // for failed/bounced/spam
+            url:       { type: String, trim: true }, // for clicked
+          },
+        ],
+      },
+    ],
 
     whatsappTemplates: [
       {
@@ -147,7 +155,6 @@ const CallingDataSchema = new mongoose.Schema(
         ],
       },
     ],
-    registrationSource: { type: Object },
     priority: {
       isActive: { type: Boolean, default: false },
       priorityDate: { type: Date, default: null },
@@ -156,19 +163,79 @@ const CallingDataSchema = new mongoose.Schema(
     },
     // Campaign-level priority group assigned by presales
     priorityGroup: {
-      no:         { type: Number, default: null },  // 1, 2, 3…
-      label:      { type: String, default: null },  // "P-1", "P-2"…
-      assignedAt: { type: Date,   default: null },
-      filters:    { type: Object, default: null },  // snapshot of filters used
+      no: { type: Number, default: null }, // 1, 2, 3…
+      label: { type: String, default: null }, // "P-1", "P-2"…
+      assignedAt: { type: Date, default: null },
+      filters: { type: Object, default: null }, // snapshot of filters used
     },
     clientInfo: {
-      companySpecificId: { type: String, trim: true, default: "" },
-      segment: { type: String, trim: true, default: "" },
+      companySpecificId:        { type: String, trim: true, default: "" },
+      segment:                  { type: String, trim: true, default: "" },
+      clientCompanyName:        { type: String, trim: true, default: "" }, // client's own company name
+      masterDbMatchedCompanyName: { type: String, trim: true, default: "" }, // name used to match master DB
     },
     discrepencyInData: {
       status: { type: Boolean, default: false },
       chatHistory: { type: Array },
       misc: { type: Object, default: {} },
+    },
+
+    /**
+     * Channel-level suppression set by the agent during a call.
+     * Each channel tracks its own DND status independently so future
+     * email / whatsapp suppression can be added without schema changes.
+     *
+     * scope:
+     *   "campaign" — suppress only in this campaign
+     *   "brand"    — suppress for all campaigns of this client company
+     *   "global"   — suppress forever across all channels / campaigns
+     */
+    suppressions: {
+      calling: {
+        isDND: { type: Boolean, default: false },
+        scope: {
+          type: String,
+          enum: ["campaign", "brand", "global"],
+          default: null,
+        },
+        setAt: { type: Date, default: null },
+        setBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          default: null,
+        },
+        setByName: { type: String, trim: true, default: null },
+      },
+      email: {
+        isDND: { type: Boolean, default: false },
+        scope: {
+          type: String,
+          enum: ["campaign", "brand", "global"],
+          default: null,
+        },
+        setAt: { type: Date, default: null },
+        setBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          default: null,
+        },
+        setByName: { type: String, trim: true, default: null },
+      },
+      whatsapp: {
+        isDND: { type: Boolean, default: false },
+        scope: {
+          type: String,
+          enum: ["campaign", "brand", "global"],
+          default: null,
+        },
+        setAt: { type: Date, default: null },
+        setBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          default: null,
+        },
+        setByName: { type: String, trim: true, default: null },
+      },
     },
   },
   {
@@ -178,6 +245,14 @@ const CallingDataSchema = new mongoose.Schema(
 
 // Covers: CampaignId-only, CampaignId+agentId, and CampaignId+agentId+sort(createdAt) queries
 CallingDataSchema.index({ CampaignId: 1, agentId: 1, createdAt: 1 });
+
+// Fast remark/date filtering on agent list page (agentId-first for agent view)
+CallingDataSchema.index({ agentId: 1, CampaignId: 1, lastRemarks: 1 });
+CallingDataSchema.index({ agentId: 1, CampaignId: 1, lastCallingDate: 1 });
+
+// PM view: filter by campaign + remark without agentId constraint
+CallingDataSchema.index({ CampaignId: 1, lastRemarks: 1 });
+CallingDataSchema.index({ CampaignId: 1, agentId: 1, lastRemarks: 1 });
 
 // Duplicate detection (filtration controller: find by CampaignId + Contact_ID $in)
 CallingDataSchema.index({ CampaignId: 1, Contact_ID: 1 });
@@ -191,6 +266,11 @@ CallingDataSchema.index({
 
 // Campaign-level priority group sorting
 CallingDataSchema.index({ CampaignId: 1, "priorityGroup.no": 1 });
+
+// PM assignment view multi-filter: CampaignId + agentId + priorityGroup.label + lastRemarks
+// Covers the most common combination of filters used together in getDatabaseByAssignment.
+// batch regex and registrationSource/$ne filters are applied post-index on the narrowed set.
+CallingDataSchema.index({ CampaignId: 1, agentId: 1, "priorityGroup.label": 1, lastRemarks: 1 });
 
 // Agent calling list sorted by priority group (agent page query)
 CallingDataSchema.index({ agentId: 1, "priorityGroup.no": 1 });

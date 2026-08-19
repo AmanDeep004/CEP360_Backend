@@ -10,6 +10,8 @@ import {
   updateCampaignStage,
   createReconfirmationCampaign,
   getReconfirmationCampaigns,
+  updateAllowedTemplates,
+  getCampaignAllowedTemplates,
 } from "../controllers/campaignController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -82,6 +84,19 @@ router.get(
   protect,
   authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER),
   getReconfirmationCampaigns
+);
+
+// Allowed templates for a campaign (PM/Admin assign, Agent reads)
+router.put(
+  "/updateAllowedTemplates",
+  protect,
+  authorize(ADMIN, PROGRAM_MANAGER),
+  updateAllowedTemplates
+);
+router.get(
+  "/allowedTemplates/:campaignId",
+  protect,
+  getCampaignAllowedTemplates
 );
 
 // Delete campaign
