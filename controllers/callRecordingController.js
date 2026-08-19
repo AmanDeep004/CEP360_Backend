@@ -1,4 +1,5 @@
 import CallRecording from "../models/callRecordingModel.js";
+import CallHistory from "../models/callHistoryModel.js";
 import errorHandler from "../utils/index.js";
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
@@ -258,6 +259,49 @@ const telcmiWebhook = asyncHandler(async (req, res, next) => {
       };
 
       const saved = await record.save();
+
+      // Write recordingUrl back to the matched chatHistory entry (non-blocking)
+      if (filename && record.callingData_id) {
+        try {
+          const callHist = await CallHistory.findOne({ callingData_id: record.callingData_id });
+          if (callHist && Array.isArray(callHist.chatHistory) && callHist.chatHistory.length > 0) {
+            // Primary: exact match by callRecordingId stored on the chatHistory entry
+            let targetIdx = callHist.chatHistory.findIndex(
+              (e) => !e.recordingUrl && String(e.callRecordingId) === String(record._id)
+            );
+
+            // Fallback: closest unrecorded entry by same agent + callingDate proximity
+            if (targetIdx === -1) {
+              const agentId = record.agent_id ? String(record.agent_id) : null;
+              const callDate = record.callingDate ? new Date(record.callingDate).getTime() : null;
+              let bestDiff = Infinity;
+              callHist.chatHistory.forEach((entry, i) => {
+                if (entry.recordingUrl) return;
+                const sameAgent = agentId && String(entry.agent_id) === agentId;
+                const diff = callDate ? Math.abs(new Date(entry.callingDate).getTime() - callDate) : Infinity;
+                if (sameAgent && diff < bestDiff) { bestDiff = diff; targetIdx = i; }
+              });
+              if (targetIdx === -1 && callDate !== null) {
+                callHist.chatHistory.forEach((entry, i) => {
+                  if (entry.recordingUrl) return;
+                  const diff = Math.abs(new Date(entry.callingDate).getTime() - callDate);
+                  if (diff < bestDiff) { bestDiff = diff; targetIdx = i; }
+                });
+              }
+            }
+
+            if (targetIdx !== -1) {
+              callHist.chatHistory[targetIdx].recordingUrl = filename;
+              callHist.markModified("chatHistory");
+              await callHist.save();
+              console.log("[TeleCMI Webhook] recordingUrl written to chatHistory entry:", targetIdx);
+            }
+          }
+        } catch (histErr) {
+          console.warn("[TeleCMI Webhook] Failed to write recordingUrl to CallHistory:", histErr.message);
+        }
+      }
+
       return sendResponse(
         res,
         200,
@@ -265,8 +309,13 @@ const telcmiWebhook = asyncHandler(async (req, res, next) => {
         saved
       );
     }
-    // No existing record found - create new entry
+    // No existing record found — only create if callId is known, otherwise skip
     else {
+      if (!callId) {
+        console.warn("[TeleCMI Webhook] No callId in payload, skipping orphan creation.");
+        return res.status(200).json({ success: true, message: "No callId, skipped" });
+      }
+
       const filename =
         payload.filename ||
         payload.recording_url ||
@@ -275,14 +324,13 @@ const telcmiWebhook = asyncHandler(async (req, res, next) => {
         null;
 
       const newRecord = new CallRecording({
-        callId: callId, // Will be null if not present
+        callId,
         contactNo: payload.to || payload.from || null,
         agentName: payload.user || null,
         recording: filename,
         callingDate: payload.time ? new Date(Number(payload.time)) : new Date(),
         webHookResponse: [payload],
         misc: { payload },
-        // Set other required fields as null
         callingData_id: null,
         campaign_id: null,
         sessionId: null,

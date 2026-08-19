@@ -33,9 +33,10 @@ const clientMatchEntrySchema = new mongoose.Schema(
     },
 
     // ── complete / partial / notMatched / duplicate fields ───────────────────
-    inputName:        { type: String, default: "" }, // original uploaded name
-    companySpecificId:{ type: String, default: "" }, // from Excel col CompanySpecificId (optional)
-    segment:          { type: String, default: "" }, // from Excel col Segment (optional)
+    inputName:        { type: String, default: "" }, // MasterDbMatchedCompanyName — used for DB matching
+    clientCompanyName:{ type: String, default: "" }, // ClientCompanyName — client's own name for the company
+    companySpecificId:{ type: String, default: "" }, // CompanyUniqueId from Excel
+    segment:          { type: String, default: "" }, // Segment from Excel
 
     // ── complete + partial only ───────────────────────────────────────────────
     companyId:   { type: mongoose.Schema.Types.ObjectId },
@@ -44,6 +45,9 @@ const clientMatchEntrySchema = new mongoose.Schema(
 
     // ── partial only ─────────────────────────────────────────────────────────
     suggestions: { type: mongoose.Schema.Types.Mixed }, // array of suggestion objects
+
+    // ── notMatched / duplicate ────────────────────────────────────────────────
+    remark: { type: String, default: "" }, // e.g. "No match found in DB" / "User-declared as Not Matched"
   },
   { timestamps: true }
 );

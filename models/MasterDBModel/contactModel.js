@@ -13,6 +13,8 @@ const ContactSchema = new mongoose.Schema(
     Gender: { type: String, trim: true },
     Job_Title: { type: String, trim: true },
     Job_Seniority: { type: String, trim: true },
+    Job_Seniority_Secondary: { type: String, trim: true },
+    Job_Seniority_Tertiary: { type: String, trim: true },
     Job_Function: { type: String, trim: true },
 
     // Address
@@ -41,11 +43,48 @@ const ContactSchema = new mongoose.Schema(
 
     Contact_LinkedIn_Profile: { type: String, trim: true },
 
-    // Flags
+    // Flags (legacy string fields kept for backward compatibility)
     Unsubscribe_Flag: { type: String, trim: true },
     Unsubscribe_Account_Tag: { type: String, trim: true },
     DND_Flag: { type: String, trim: true },
     DND_Account_Tag: { type: String, trim: true },
+
+    // ── Structured channel-level suppression ──────────────────────────────────
+    // Global flags — set when scope is "global" for that channel.
+    // Filtration stage uses these to exclude contacts from future campaigns.
+    DND_Calling:  { type: Boolean, default: false, index: true },
+    DND_Email:    { type: Boolean, default: false, index: true },
+    DND_Whatsapp: { type: Boolean, default: false, index: true },
+
+    // Brand-scoped suppression — one entry per brand that suppressed this contact.
+    // Filtration stage queries: "DND_Calling_Companies.brandId": { $nin: [clientCompanyId] }
+    DND_Calling_Companies: [
+      {
+        brandId:   { type: String, trim: true },
+        brandName: { type: String, trim: true },
+        setAt:     { type: Date, default: Date.now },
+        setBy:     { type: String, trim: true },   // agent userId
+        setByName: { type: String, trim: true },
+      },
+    ],
+    DND_Email_Companies: [
+      {
+        brandId:   { type: String, trim: true },
+        brandName: { type: String, trim: true },
+        setAt:     { type: Date, default: Date.now },
+        setBy:     { type: String, trim: true },
+        setByName: { type: String, trim: true },
+      },
+    ],
+    DND_Whatsapp_Companies: [
+      {
+        brandId:   { type: String, trim: true },
+        brandName: { type: String, trim: true },
+        setAt:     { type: Date, default: Date.now },
+        setBy:     { type: String, trim: true },
+        setByName: { type: String, trim: true },
+      },
+    ],
 
     // Engagement
     Last_Engagement: { type: String, trim: true },

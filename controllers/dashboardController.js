@@ -193,15 +193,23 @@ const dashboardData = asyncHandler(async (req, res, next) => {
 
     if (user.role === AGENT) {
       parentData.Name = "Agent";
-      query.agentId = user._id;
-      if (campaignId)
-        query.CampaignId = new mongoose.Types.ObjectId(campaignId);
 
-      const myCallingData = await CallingData.find(query)
+      // For agents: filter by lastCallingDate (when they actually called),
+      // not createdAt (when the record was imported).
+      const agentQuery = { agentId: user._id };
+      if (campaignId)
+        agentQuery.CampaignId = new mongoose.Types.ObjectId(campaignId);
+      if (startDate || endDate) {
+        agentQuery.lastCallingDate = {};
+        if (startDate) agentQuery.lastCallingDate.$gte = new Date(startDate);
+        if (endDate)   agentQuery.lastCallingDate.$lte = endOfDay(endDate);
+      }
+
+      const myCallingData = await CallingData.find(agentQuery)
         .select("callHistory isRegistered")
         .populate({
           path: "callHistory",
-          select: "chatHistory", // only chatHistory needed
+          select: "chatHistory",
         })
         .lean();
 
@@ -212,16 +220,14 @@ const dashboardData = asyncHandler(async (req, res, next) => {
       const remarkCount = {};
 
       for (const entry of myCallingData) {
+        if (entry.isRegistered) totalRegistrations += 1;
+
         if (entry.callHistory && entry.callHistory.chatHistory) {
           totalCallsMade += entry.callHistory.chatHistory.length;
 
           entry.callHistory.chatHistory.forEach((chat) => {
             if (chat.remarks) {
               remarkCount[chat.remarks] = (remarkCount[chat.remarks] || 0) + 1;
-            }
-
-            if (chat.isRegistered) {
-              totalRegistrations += 1;
             }
           });
         }
@@ -239,80 +245,75 @@ const dashboardData = asyncHandler(async (req, res, next) => {
       const campaignFilter = {
         programManager: { $elemMatch: { $eq: user._id } },
       };
+      if (campaignId) campaignFilter._id = campaignId;
 
-      if (campaignId) {
-        campaignFilter._id = campaignId;
-      }
-
+      // Stage 1: get campaign IDs + status breakdown
       const campaigns = await Campaign.find(campaignFilter)
         .select("_id status")
         .lean();
 
       const campaignIds = campaigns.map((c) => c._id);
 
-      const campaignDetailCount = {};
+      const campaignDetailCount = { totalCount: campaigns.length };
       campaigns.forEach((c) => {
-        campaignDetailCount[c.status] =
-          (campaignDetailCount[c.status] || 0) + 1;
+        campaignDetailCount[c.status] = (campaignDetailCount[c.status] || 0) + 1;
       });
-      campaignDetailCount.totalCount = campaigns.length;
       parentData.campaignDetailCount = campaignDetailCount;
 
-      const callingDataList = await CallingData.find({
-        CampaignId: { $in: campaignIds },
-      })
-        .select("CampaignId agentId source isRegistered callHistory")
-        .lean();
+      // Stage 2: single $facet aggregation — all computed server-side, no joins needed
+      // facet A: source stats + registration count + agent assignment
+      // facet B: remark breakdown using lastRemarks field directly on CallingData
+      const [agg] = await CallingData.aggregate([
+        { $match: { CampaignId: { $in: campaignIds } } },
+        {
+          $facet: {
+            sourceStats: [
+              {
+                $group: {
+                  _id:        { $ifNull: ["$source", "unknown"] },
+                  total:      { $sum: 1 },
+                  registered: { $sum: { $cond: ["$isRegistered", 1, 0] } },
+                  agentCount: { $sum: { $cond: [{ $gt: ["$agentId", null] }, 1, 0] } },
+                },
+              },
+            ],
+            remarkStats: [
+              { $match: { lastRemarks: { $ne: null } } },
+              {
+                $group: {
+                  _id:   "$lastRemarks",
+                  count: { $sum: 1 },
+                },
+              },
+            ],
+          },
+        },
+      ]);
 
-      const callHistoryIds = callingDataList
-        .map((cd) => cd.callHistory)
-        .filter(Boolean);
-
-      const callHistories = await CallHistory.find({
-        _id: { $in: callHistoryIds },
-      })
-        .select("chatHistory")
-        .lean();
-
-      const callHistoryMap = new Map();
-      callHistories.forEach((ch) => callHistoryMap.set(ch._id.toString(), ch));
-
-      let totalCalls = 0;
-      let totalRegisteredLeads = 0;
-      const remarkCount = {};
+      // Process sourceStats facet
       const sourceStats = {};
+      let totalRegisteredLeads = 0;
       let agentAssignmentCount = 0;
+      let totalCallingData = 0;
 
-      callingDataList.forEach((cd) => {
-        const source = cd.source || "unknown";
-        if (!sourceStats[source]) {
-          sourceStats[source] = { total: 0, registered: 0 };
-        }
-        sourceStats[source].total += 1;
-        if (cd.isRegistered) sourceStats[source].registered += 1;
+      for (const s of agg.sourceStats) {
+        sourceStats[s._id] = { total: s.total, registered: s.registered };
+        totalRegisteredLeads  += s.registered;
+        agentAssignmentCount  += s.agentCount;
+        totalCallingData      += s.total;
+      }
 
-        if (cd.agentId) agentAssignmentCount++;
-
-        const callHistory = callHistoryMap.get(cd.callHistory?.toString());
-        if (callHistory?.chatHistory?.length) {
-          totalCalls += callHistory.chatHistory.length;
-          callHistory.chatHistory.forEach((chat) => {
-            if (chat.remarks) {
-              remarkCount[chat.remarks] = (remarkCount[chat.remarks] || 0) + 1;
-            }
-            if (chat.isRegistered) totalRegisteredLeads += 1;
-          });
-        }
-      });
+      // Process remarkStats facet
+      const remarkCount = {};
+      for (const r of agg.remarkStats) {
+        if (r._id) remarkCount[r._id] = r.count;
+      }
 
       parentData.sourceStats = sourceStats;
       parentData.remarkCount = remarkCount;
-      parentData.totalCallsVsTotalReg = {
-        totalCalls,
-        totalRegisteredLeads,
-      };
+      parentData.totalRegisteredLeads = totalRegisteredLeads;
       parentData.leadsDataInsight = {
-        totalCallingData: callingDataList.length,
+        totalCallingData,
         dataForwhichAgentAssigned: agentAssignmentCount,
       };
     } else if (user.role === RESOURCE_MANAGER) {
@@ -650,6 +651,7 @@ const getAllAgentsDashboardData = asyncHandler(async (req, res, next) => {
         $group: {
           _id: "$agentId",
           totalCallingDataAssigned: { $sum: 1 },
+          totalRegistrations: { $sum: { $cond: ["$isRegistered", 1, 0] } },
           allChatHistories: { $push: "$ch.chatHistory" },
         },
       },
@@ -659,7 +661,6 @@ const getAllAgentsDashboardData = asyncHandler(async (req, res, next) => {
     const statsMap = new Map();
     for (const stat of agentStats) {
       let totalCallsMade = 0;
-      let totalRegistrations = 0;
       const remarkCount = {};
 
       for (const chatHistory of stat.allChatHistories) {
@@ -668,14 +669,13 @@ const getAllAgentsDashboardData = asyncHandler(async (req, res, next) => {
         for (const chat of chatHistory) {
           if (chat.remarks)
             remarkCount[chat.remarks] = (remarkCount[chat.remarks] || 0) + 1;
-          if (chat.isRegistered) totalRegistrations += 1;
         }
       }
 
       statsMap.set(String(stat._id), {
         totalCallingDataAssigned: stat.totalCallingDataAssigned,
         totalCallsMade,
-        totalRegistrations,
+        totalRegistrations: stat.totalRegistrations,
         remarkCount,
       });
     }
@@ -785,6 +785,7 @@ const getAllAgentsStatsReport = asyncHandler(async (req, res, next) => {
         $group: {
           _id: "$agentId",
           totalCallingDataAssigned: { $sum: 1 },
+          totalRegistrations: { $sum: { $cond: ["$isRegistered", 1, 0] } },
           allChatHistories: { $push: "$ch.chatHistory" },
         },
       },
@@ -793,7 +794,6 @@ const getAllAgentsStatsReport = asyncHandler(async (req, res, next) => {
     const statsMap = new Map();
     for (const stat of agentStats) {
       let totalCallsMade = 0;
-      let totalRegistrations = 0;
       const remarkCount = {};
 
       for (const chatHistory of stat.allChatHistories) {
@@ -802,14 +802,13 @@ const getAllAgentsStatsReport = asyncHandler(async (req, res, next) => {
         for (const chat of chatHistory) {
           if (chat.remarks)
             remarkCount[chat.remarks] = (remarkCount[chat.remarks] || 0) + 1;
-          if (chat.isRegistered) totalRegistrations += 1;
         }
       }
 
       statsMap.set(String(stat._id), {
         totalCallingDataAssigned: stat.totalCallingDataAssigned,
         totalCallsMade,
-        totalRegistrations,
+        totalRegistrations: stat.totalRegistrations,
         remarkCount,
       });
     }

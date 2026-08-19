@@ -5,6 +5,8 @@ import {
   hangupCall,
   updateCallId,
   getCallStatus,
+  getRecordingsByContact,
+  getAgentLiveStatus,
 } from "../controllers/tataCallingController.js";
 import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
@@ -26,5 +28,11 @@ router.patch("/updateCallId", protect, authorize(ADMIN, PROGRAM_MANAGER, AGENT),
 
 // Poll call status + recording URL after call ends
 router.get("/status/:callId", protect, authorize(ADMIN, PROGRAM_MANAGER, AGENT), getCallStatus);
+
+// Fetch all recordings for a specific contact
+router.get("/recordings/:callingDataId", protect, authorize(ADMIN, PROGRAM_MANAGER, AGENT), getRecordingsByContact);
+
+// PM view: check which agents are currently on a live call
+router.get("/agentLiveStatus", protect, authorize(ADMIN, PROGRAM_MANAGER), getAgentLiveStatus);
 
 export default router;

@@ -258,6 +258,8 @@ const batchCreateFromExcelOld = asyncHandler(async (req, res, next) => {
               Gender: safeString(r.Gender),
               Job_Title: safeString(r.Job_Title),
               Job_Seniority: safeString(r.Job_Seniority),
+              Job_Seniority_Secondary: safeString(r.Job_Seniority_Secondary),
+              Job_Seniority_Tertiary: safeString(r.Job_Seniority_Tertiary),
               Job_Function: safeString(r.Job_Function),
 
               // Address fields
@@ -706,6 +708,8 @@ const _batchCreateFromExcel_OLD_SYNC = async (req, res, next) => {
               Gender: safeString(r.Gender),
               Job_Title: safeString(r.Job_Title),
               Job_Seniority: safeString(r.Job_Seniority),
+              Job_Seniority_Secondary: safeString(r.Job_Seniority_Secondary),
+              Job_Seniority_Tertiary: safeString(r.Job_Seniority_Tertiary),
               Job_Function: safeString(r.Job_Function),
               Contact_Address_1: safeString(r.Contact_Address_1),
               Contact_Address_2: safeString(r.Contact_Address_2),
@@ -854,7 +858,8 @@ const getAllCompanyData = asyncHandler(async (req, res, next) => {
 
     let searchFilter = {};
     if (search && search.trim()) {
-      const regex = new RegExp(search.trim(), "i");
+      const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const regex = new RegExp(escaped, "i");
       searchFilter = {
         $or: [
           { Company_Name: regex },
@@ -895,14 +900,44 @@ const getAllCompanyData = asyncHandler(async (req, res, next) => {
 
 const getAllCompanyName = asyncHandler(async (req, res, next) => {
   try {
-    const search = req.query.search?.trim();
+    const search = (req.query.search || "").trim();
     const limit = Math.min(parseInt(req.query.limit) || 50, 100);
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const skip = (page - 1) * limit;
 
-    const filter = {};
+    // Random sample for initial dropdown load (no search)
+    if (req.query.random === "true" && !search) {
+      const companies = await Company.aggregate([
+        { $sample: { size: 25 } },
+        { $project: { _id: 1, Company_Name: 1 } },
+        { $sort: { Company_Name: 1 } },
+      ]);
+      return sendResponse(res, 200, "Companies fetched successfully", {
+        total: companies.length,
+        page: 1,
+        limit: 25,
+        hasMore: false,
+        data: companies,
+      });
+    }
+
+    // Normalize: treat commas as spaces, collapse whitespace, then split into tokens
+    // Handles: "TATA", "tata steel", "Tata,Steel", "tata  steel", "TataSteel" etc.
+    let filter = {};
     if (search) {
-      filter.Company_Name = new RegExp(search, "i");
+      const normalized = search.replace(/[,]+/g, " ").replace(/\s+/g, " ").trim();
+      const words = normalized.split(" ").filter(Boolean);
+
+      if (words.length > 1) {
+        filter = {
+          $or: [
+            { Company_Name: new RegExp(normalized, "i") },       // full phrase
+            ...words.map((w) => ({ Company_Name: new RegExp(w, "i") })), // each word
+          ],
+        };
+      } else {
+        filter = { Company_Name: new RegExp(normalized, "i") };
+      }
     }
 
     const [total, companies] = await Promise.all([
@@ -952,7 +987,7 @@ const getCompanyDataById = asyncHandler(async (req, res, next) => {
 
     let searchFilter = {};
     if (search && search.trim()) {
-      const regex = new RegExp(search.trim(), "i");
+      const regex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
       searchFilter = {
         $or: [
           { Company_Name: regex },
@@ -1119,7 +1154,7 @@ const updateData = asyncHandler(async (req, res, next) => {
       // Invalidate dropdown cache if geo or job fields changed
       const CONTACT_DROPDOWN_FIELDS = [
         "Contact_Country", "Contact_Region", "Contact_State", "Contact_City",
-        "Job_Function", "Job_Seniority",
+        "Job_Function", "Job_Seniority", "Job_Seniority_Secondary", "Job_Seniority_Tertiary",
       ];
       if (changedFieldNames.some((f) => CONTACT_DROPDOWN_FIELDS.includes(f))) {
         cacheInvalidatePattern("dropdown:*");
@@ -1416,6 +1451,8 @@ const getDropdownFiltersOld = asyncHandler(async (req, res, next) => {
             regions: { $addToSet: "$Contact_Region" },
             cities: { $addToSet: "$Contact_City" },
             jobSeniorities: { $addToSet: "$Job_Seniority" },
+            jobSenioritiesSecondary: { $addToSet: "$Job_Seniority_Secondary" },
+            jobSenioritiesTertiary: { $addToSet: "$Job_Seniority_Tertiary" },
             jobFunctions: { $addToSet: "$Job_Function" },
           },
         },
@@ -1487,6 +1524,32 @@ const getDropdownFiltersOld = asyncHandler(async (req, res, next) => {
                 },
               },
             },
+            jobSenioritiesSecondary: {
+              $filter: {
+                input: "$jobSenioritiesSecondary",
+                as: "val",
+                cond: {
+                  $and: [
+                    { $ne: ["$$val", null] },
+                    { $ne: ["$$val", ""] },
+                    { $ne: ["$$val", "Blank"] },
+                  ],
+                },
+              },
+            },
+            jobSenioritiesTertiary: {
+              $filter: {
+                input: "$jobSenioritiesTertiary",
+                as: "val",
+                cond: {
+                  $and: [
+                    { $ne: ["$$val", null] },
+                    { $ne: ["$$val", ""] },
+                    { $ne: ["$$val", "Blank"] },
+                  ],
+                },
+              },
+            },
             jobFunctions: {
               $filter: {
                 input: "$jobFunctions",
@@ -1519,8 +1582,18 @@ const getDropdownFiltersOld = asyncHandler(async (req, res, next) => {
       regions: [],
       cities: [],
       jobSeniorities: [],
+      jobSenioritiesSecondary: [],
+      jobSenioritiesTertiary: [],
       jobFunctions: [],
     };
+    // Merge all three seniority arrays into one de-duplicated sorted list
+    contactData.jobSeniorities = [
+      ...new Set([
+        ...(contactData.jobSeniorities || []),
+        ...(contactData.jobSenioritiesSecondary || []),
+        ...(contactData.jobSenioritiesTertiary || []),
+      ]),
+    ].sort();
 
     const parseRange = (str) => {
       if (!str) return Infinity;
@@ -1672,8 +1745,8 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
     // Job functions are always unfiltered (parent selector)
     const jobFunctionMatchStage = { Job_Function: BLANK_FILTER };
     // Job seniorities filtered by selected job functions
+    // Each seniority field is queried independently; the distinct results are merged client-side
     const jobSeniorityMatchStage = {
-      Job_Seniority: BLANK_FILTER,
       ...(selectedJobFunctions
         ? { Job_Function: { $in: selectedJobFunctions } }
         : {}),
@@ -1712,7 +1785,9 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
         industries,
         subIndustries,
         jobFunctions,
-        jobSeniorities,
+        jobSenioritiesPrimary,
+        jobSenioritiesSecondary,
+        jobSenioritiesTertiary,
       ] = await Promise.all([
         // Static company fields (segments, employeeRanges, turnovers — no parent filter)
         Company.aggregate([
@@ -1780,7 +1855,13 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
         // Job hierarchy
         distinctContactValues(jobFunctionMatchStage, "Job_Function"),
         distinctContactValues(jobSeniorityMatchStage, "Job_Seniority"),
+        distinctContactValues(jobSeniorityMatchStage, "Job_Seniority_Secondary"),
+        distinctContactValues(jobSeniorityMatchStage, "Job_Seniority_Tertiary"),
       ]);
+      // Merge all three seniority arrays into one de-duplicated sorted list
+      const jobSeniorities = [
+        ...new Set([...jobSenioritiesPrimary, ...jobSenioritiesSecondary, ...jobSenioritiesTertiary]),
+      ].sort();
 
       const sd = staticCompanyFilters[0] || { segments: [], employeeRanges: [], turnovers: [] };
       sd.turnovers = sd.turnovers.sort((a, b) => parseRange(a) - parseRange(b));
@@ -2542,7 +2623,7 @@ const getContactsWithEngagementsWorking = asyncHandler(
 
       // Search across multiple fields
       if (search && search.trim()) {
-        const searchRegex = new RegExp(search.trim(), "i");
+        const searchRegex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
         contactQuery.$or = [
           { Contact_ID: searchRegex },
           { Full_Name: searchRegex },
@@ -2787,7 +2868,7 @@ const getContactsWithEngagements = asyncHandler(async (req, res, next) => {
     let contactQuery = {};
 
     if (search && search.trim()) {
-      const searchRegex = new RegExp(search.trim(), "i");
+      const searchRegex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
       contactQuery.$or = [
         { Contact_ID: searchRegex },
         { Full_Name: searchRegex },
@@ -3141,19 +3222,21 @@ async function individualSearch(req, res, next) {
 
     const andConditions = [];
 
+    const esc = (s) => s.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
     if (name?.trim()) {
-      const r = new RegExp(name.trim(), "i");
+      const r = new RegExp(esc(name), "i");
       andConditions.push({
         $or: [{ Full_Name: r }, { First_Name: r }, { Last_Name: r }],
       });
     }
 
     if (designation?.trim()) {
-      andConditions.push({ Job_Title: new RegExp(designation.trim(), "i") });
+      andConditions.push({ Job_Title: new RegExp(esc(designation), "i") });
     }
 
     if (email?.trim()) {
-      const r = new RegExp(email.trim(), "i");
+      const r = new RegExp(esc(email), "i");
       andConditions.push({
         $or: [
           { Office_Email_1: r },
@@ -3167,7 +3250,7 @@ async function individualSearch(req, res, next) {
     // Company is on the same secondary connection — resolve IDs first, then filter Contact
     if (company?.trim()) {
       const matchingCompanies = await Company.find(
-        { Company_Name: new RegExp(company.trim(), "i") },
+        { Company_Name: new RegExp(esc(company), "i") },
         { _id: 1 }
       ).lean();
       if (!matchingCompanies.length) {
@@ -3339,6 +3422,8 @@ async function assignIndividualSearch(req, res, next) {
       Gender: c.Gender,
       Job_Title: c.Job_Title,
       Job_Seniority: c.Job_Seniority,
+      Job_Seniority_Secondary: c.Job_Seniority_Secondary,
+      Job_Seniority_Tertiary: c.Job_Seniority_Tertiary,
       Job_Function: c.Job_Function,
       Contact_Address_1: c.Contact_Address_1,
       Contact_Address_2: c.Contact_Address_2,

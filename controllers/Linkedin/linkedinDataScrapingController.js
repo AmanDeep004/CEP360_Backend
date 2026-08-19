@@ -490,17 +490,12 @@ const uploadProfiles = asyncHandler(async (req, res, next) => {
 const wizaWebhook = asyncHandler(async (req, res, next) => {
   try {
     const webhookData = req.body;
-    console.log("Wiza Webhook Received:", webhookData);
-
     const listData = webhookData.data_json;
     const status = listData.status;
     const listId = listData.id;
 
-    console.log(`Webhook Status: ${status}, List ID: ${listId}`);
-
     // Check if enrichment is finished
     if (status === "finished") {
-      console.log(` List ${listId} finished! Fetching enriched contacts...`);
 
       // Fetch contacts from Wiza API
       const contactsResponse = await axios.get(
@@ -524,7 +519,6 @@ const wizaWebhook = asyncHandler(async (req, res, next) => {
         });
       }
 
-      console.log(`Found ${contacts.length} contacts for list ${listId}`);
 
       let updated = 0;
       let notFound = 0;
@@ -566,16 +560,10 @@ const wizaWebhook = asyncHandler(async (req, res, next) => {
 
         if (result) {
           updated++;
-          console.log(`Updated: ${linkedinId.substring(0, 60)}...`);
         } else {
           notFound++;
-          console.log(`Profile not found in DB: ${linkedinId}`);
         }
       }
-
-      console.log(
-        `Webhook complete: ${updated} updated, ${notFound} not found`
-      );
 
       return res.status(200).json({
         success: true,
@@ -585,7 +573,6 @@ const wizaWebhook = asyncHandler(async (req, res, next) => {
         notFound: notFound,
       });
     } else {
-      console.log(` List ${listId} status: ${status} - not finished yet`);
       return res.status(200).json({
         success: true,
         message: "List not finished yet",

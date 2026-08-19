@@ -220,6 +220,7 @@ const updateUserProfile = asyncHandler(async (req, res, next) => {
 
     const updateFields = [
       "employeeName",
+      "email",
       "type",
       "code",
       "role",
@@ -362,7 +363,10 @@ const getUsersByRole = asyncHandler(async (req, res, next) => {
     }
 
     // Default: get users by roles (excluding admin)
-    const users = await User.find({ role: { $in: roles } })
+    const filter = { role: { $in: roles } };
+    if (req.query.status) filter.status = req.query.status;
+
+    const users = await User.find(filter)
       .select(
         "employeeName email role employeeCode programName location status _id"
       )

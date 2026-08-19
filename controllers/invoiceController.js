@@ -17,6 +17,20 @@ const { toWords } = pkg;
 
 const { asyncHandler, sendError, sendResponse } = errorHandler;
 
+function countWeekdays(start, end) {
+  let count = 0;
+  const cur = new Date(start);
+  cur.setHours(0, 0, 0, 0);
+  const endD = new Date(end);
+  endD.setHours(23, 59, 59, 999);
+  while (cur <= endD) {
+    const d = cur.getDay();
+    if (d !== 0 && d !== 6) count++;
+    cur.setDate(cur.getDate() + 1);
+  }
+  return count;
+}
+
 async function getAttendanceSummary(userId, startDate, endDate) {
   const start = new Date(startDate);
   start.setHours(0, 0, 0, 0);
@@ -32,42 +46,50 @@ async function getAttendanceSummary(userId, startDate, endDate) {
     attendanceRecords.map((rec) => rec.loginDate.toISOString().slice(0, 10))
   );
 
-  const allDates = [];
+  let totalCalendarDays = 0;
+  let totalWorkingDays = 0; // Mon–Fri only
   const presentDates = [];
   const absentDates = [];
 
   let current = new Date(start);
   while (current <= end) {
     const dateStr = current.toISOString().slice(0, 10);
-    const day = current.getDay(); // 0 = Sunday, 6 = Saturday
+    const day = current.getDay(); // 0=Sun, 6=Sat
+    totalCalendarDays++;
 
-    allDates.push(dateStr);
-
-    if (day === 0 || day === 6) {
-      // Mark Saturday/Sunday as present
-      presentDates.push(dateStr);
-    } else if (presentDatesSet.has(dateStr)) {
-      presentDates.push(dateStr);
-    } else {
-      absentDates.push(dateStr);
+    if (day !== 0 && day !== 6) {
+      // Weekday only
+      totalWorkingDays++;
+      if (presentDatesSet.has(dateStr)) {
+        presentDates.push(dateStr);
+      } else {
+        absentDates.push(dateStr);
+      }
     }
 
     current.setDate(current.getDate() + 1);
   }
 
+  const presentDays = presentDates.length;
+  const absentDays = absentDates.length; // weekday absences
+  const forgivenAbsent = Math.min(1, absentDays); // 1 free leave
+  const effectiveAbsent = Math.max(0, absentDays - forgivenAbsent);
+  const payableDays = totalWorkingDays - effectiveAbsent;
+
   return {
-    allDates,
-    presentDates,
-    absentDates,
-    totalDays: allDates.length,
-    presentDays: presentDates.length,
-    absentDays: absentDates.length,
+    totalCalendarDays,
+    totalWorkingDays,
+    presentDays,
+    absentDays,
+    forgivenAbsent,
+    effectiveAbsent,
+    payableDays,
     presentDates,
     absentDates,
   };
 }
 
-const insertSignatureFromUrl = (url, doc) => {
+const insertSignatureFromUrl = (url, doc, x, y, width, height) => {
   return new Promise((resolve, reject) => {
     https.get(url, (response) => {
       const chunks = [];
@@ -76,7 +98,7 @@ const insertSignatureFromUrl = (url, doc) => {
         .on("end", () => {
           const buffer = Buffer.concat(chunks);
           try {
-            doc.image(buffer, 40, 430, { width: 120, height: 60 });
+            doc.image(buffer, x, y, { width, height });
             resolve();
           } catch (err) {
             reject(err);
@@ -186,7 +208,12 @@ const getAllInvoices = asyncHandler(async (req, res, next) => {
         )
         .sort({ createdAt: -1 })
         .lean();
-      return sendResponse(res, 200, "Invoices retrieved successfully", invoices);
+      return sendResponse(
+        res,
+        200,
+        "Invoices retrieved successfully",
+        invoices
+      );
     }
 
     const skip = (page - 1) * limit;
@@ -236,7 +263,12 @@ const getAllInvoicesData = asyncHandler(async (req, res, next) => {
         )
         .sort({ createdAt: -1 })
         .lean();
-      return sendResponse(res, 200, "Invoices retrieved successfully", invoices);
+      return sendResponse(
+        res,
+        200,
+        "Invoices retrieved successfully",
+        invoices
+      );
     }
 
     const skip = (page - 1) * limit;
@@ -288,9 +320,18 @@ const getInvoicesByPMId = asyncHandler(async (req, res, next) => {
         .lean();
 
       if (invoices.length === 0) {
-        return sendError(next, "No invoices found for this Program Manager", 404);
+        return sendError(
+          next,
+          "No invoices found for this Program Manager",
+          404
+        );
       }
-      return sendResponse(res, 200, "Invoices retrieved successfully", invoices);
+      return sendResponse(
+        res,
+        200,
+        "Invoices retrieved successfully",
+        invoices
+      );
     }
 
     const skip = (page - 1) * limit;
@@ -344,15 +385,47 @@ const generateAllInvoices = asyncHandler(async (req, res, next) => {
 
     const assignments = await AgentAssigned.find({
       campaign_id: { $in: campaignIds },
+      isAssigned: true,
     })
       .populate("campaign_id agent_id")
       .lean();
 
+    console.log(
+      `[INFO] Found ${assignments.length} active assignments across ${campaigns.length} active campaigns`
+    );
+
+    // Use fixed month names to avoid locale differences between server and client
+    const MONTH_NAMES = [
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December",
+    ];
+    const month = `${
+      MONTH_NAMES[endDateRef.getMonth()]
+    } ${endDateRef.getFullYear()}`;
+    const monthWorkingDays = countWeekdays(startDateRef, endDateRef);
+
+    console.log(
+      `[INFO] Month label: "${month}", Cycle working days: ${monthWorkingDays}`
+    );
+
     const invoicesToInsert = [];
+    let skippedCount = 0;
 
     for (const assignment of assignments) {
       const agent = assignment.agent_id;
       const campaign = assignment.campaign_id;
+
+      if (!agent || !campaign) continue;
 
       const assignedAt = assignment.assigned_date
         ? new Date(assignment.assigned_date)
@@ -376,13 +449,20 @@ const generateAllInvoices = asyncHandler(async (req, res, next) => {
         toDate
       );
 
-      const noOfDaysWorked = attendanceSummary.presentDays;
-      const noOfDaysAbsent = attendanceSummary.absentDays;
-
-      const month = fromDate.toLocaleString("default", {
-        month: "long",
-        year: "numeric",
-      });
+      const {
+        presentDays,
+        absentDays,
+        totalWorkingDays,
+        forgivenAbsent,
+        effectiveAbsent,
+        payableDays,
+        totalCalendarDays,
+      } = attendanceSummary;
+      const agentCtc = agent.ctc || 0;
+      const salary =
+        monthWorkingDays > 0
+          ? Math.round((agentCtc / monthWorkingDays) * payableDays)
+          : 0;
 
       const existingInvoice = await Invoice.findOne({
         employeeId: agent._id,
@@ -390,29 +470,33 @@ const generateAllInvoices = asyncHandler(async (req, res, next) => {
         month,
       });
 
-      if (existingInvoice) continue;
-
-      const totalDaysInRange =
-        Math.ceil((endDateRef - startDateRef) / (1000 * 60 * 60 * 24)) + 1;
-      const daysAvailable = totalDaysInRange - noOfDaysWorked - noOfDaysAbsent;
-      const salary = (agent.ctc / totalDaysInRange) * noOfDaysWorked;
+      if (existingInvoice) {
+        skippedCount++;
+        continue;
+      }
 
       const invoice = {
         employeeId: agent._id,
         campaign_id: campaign._id,
         isMultiCampaign: false,
-        programManagers: campaign.programManager,
+        programManagers: campaign.programManager || [],
         startDate: fromDate,
         endDate: toDate,
         month,
-        noOfDaysWorked,
-        noOfDaysAbsent: attendanceSummary.absentDays,
+        noOfDaysWorked: presentDays,
+        noOfDaysAbsent: absentDays,
+        totalWorkingDays,
+        monthWorkingDays,
+        forgivenAbsent,
+        effectiveAbsent,
+        payableDays,
+        ctc: agentCtc,
         incentive: 0,
         arrears: 0,
         extraPay: 0,
         salaryGenBy: req.user?._id || null,
-        totalDaysGenerated: attendanceSummary.totalDays,
-        daysAvailabletoGenerate: daysAvailable < 0 ? 0 : daysAvailable,
+        totalDaysGenerated: totalCalendarDays,
+        daysAvailabletoGenerate: 0,
         invoiceGenerated: {
           status: false,
           genBy: null,
@@ -440,9 +524,15 @@ const generateAllInvoices = asyncHandler(async (req, res, next) => {
         });
     }
 
+    console.log(
+      `[INFO] Inserted: ${insertedCount}, Skipped (already exist): ${skippedCount}`
+    );
+
     return sendResponse(res, 200, "Invoices generated successfully", {
       totalInvoicesAttempted: invoicesToInsert.length,
       successfullyInserted: insertedCount,
+      alreadyExisted: skippedCount,
+      month,
     });
   } catch (error) {
     return sendError(next, error.message, 500);
@@ -535,14 +625,40 @@ const runInvoiceGeneration = asyncHandler(async () => {
         toDate
       );
 
-      const noOfDaysWorked = attendanceSummary.presentDays || 0;
-      const noOfDaysAbsent = attendanceSummary.absentDays || 0;
-      const totalDaysGenerated = attendanceSummary.totalDays || 0;
+      const {
+        presentDays,
+        absentDays,
+        totalWorkingDays,
+        forgivenAbsent,
+        effectiveAbsent,
+        payableDays,
+        totalCalendarDays,
+      } = attendanceSummary;
+      const agentCtc = agent.ctc || 0;
+      const monthWorkingDays = countWeekdays(startDateRef, endDateRef);
+      const salary =
+        monthWorkingDays > 0
+          ? Math.round((agentCtc / monthWorkingDays) * payableDays)
+          : 0;
 
-      const month = fromDate.toLocaleString("default", {
-        month: "long",
-        year: "numeric",
-      });
+      // Use END date of cycle as month label — fixed format to avoid locale differences
+      const _MONTHS = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+      ];
+      const month = `${
+        _MONTHS[endDateRef.getMonth()]
+      } ${endDateRef.getFullYear()}`;
 
       //  Check for duplicate invoice
       const existingInvoice = await Invoice.findOne({
@@ -553,12 +669,6 @@ const runInvoiceGeneration = asyncHandler(async () => {
 
       if (existingInvoice) continue;
 
-      //  Calculate salary with all values
-      const totalDaysInRange =
-        Math.ceil((endDateRef - startDateRef) / (1000 * 60 * 60 * 24)) + 1;
-      const daysAvailable = totalDaysInRange - noOfDaysWorked - noOfDaysAbsent;
-      const salary = (agent.ctc / totalDaysInRange) * noOfDaysWorked;
-
       invoicesToInsert.push({
         employeeId: agent._id,
         campaign_id: campaign._id,
@@ -567,14 +677,20 @@ const runInvoiceGeneration = asyncHandler(async () => {
         startDate: fromDate,
         endDate: toDate,
         month,
-        noOfDaysWorked,
-        noOfDaysAbsent,
+        noOfDaysWorked: presentDays,
+        noOfDaysAbsent: absentDays,
+        totalWorkingDays,
+        monthWorkingDays,
+        forgivenAbsent,
+        effectiveAbsent,
+        payableDays,
+        ctc: agentCtc,
         incentive: 0,
         arrears: 0,
         extraPay: 0,
         salaryGenBy: null, // cron = system
-        totalDaysGenerated,
-        daysAvailabletoGenerate: daysAvailable < 0 ? 0 : daysAvailable,
+        totalDaysGenerated: totalCalendarDays,
+        daysAvailabletoGenerate: 0,
         invoiceGenerated: {
           status: false,
           genBy: null,
@@ -670,50 +786,100 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
   try {
     const {
       invoiceId,
+      agentId, // used to auto-create invoice if invoiceId missing
+      campaignId,
+      month,
       ctc,
       incentive,
       arrears,
       extraPay,
-      noOfDaysWorked,
-      noOfDaysAbsent,
+      noOfDaysWorked, // payable days for this campaign (direct)
+      noOfDaysAbsent, // stored for record keeping
+      noOfDaysPresent, // manually overridden present days
+      forgivenAbsent, // manually overridden forgiven absences
+      monthWorkingDays: payloadMonthWorkingDays,
       startDate,
       endDate,
       genBy,
       salaryModBy,
     } = req.body;
 
-    if (!invoiceId || !startDate || !endDate || !ctc || !genBy) {
+    if (!startDate || !endDate || ctc === undefined || ctc === null || !genBy) {
       return sendError(next, "Missing required fields", 400);
     }
 
-    const invoice = await Invoice.findById(invoiceId).populate("employeeId");
+    let invoice;
+    if (invoiceId) {
+      invoice = await Invoice.findById(invoiceId).populate("employeeId");
+    } else if (agentId && campaignId && month) {
+      // Find or create invoice record
+      invoice = await Invoice.findOne({
+        employeeId: agentId,
+        campaign_id: campaignId,
+        month,
+      }).populate("employeeId");
+      if (!invoice) {
+        const campaign = await Campaign.findById(campaignId)
+          .select("programManager")
+          .lean();
+        const created = await Invoice.create({
+          employeeId: agentId,
+          campaign_id: campaignId,
+          month,
+          programManagers: campaign?.programManager || [],
+          startDate: new Date(startDate),
+          endDate: new Date(endDate),
+          salary: 0,
+          salaryGenBy: req.user?._id || genBy,
+        });
+        invoice = await Invoice.findById(created._id).populate("employeeId");
+      }
+    } else {
+      return sendError(
+        next,
+        "Either invoiceId or (agentId, campaignId, month) required",
+        400
+      );
+    }
+
     if (!invoice) return sendError(next, "Invoice not found", 404);
 
     const employee = invoice.employeeId;
     if (!employee) return sendError(next, "Employee not found", 404);
 
-    // Salary Calculations
-    const gross = Math.round((ctc / 30) * Number(noOfDaysWorked));
+    // noOfDaysWorked IS the payable days for this campaign (PM sets it directly)
+    const monthWorkingDays =
+      Number(payloadMonthWorkingDays) || Number(invoice.monthWorkingDays) || 0;
+    const payableDays = Number(noOfDaysWorked) || 0;
+    const dailyRate = monthWorkingDays > 0 ? Number(ctc) / monthWorkingDays : 0;
+    const gross = Math.round(dailyRate * payableDays);
     const finalCTC =
-      gross + Number(incentive) + Number(arrears) + Number(extraPay);
-    const totalDaysGenerated = Number(noOfDaysWorked) + Number(noOfDaysAbsent);
-    const daysAvailabletoGenerate = 30 - Number(noOfDaysWorked);
+      gross +
+      Number(incentive || 0) +
+      Number(arrears || 0) +
+      Number(extraPay || 0);
 
     // Update invoice fields
-    invoice.incentive = incentive;
-    invoice.arrears = arrears;
-    invoice.extraPay = extraPay;
-    invoice.noOfDaysWorked = noOfDaysWorked;
-    invoice.noOfDaysAbsent = noOfDaysAbsent;
+    invoice.ctc = Number(ctc);
+    invoice.noOfDaysWorked = payableDays;
+    invoice.noOfDaysAbsent = Number(noOfDaysAbsent || 0);
+    invoice.noOfDaysPresent = Number(noOfDaysPresent ?? noOfDaysWorked ?? 0);
+    invoice.forgivenAbsent = Number(forgivenAbsent ?? 0);
+    invoice.monthWorkingDays = monthWorkingDays;
+    invoice.payableDays = payableDays;
+    invoice.incentive = Number(incentive || 0);
+    invoice.arrears = Number(arrears || 0);
+    invoice.extraPay = Number(extraPay || 0);
     invoice.startDate = new Date(startDate);
     invoice.endDate = new Date(endDate);
     invoice.salaryModBy = salaryModBy;
-    invoice.totalDaysGenerated = totalDaysGenerated;
-    invoice.daysAvailabletoGenerate = daysAvailabletoGenerate;
+    invoice.daysAvailabletoGenerate = 0;
+    if (!invoice.invoiceGenerated) invoice.invoiceGenerated = {};
     invoice.invoiceGenerated.genBy = genBy;
-    invoice.ctc = finalCTC;
-    const inWords = toWords(finalCTC);
-    const ctcInWords = inWords.charAt(0).toUpperCase() + inWords.slice(1);
+    invoice.salary = gross;
+
+    // Persist all field updates immediately — independent of PDF generation
+    await invoice.save();
 
     // Generate PDF in memory
     const pdfFilename = `invoice-${invoice._id}-${Date.now()}.pdf`;
@@ -725,172 +891,179 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
       pdfBuffers.push(chunk);
     });
 
-    // Draw outer border
-    doc.rect(20, 20, 555, 800).stroke("#333");
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    const _ed = new Date(endDate);
+    const _lastCal = new Date(_ed.getFullYear(), _ed.getMonth() + 1, 0);
+    const lastDayStr = _lastCal.toLocaleDateString("en-GB");
+    const invoiceMonth = _ed.toLocaleString("default", { month: "long" });
+    const invoiceYear = _ed.getFullYear();
+    const fy = `${invoiceYear}-${invoiceYear + 1}`;
+    const agentName = employee.employeeName || "Agent";
 
-    // HEADER
-    doc.rect(20, 20, 555, 30).fillAndStroke("#666", "#333");
+    // ── Layout ───────────────────────────────────────────────────────────────
+    const L = 20; // left edge
+    const W = 555; // total width
+    const MX = L + 10; // content left padding
+    const COL = W / 2; // 277.5 — column width
+    const R2 = L + COL; // right column x = 297.5
+
+    // ── OUTER BORDER ─────────────────────────────────────────────────────────
+    doc.lineWidth(1).strokeColor("#333");
+    doc.rect(L, 15, W, 808).stroke();
+
+    // ── HEADER  y=15 h=40 → 55 ───────────────────────────────────────────────
+    doc.rect(L, 15, W, 40).fillAndStroke("#666", "#333");
     doc
       .fillColor("#fff")
       .font("Helvetica-Bold")
-      .fontSize(18)
-      .text("INVOICE", 20, 28, { align: "center", width: 555 });
+      .fontSize(20)
+      .text("INVOICE", L, 24, { align: "center", width: W });
     doc.fillColor("#000");
 
-    // --- TOP INFO BLOCKS ---
+    // ── FROM (left) + CONTACT (right)  y=55 h=130 → 185 ─────────────────────
     doc.lineWidth(1).strokeColor("#333");
+    doc.rect(L, 55, COL, 130).stroke();
+    doc.rect(R2, 55, W - COL, 130).stroke();
 
-    // Left block
-    doc.rect(20, 50, 277.5, 110).stroke();
-    doc.font("Helvetica-Bold").fontSize(10).text("From :", 30, 60);
+    doc.font("Helvetica-Bold").fontSize(10).text("From :", MX, 65);
     doc
       .font("Helvetica")
       .fontSize(10)
-      .text(employee.employeeName || "N/A", 80, 60);
-    doc.font("Helvetica-Bold").text("Employee Code:", 30, 80);
-    doc.font("Helvetica").text(employee.employeeCode || "N/A", 120, 80);
-    doc.font("Helvetica-Bold").text("Address:", 30, 100);
+      .text(agentName, MX + 45, 65);
+    doc.font("Helvetica-Bold").text("Employee Code:", MX, 85);
+    doc.font("Helvetica").text(employee.employeeCode || "N/A", MX + 90, 85);
+    doc.font("Helvetica-Bold").text("Address:", MX, 105);
     doc
       .font("Helvetica")
-      .text(employee.location || "N/A", 80, 100, { width: 200 });
+      .text(employee.location || "N/A", MX + 55, 105, { width: COL - 65 });
 
-    // Right block
-    doc.rect(297.5, 50, 277.5, 110).stroke();
-    doc.font("Helvetica-Bold").text("Contact Number:", 307.5, 60);
-    doc.font("Helvetica").text(employee.mobile || "N/A", 410, 60);
-    doc.font("Helvetica-Bold").text("Mobile Number:", 307.5, 75);
-    doc.font("Helvetica").text(employee.mobile || "N/A", 410, 75);
-    doc.font("Helvetica-Bold").text("Permanent Account Number:", 307.5, 90);
-    doc.font("Helvetica").text(employee.pan || "N/A", 470, 90);
-    doc.font("Helvetica-Bold").text("GSTIN Number:", 307.5, 105);
-    doc.font("Helvetica").text(employee.gstin || "N/A", 410, 105);
+    doc.font("Helvetica-Bold").text("Contact Number:", R2 + 10, 65);
+    doc.font("Helvetica").text(employee.mobile || "N/A", R2 + 105, 65);
+    doc.font("Helvetica-Bold").text("Mobile Number:", R2 + 10, 82);
+    doc.font("Helvetica").text(employee.mobile || "N/A", R2 + 100, 82);
+    doc.font("Helvetica-Bold").text("Permanent Account Number:", R2 + 10, 99);
+    doc.font("Helvetica").text(employee.pan || "N/A", R2 + 168, 99);
+    doc.font("Helvetica-Bold").text("GSTIN Number:", R2 + 10, 116);
+    doc.font("Helvetica").text(employee.gstin || "N/A", R2 + 92, 116);
 
-    // --- TO & INVOICE INFO BLOCKS ---
-    doc.rect(20, 160, 277.5, 80).stroke();
-    doc.font("Helvetica-Bold").text("TO", 30, 170);
+    // ── TO (left) + INVOICE INFO (right)  y=185 h=95 → 280 ──────────────────
+    doc.rect(L, 185, COL, 95).stroke();
+    doc.rect(R2, 185, W - COL, 95).stroke();
+
+    doc.font("Helvetica-Bold").text("TO", MX, 196);
     doc
       .font("Helvetica")
-      .text("Kestone IMS – A Division of CL Educate Limited", 60, 170, {
-        width: 220,
+      .text("Kestone IMS – A Division of CL Educate Limited", MX + 22, 196, {
+        width: COL - 32,
       });
     doc
       .font("Helvetica")
       .text(
         "#37, 7th Cross, RMJ Mandoth Towers, 3rd Floor, Vasanth Nagar, Bangalore-5600052",
-        30,
-        190,
-        { width: 260 }
+        MX,
+        218,
+        { width: COL - 15 }
       );
 
-    doc.rect(297.5, 160, 277.5, 80).stroke();
-    doc.font("Helvetica-Bold").text("Invoice No :", 307.5, 170);
-    doc.font("Helvetica").text(invoice._id, 370, 170);
-    doc.font("Helvetica-Bold").text("FY :", 307.5, 185);
+    doc.font("Helvetica-Bold").text("Invoice No :", R2 + 10, 196);
     doc
       .font("Helvetica")
-      .text(
-        new Date(startDate).getFullYear() +
-          "-" +
-          (new Date(startDate).getFullYear() + 1) +
-          "/" +
-          new Date(startDate).toLocaleString("default", { month: "long" }),
-        340,
-        185
-      );
-    doc.font("Helvetica-Bold").text("Date :", 307.5, 200);
-    doc
-      .font("Helvetica")
-      .text(new Date(endDate).toLocaleDateString("en-GB"), 350, 200);
-    doc.font("Helvetica-Bold").text("GSTIN No :", 307.5, 215);
-    doc.font("Helvetica").text("29AACCB3885C2ZO", 370, 215);
+      .text(String(invoice._id).slice(-12).toUpperCase(), R2 + 80, 196);
+    doc.font("Helvetica-Bold").text("FY :", R2 + 10, 216);
+    doc.font("Helvetica").text(`${fy} / ${invoiceMonth}`, R2 + 30, 216);
+    doc.font("Helvetica-Bold").text("Date :", R2 + 10, 236);
+    doc.font("Helvetica").text(lastDayStr, R2 + 45, 236);
+    doc.font("Helvetica-Bold").text("GSTIN No :", R2 + 10, 256);
+    doc.font("Helvetica").text("29AACCB3885C2ZO", R2 + 72, 256);
 
-    // --- PARTICULARS & AMOUNT TABLE HEADER ---
-    doc.rect(20, 240, 370, 30).fillAndStroke("#666", "#333");
-    doc.rect(390, 240, 185, 30).fillAndStroke("#666", "#333");
+    // ── PARTICULARS TABLE HEADER  y=280 h=35 → 315 ───────────────────────────
+    doc.rect(L, 280, 370, 35).fillAndStroke("#666", "#333");
+    doc.rect(L + 370, 280, 185, 35).fillAndStroke("#666", "#333");
     doc
       .fillColor("#fff")
       .font("Helvetica-Bold")
       .fontSize(12)
-      .text("PARTICULARS", 25, 250, { width: 360 })
-      .text("AMOUNT (Rs)", 395, 250, { width: 175, align: "right" });
+      .text("PARTICULARS", MX, 291, { width: 355 })
+      .text("AMOUNT (Rs)", L + 370, 291, { width: 180, align: "right" });
     doc.fillColor("#000");
 
-    // --- PARTICULARS & AMOUNT TABLE BODY ---
-    doc.rect(20, 270, 370, 80).stroke();
-    doc.rect(390, 270, 185, 80).stroke();
+    // ── PARTICULARS TABLE BODY  y=315 h=200 → 515 ────────────────────────────
+    doc.lineWidth(1).strokeColor("#333");
+    doc.rect(L, 315, 370, 200).stroke();
+    doc.rect(L + 370, 315, 185, 200).stroke();
+
     doc
       .font("Helvetica")
       .fontSize(10)
       .text(
-        "Professional Charges for the M/O " +
-          new Date(startDate).toLocaleString("default", { month: "long" }) +
-          "' " +
-          new Date(startDate).getFullYear() +
-          " for rendering services as per below detail",
-        25,
-        275,
-        { width: 360, height: 100 }
+        `Professional Charges for the M/O ${invoiceMonth}' ${invoiceYear} for rendering services as per below detail`,
+        MX,
+        322,
+        { width: 355 }
       );
-    doc.text(`Gross Fees: INR. ${gross}/-`, 25, 295);
-    doc.text(`Incentive or other payment: ${incentive}`, 25, 310);
-    doc.text(`Extra Pay: ${extraPay}`, 25, 325);
-    doc.text(`Arrears: ${arrears}`, 25, 340);
+    doc.text(`Gross Fees: INR. ${gross}/-`, MX, 360);
+    doc.text(`Incentive or other payment: ${incentive}`, MX, 380);
+    doc.text(`Extra Pay: ${extraPay}`, MX, 400);
+    doc.text(`Arrears: ${arrears}`, MX, 420);
+
     doc
       .font("Helvetica-Bold")
       .fontSize(16)
-      .text(`INR. ${finalCTC}/-`, 395, 310, { width: 175, align: "right" });
+      .text(`INR. ${finalCTC}/-`, L + 370, 390, { width: 180, align: "right" });
 
-    // --- TOTAL AMOUNT PAYABLE ---
-    doc.rect(20, 350, 370, 30).fillAndStroke("#666", "#333");
-    doc.rect(390, 350, 185, 30).fillAndStroke("#666", "#333");
+    // ── TOTAL AMOUNT PAYABLE  y=515 h=40 → 555 ───────────────────────────────
+    doc.rect(L, 515, 370, 40).fillAndStroke("#666", "#333");
+    doc.rect(L + 370, 515, 185, 40).fillAndStroke("#666", "#333");
     doc
       .fillColor("#fff")
       .font("Helvetica-Bold")
       .fontSize(12)
-      .text("TOTAL AMOUNT PAYABLE", 25, 360, { width: 360 })
-      .text(`INR. ${finalCTC}/-`, 395, 360, { width: 175, align: "right" });
+      .text("TOTAL AMOUNT PAYABLE", MX, 529, { width: 355 })
+      .text(`INR. ${finalCTC}/-`, L + 370, 529, { width: 180, align: "right" });
     doc.fillColor("#000");
 
-    // --- AMOUNT IN WORDS ---
-    doc.rect(20, 380, 555, 30).fillAndStroke("#666", "#333");
+    // ── AMOUNT IN WORDS  y=555 h=40 → 595 ────────────────────────────────────
+    doc.rect(L, 555, W, 40).fillAndStroke("#666", "#333");
     doc
       .fillColor("#fff")
       .font("Helvetica-Bold")
       .fontSize(11)
-      .text(`AMOUNT IN WORDS : ${ctcInWords} Only`, 25, 390, { width: 545 });
+      .text(`AMOUNT IN WORDS : ${finalCTC} ONLY`, MX, 569, { width: W - 20 });
     doc.fillColor("#000");
 
-    // --- SIGNATURE & NAME BLOCK ---
-    doc.rect(20, 410, 277.5, 100).stroke();
-    doc.rect(297.5, 410, 277.5, 100).stroke();
+    // ── SIGNATURE BOXES  y=595 h=228 → 823 ───────────────────────────────────
+    doc.lineWidth(1).strokeColor("#333");
+    doc.rect(L, 595, COL, 228).stroke();
+    doc.rect(R2, 595, W - COL, 228).stroke();
 
-    // Signature image (if available)
-    try {
-      const signaturePath = await insertSignatureFromUrl(
-        employee?.signature,
-        doc
-      );
-      if (signaturePath && fs.existsSync(signaturePath)) {
-        doc.image(signaturePath, 40, 430, { width: 120, height: 60 });
-      }
-    } catch (signatureError) {
-      console.error("Signature insertion failed:", signatureError);
-      // Continue without signature
-    }
-
-    // Name and signature info
+    // Left box — SIGNATURE label at top, image centered in remaining space
     doc
       .font("Helvetica-Bold")
       .fontSize(10)
-      .text("NAME - Ishant Hingorani", 310, 430);
+      .text(`SIGNATURE - ${agentName}`, MX, 605);
+
+    try {
+      await insertSignatureFromUrl(
+        employee?.signature,
+        doc,
+        MX + 10,
+        670,
+        140,
+        100
+      );
+    } catch (signatureError) {
+      console.error("Signature insertion failed:", signatureError);
+    }
+
+    // Right box — NAME, DATE centered
     doc
       .font("Helvetica-Bold")
-      .text(
-        "DATE - " + new Date(endDate).toLocaleDateString("en-GB"),
-        310,
-        450
-      );
-    doc.font("Helvetica-Bold").text("SIGNATURE - Ishant Hingorani", 310, 470);
+      .fontSize(10)
+      .text(`NAME - ${agentName}`, R2, 695, { width: W - COL, align: "center" })
+      .text(`DATE - ${lastDayStr}`, R2, 712, {
+        width: W - COL,
+        align: "center",
+      });
 
     doc.end();
 
@@ -1044,7 +1217,12 @@ const getInvoicesByPMAndMonth = asyncHandler(async (req, res, next) => {
         )
         .sort({ createdAt: -1 })
         .lean();
-      return sendResponse(res, 200, "Invoices retrieved successfully", invoices);
+      return sendResponse(
+        res,
+        200,
+        "Invoices retrieved successfully",
+        invoices
+      );
     }
 
     const skip = (page - 1) * limit;
@@ -1094,7 +1272,12 @@ const getInvoicesOfAgent = asyncHandler(async (req, res, next) => {
         )
         .sort({ createdAt: -1 })
         .lean();
-      return sendResponse(res, 200, "Invoices retrieved successfully", invoices);
+      return sendResponse(
+        res,
+        200,
+        "Invoices retrieved successfully",
+        invoices
+      );
     }
 
     const skip = (page - 1) * limit;
@@ -1170,6 +1353,280 @@ const getAllInvoicesOfPmMonthWise = asyncHandler(async (req, res, next) => {
   }
 });
 
+// ─── Salary Dashboard ──────────────────────────────────────────────────────────
+// Returns per-agent attendance summary + existing invoice status for PM's cycle
+const getSalaryDashboard = asyncHandler(async (req, res, next) => {
+  try {
+    const { pmId, month } = req.query;
+    if (!pmId || !month)
+      return sendError(next, "pmId and month are required", 400);
+
+    const parts = month.trim().split(" ");
+    if (parts.length !== 2)
+      return sendError(
+        next,
+        "month must be 'Month Year' e.g. 'June 2026'",
+        400
+      );
+    const [monthName, yearStr] = parts;
+    const year = parseInt(yearStr, 10);
+    const monthIndex = new Date(`${monthName} 1, ${year}`).getMonth(); // 0-indexed
+
+    // Salary cycle: 26th of prev month → 25th of this month
+    const cycleStart = new Date(year, monthIndex - 1, 26, 0, 0, 0, 0);
+    const cycleEnd = new Date(year, monthIndex, 25, 23, 59, 59, 999);
+    const cycleStartStr = `${cycleStart.getFullYear()}-${String(
+      cycleStart.getMonth() + 1
+    ).padStart(2, "0")}-26`;
+    const cycleEndStr = `${year}-${String(monthIndex + 1).padStart(2, "0")}-25`;
+    const totalWorkingDays = countWeekdays(cycleStart, cycleEnd);
+    const totalCalendarDays =
+      Math.floor(
+        (new Date(year, monthIndex, 25) - new Date(year, monthIndex - 1, 26)) /
+          (24 * 60 * 60 * 1000)
+      ) + 1;
+
+    // Campaigns under this PM
+    const campaigns = await Campaign.find({ programManager: pmId })
+      .select("_id name jcNumber")
+      .lean();
+    const campaignIds = campaigns.map((c) => c._id);
+    if (!campaignIds.length) {
+      return sendResponse(res, 200, "No campaigns found", {
+        agents: [],
+        totalWorkingDays,
+        totalCalendarDays,
+        cycleStart: cycleStartStr,
+        cycleEnd: cycleEndStr,
+        month,
+      });
+    }
+
+    // Active agent assignments for these campaigns
+    const assignments = await AgentAssigned.find({
+      campaign_id: { $in: campaignIds },
+      isAssigned: true,
+    })
+      .populate({ path: "agent_id", select: "employeeName employeeCode ctc" })
+      .lean();
+
+    if (!assignments.length) {
+      return sendResponse(res, 200, "No agents found", {
+        agents: [],
+        totalWorkingDays,
+        totalCalendarDays,
+        cycleStart: cycleStartStr,
+        cycleEnd: cycleEndStr,
+        month,
+      });
+    }
+
+    const campaignMap = Object.fromEntries(
+      campaigns.map((c) => [c._id.toString(), c])
+    );
+    const agentIds = [
+      ...new Set(
+        assignments.map((a) => a.agent_id?._id?.toString()).filter(Boolean)
+      ),
+    ];
+
+    // Fetch attendance records for all agents in the cycle
+    const attendanceRecords = await Attendance.find({
+      employeeId: { $in: agentIds },
+      createdAt: { $gte: cycleStart, $lte: cycleEnd },
+    })
+      .sort({ createdAt: 1 })
+      .lean();
+
+    // Build per-agent map: { agentId: { "YYYY-MM-DD": ISOString of first login } }
+    const agentAttMap = {};
+    for (const rec of attendanceRecords) {
+      const aId = rec.employeeId.toString();
+      const istDate = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Kolkata",
+      }).format(new Date(rec.createdAt));
+      if (!agentAttMap[aId]) agentAttMap[aId] = {};
+      if (!agentAttMap[aId][istDate]) agentAttMap[aId][istDate] = rec.createdAt;
+    }
+
+    // All invoices for these agents this month (to compute already-generated payable days)
+    const existingInvoices = await Invoice.find({
+      employeeId: { $in: agentIds },
+      month,
+    })
+      .populate({ path: "invoiceGenerated.genBy", select: "employeeName" })
+      .lean();
+
+    // Per-agent total payable days already generated across ALL campaigns this month
+    const agentGenDays = {};
+    for (const inv of existingInvoices) {
+      const aId = inv.employeeId.toString();
+      agentGenDays[aId] = (agentGenDays[aId] || 0) + (inv.payableDays || 0);
+    }
+
+    const agents = [];
+    for (const asgn of assignments) {
+      const agent = asgn.agent_id;
+      if (!agent) continue;
+      const aId = agent._id.toString();
+      const campaign = campaignMap[asgn.campaign_id?.toString()];
+      if (!campaign) continue;
+
+      // Agent's effective period clipped to the cycle
+      const assignedAt = asgn.assigned_date
+        ? new Date(asgn.assigned_date)
+        : cycleStart;
+      const releasedAt = asgn.released_date
+        ? new Date(asgn.released_date)
+        : null;
+      const fromDate =
+        assignedAt < cycleStart ? new Date(cycleStart) : new Date(assignedAt);
+      let toDate = releasedAt ? new Date(releasedAt) : new Date(cycleEnd);
+      if (toDate > cycleEnd) toDate = new Date(cycleEnd);
+
+      const agentWorkingDays = countWeekdays(fromDate, toDate);
+
+      // Walk through each weekday in the period
+      const presentDates = [];
+      const absentDates = [];
+      const attMap = agentAttMap[aId] || {};
+
+      const cur = new Date(fromDate);
+      cur.setHours(12, 0, 0, 0);
+      const endD = new Date(toDate);
+      endD.setHours(12, 0, 0, 0);
+
+      while (cur <= endD) {
+        if (cur.getDay() !== 0 && cur.getDay() !== 6) {
+          const ds = new Intl.DateTimeFormat("en-CA", {
+            timeZone: "Asia/Kolkata",
+          }).format(cur);
+          if (attMap[ds]) {
+            const loginTime = new Date(attMap[ds]);
+            const threshold = new Date(`${ds}T09:31:00+05:30`);
+            presentDates.push({
+              date: ds,
+              loginTime: attMap[ds],
+              status: loginTime < threshold ? "Ontime" : "Late",
+            });
+          } else {
+            absentDates.push(ds);
+          }
+        }
+        cur.setDate(cur.getDate() + 1);
+      }
+
+      const presentDays = presentDates.length;
+      const absentDays = absentDates.length;
+      const forgivenAbsent = Math.min(1, absentDays);
+      const effectiveAbsent = Math.max(0, absentDays - forgivenAbsent);
+      const payableDays = presentDays + forgivenAbsent;
+      const totalGeneratedDays = agentGenDays[aId] || 0;
+      const availableDays = Math.max(0, payableDays - totalGeneratedDays);
+
+      const existingInvoice = existingInvoices.find(
+        (i) =>
+          i.employeeId.toString() === aId &&
+          i.campaign_id?.toString() === campaign._id.toString()
+      );
+
+      agents.push({
+        agentId: aId,
+        employeeName: agent.employeeName,
+        employeeCode: agent.employeeCode,
+        ctc: agent.ctc || 0,
+        campaign: {
+          _id: campaign._id,
+          name: campaign.name,
+          jcNumber: campaign.jcNumber,
+        },
+        assignedFrom: fromDate.toISOString().slice(0, 10),
+        assignedTo: toDate.toISOString().slice(0, 10),
+        agentWorkingDays,
+        presentDays,
+        absentDays,
+        forgivenAbsent,
+        effectiveAbsent,
+        payableDays,
+        totalGeneratedDays,
+        availableDays,
+        presentDates,
+        absentDates,
+        existingInvoice: existingInvoice
+          ? {
+              _id: existingInvoice._id,
+              payableDays: existingInvoice.payableDays,
+              salary: existingInvoice.salary,
+              noOfDaysWorked: existingInvoice.noOfDaysWorked,
+              noOfDaysPresent: existingInvoice.noOfDaysPresent,
+              noOfDaysAbsent: existingInvoice.noOfDaysAbsent,
+              incentive: existingInvoice.incentive,
+              arrears: existingInvoice.arrears,
+              extraPay: existingInvoice.extraPay,
+              ctc: existingInvoice.ctc,
+              endDate: existingInvoice.endDate,
+              invoiceGenerated: existingInvoice.invoiceGenerated,
+            }
+          : null,
+      });
+    }
+
+    return sendResponse(res, 200, "Salary dashboard fetched successfully", {
+      cycleStart: cycleStartStr,
+      cycleEnd: cycleEndStr,
+      totalWorkingDays,
+      totalCalendarDays,
+      month,
+      agents,
+    });
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
+const downloadInvoicesZip = asyncHandler(async (req, res, next) => {
+  try {
+    const { invoiceIds } = req.body;
+    if (!Array.isArray(invoiceIds) || !invoiceIds.length) {
+      return sendError(next, "invoiceIds array is required", 400);
+    }
+
+    const invoices = await Invoice.find({ _id: { $in: invoiceIds } })
+      .populate("employeeId", "employeeName employeeCode")
+      .populate("campaign_id", "name")
+      .lean();
+
+    const JSZip = (await import("jszip")).default;
+    const zip = new JSZip();
+
+    await Promise.all(
+      invoices.map(async (inv) => {
+        const url = inv.invoiceGenerated?.invoiceUrl;
+        if (!url) return;
+        try {
+          const response = await axios.get(url, {
+            responseType: "arraybuffer",
+          });
+          const name = `${(inv.employeeId?.employeeName || "Agent").replace(
+            /\s+/g,
+            "_"
+          )}_${(inv.campaign_id?.name || "Campaign").replace(/\s+/g, "_")}.pdf`;
+          zip.file(name, response.data);
+        } catch (e) {
+          console.error("Failed to fetch PDF:", url, e.message);
+        }
+      })
+    );
+
+    const buffer = await zip.generateAsync({ type: "nodebuffer" });
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="Invoices.zip"`);
+    res.send(buffer);
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
 export {
   createInvoice,
   updateInvoice,
@@ -1185,4 +1642,6 @@ export {
   getInvoicesByPMAndMonth,
   getInvoicesOfAgent,
   getAllInvoicesOfPmMonthWise,
+  getSalaryDashboard,
+  downloadInvoicesZip,
 };

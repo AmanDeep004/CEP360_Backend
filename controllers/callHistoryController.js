@@ -1,7 +1,102 @@
 import CallHistory from "../models/callHistoryModel.js";
 import CallingData from "../models/callingDataModal.js";
 import errorHandler from "../utils/index.js";
+import { DND_REMARK_TO_SCOPE, DND_SCOPE, DND_CHANNEL, REMARK_STATUS } from "../utils/enum.js";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
+
+/**
+ * Applies DND suppression after a call remark is saved.
+ * This runs fire-and-forget — failures are logged but do NOT reject the
+ * call history save so the agent is never blocked by a MasterDB error.
+ *
+ * @param {Object} opts
+ * @param {string} opts.scope      - DND_SCOPE value
+ * @param {string} opts.callingDataId
+ * @param {string} opts.campaignId
+ * @param {string} opts.agentId
+ * @param {string} opts.agentName
+ */
+async function applyDND({ scope, callingDataId, campaignId, agentId, agentName }) {
+  try {
+    const now = new Date();
+
+    // 1. Mark suppression on CallingData (primary DB — always done for all scopes)
+    await CallingData.findByIdAndUpdate(callingDataId, {
+      "suppressions.calling.isDND":     true,
+      "suppressions.calling.scope":     scope,
+      "suppressions.calling.setAt":     now,
+      "suppressions.calling.setBy":     agentId,
+      "suppressions.calling.setByName": agentName,
+    });
+
+    // 2. Brand / Global — also update MasterDB Contact
+    if (scope === DND_SCOPE.BRAND || scope === DND_SCOPE.GLOBAL) {
+      // Lazy-import to avoid circular dependency with secondary connection init
+      const [{ default: Contact }, { default: Campaign }, callingDoc] = await Promise.all([
+        import("../models/MasterDBModel/contactModel.js"),
+        import("../models/campaignModel.js"),
+        CallingData.findById(callingDataId).select("Contact_ID").lean(),
+      ]);
+
+      if (!callingDoc?.Contact_ID) return;
+
+      if (scope === DND_SCOPE.BRAND) {
+        // Fetch brand info from Campaign + BrandsWorkedWith
+        const [{ default: Brand }, campaign] = await Promise.all([
+          import("../models/MasterDBModel/brandsWorkedWithModel.js"),
+          Campaign.findById(campaignId).select("brandId brandName").lean(),
+        ]);
+
+        // brandId must be present — skip entirely if missing
+        if (!campaign?.brandId) {
+          console.warn(`[applyDND] Campaign ${campaignId} has no brandId — brand DND skipped for MasterDB`);
+          return;
+        }
+
+        // Look up the brand in BrandsWorkedWith for authoritative id & name
+        let brandId   = "";
+        let brandName = campaign?.brandName || "";
+
+        try {
+          const brandDoc = await Brand.findById(campaign.brandId).select("name").lean();
+          if (brandDoc) {
+            brandId   = String(brandDoc._id);
+            brandName = brandDoc.name;
+          }
+          // brand not found → brandId stays blank, brandName stays from campaign
+        } catch {
+          // not a valid ObjectId — brandId stays blank, brandName stays from campaign
+        }
+
+        await Contact.findOneAndUpdate(
+          {
+            Contact_ID: callingDoc.Contact_ID,
+            "DND_Calling_Companies.brandId": { $ne: String(campaign.brandId) },
+          },
+          {
+            $push: {
+              DND_Calling_Companies: {
+                brandId,
+                brandName,
+                setAt:     now,
+                setBy:     String(agentId),
+                setByName: agentName,
+              },
+            },
+          }
+        );
+      } else {
+        // Global — set the boolean flag
+        await Contact.findOneAndUpdate(
+          { Contact_ID: callingDoc.Contact_ID },
+          { $set: { DND_Calling: true } }
+        );
+      }
+    }
+  } catch (err) {
+    console.error("[applyDND] Failed:", err.message);
+  }
+}
 
 const createCallHistory = asyncHandler(async (req, res, next) => {
   try {
@@ -14,6 +109,8 @@ const createCallHistory = asyncHandler(async (req, res, next) => {
       isRegistered,
       agent_id,
       agentName,
+      callRecordingId,
+      overallTime,
     } = req.body;
 
     if (
@@ -36,60 +133,66 @@ const createCallHistory = asyncHandler(async (req, res, next) => {
       isRegistered: isRegistered || false,
       agent_id,
       agentName,
+      ...(callRecordingId ? { callRecordingId } : {}),
+      ...(overallTime != null ? { overallTime: Number(overallTime) } : {}),
     };
 
-    // Check for existing call history
-    let existingHistory = await CallHistory.findOne({
-      callingData_id,
-      campaign_id,
-    });
+    // Registration remarks from agent only go into chat history — they must NOT
+    // update CallingData registration fields (isRegistered / registeredOn).
+    // Registration in CallingData is only set via the external registration upload.
+    const isRegistrationRemark =
+      remarks === REMARK_STATUS.REGISTERED ||
+      remarks === REMARK_STATUS.ALREADY_REGISTERED;
 
-    let savedHistory;
+    // Atomic upsert — $push to existing doc or create new one in a single round-trip.
+    // Uses compound index { callingData_id, campaign_id } for the lookup.
+    const savedHistory = await CallHistory.findOneAndUpdate(
+      { callingData_id, campaign_id },
+      {
+        $push: { chatHistory: chatEntry },
+        ...(isRegistered && !isRegistrationRemark
+          ? { $set: { isRegistered: true, registrationDate: new Date() } }
+          : {}),
+      },
+      { upsert: true, new: true }
+    );
 
-    if (existingHistory) {
-      // Push new chat entry
-      existingHistory.chatHistory.push(chatEntry);
+    // chatHistory.length === 1 means this was a fresh upsert (just created)
+    const isNew = savedHistory.chatHistory.length === 1;
 
-      // Update isRegistered
-      if (isRegistered) {
-        existingHistory.isRegistered = true;
-        existingHistory.registrationDate = new Date();
-      }
-
-      savedHistory = await existingHistory.save();
-    } else {
-      // Create new history
-      const newHistory = new CallHistory({
-        callingData_id,
-        campaign_id,
-        isRegistered,
-        registrationDate: isRegistered ? new Date() : null,
-        chatHistory: [chatEntry],
-      });
-
-      savedHistory = await newHistory.save();
-
-      // Link history to CallingData
-      await CallingData.findByIdAndUpdate(callingData_id, {
-        callHistory: savedHistory._id,
-      });
+    // Single consolidated update to CallingData — always runs
+    const callingDataUpdate = {
+      lastRemarks: chatEntry.remarks,
+      lastCallingDate: chatEntry.callingDate,
+    };
+    if (isRegistered && !isRegistrationRemark) {
+      callingDataUpdate.isRegistered = true;
+      callingDataUpdate.registeredOn = new Date();
     }
+    if (isNew) {
+      callingDataUpdate.callHistory = savedHistory._id;
+    }
+    await CallingData.findByIdAndUpdate(callingData_id, callingDataUpdate);
 
-    // Update CallingData registration status
-    if (isRegistered) {
-      await CallingData.findByIdAndUpdate(callingData_id, {
-        isRegistered: true,
-        registeredOn: new Date(),
+    // DND processing — fire-and-forget (non-blocking)
+    let dndResult = null;
+    const dndScope = DND_REMARK_TO_SCOPE[remarks];
+    if (dndScope) {
+      dndResult = { applied: true, scope: dndScope, channel: DND_CHANNEL.CALLING };
+      applyDND({
+        scope:         dndScope,
+        callingDataId: callingData_id,
+        campaignId:    campaign_id,
+        agentId:       agent_id,
+        agentName,
       });
     }
 
     return sendResponse(
       res,
       200,
-      existingHistory
-        ? "Call history updated successfully"
-        : "Call history created successfully",
-      savedHistory
+      isNew ? "Call history created successfully" : "Call history updated successfully",
+      { ...savedHistory.toObject(), dndResult }
     );
   } catch (err) {
     return sendError(next, err.message || "Server error", 500);

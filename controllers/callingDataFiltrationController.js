@@ -93,6 +93,8 @@ const CONTACT_ONLY_FIELDS = new Set([
   "Contact_City",
   "Job_Function",
   "Job_Seniority",
+  "Job_Seniority_Secondary",
+  "Job_Seniority_Tertiary",
   "Job_Title",
   "Gender",
 ]);
@@ -110,24 +112,39 @@ const COMPANY_FIELD_MAP = {
  * $match stage that runs BEFORE $lookup.
  * Covers: discrepency check, contact-only field filters, optional Company_ID filter.
  */
+/** Values that should be treated as "blank" for seniority matching */
+const SENIORITY_BLANK = [null, "", "Blank"];
+
 function buildPreLookupMatch(filters = [], exclusions = [], companyIds = []) {
   const q = { "discrepencyInData.status": { $ne: true } };
 
   for (const { field, value } of filters) {
-    if (
-      CONTACT_ONLY_FIELDS.has(field) &&
-      Array.isArray(value) &&
-      value.length
-    ) {
+    if (!CONTACT_ONLY_FIELDS.has(field) || !Array.isArray(value) || !value.length) continue;
+
+    if (field === "Job_Seniority") {
+      // Match if ANY of the three seniority fields contains the requested value(s)
+      q.$and = (q.$and || []).concat({
+        $or: [
+          { Job_Seniority:           { $in: value, $nin: SENIORITY_BLANK } },
+          { Job_Seniority_Secondary: { $in: value, $nin: SENIORITY_BLANK } },
+          { Job_Seniority_Tertiary:  { $in: value, $nin: SENIORITY_BLANK } },
+        ],
+      });
+    } else {
       q[field] = { $in: value };
     }
   }
   for (const { field, value } of exclusions) {
-    if (
-      CONTACT_ONLY_FIELDS.has(field) &&
-      Array.isArray(value) &&
-      value.length
-    ) {
+    if (!CONTACT_ONLY_FIELDS.has(field) || !Array.isArray(value) || !value.length) continue;
+
+    if (field === "Job_Seniority") {
+      // Exclude only if ALL three seniority fields are NOT in the exclusion list (or blank)
+      q.$and = (q.$and || []).concat({
+        Job_Seniority:           { $nin: value },
+        Job_Seniority_Secondary: { $nin: value },
+        Job_Seniority_Tertiary:  { $nin: value },
+      });
+    } else {
       if (q[field]) {
         q.$and = (q.$and || []).concat({ [field]: { $nin: value } });
       } else {
@@ -174,6 +191,8 @@ const ASSIGN_PROJECT = {
   Gender: 1,
   Job_Title: 1,
   Job_Seniority: 1,
+  Job_Seniority_Secondary: 1,
+  Job_Seniority_Tertiary: 1,
   Job_Function: 1,
   Contact_Address_1: 1,
   Contact_Address_2: 1,
@@ -283,6 +302,8 @@ function mapContactToEntry(
     Gender: row.Gender,
     Job_Title: row.Job_Title,
     Job_Seniority: row.Job_Seniority,
+    Job_Seniority_Secondary: row.Job_Seniority_Secondary,
+    Job_Seniority_Tertiary: row.Job_Seniority_Tertiary,
     Job_Function: row.Job_Function,
     Contact_Address_1: row.Contact_Address_1,
     Contact_Address_2: row.Contact_Address_2,
@@ -331,6 +352,8 @@ function mapContactToEntry(
     clientInfo: {
       companySpecificId: meta.companySpecificId || "",
       segment: meta.segment || "",
+      clientCompanyName: meta.clientCompanyName || "",
+      masterDbMatchedCompanyName: meta.masterDbMatchedCompanyName || "",
     },
   };
 }
@@ -440,10 +463,23 @@ const callingDataFilterOld = asyncHandler(async (req, res, next) => {
     const buildMongoQuery = (filtersArr, operator = "$in") => {
       const q = {};
       filtersArr.forEach(({ field, value }) => {
-        const mappedField = fieldMapping[field] || field;
-        if (Array.isArray(value) && value.length > 0) {
-          q[mappedField] = { [operator]: value };
+        if (!Array.isArray(value) || !value.length) return;
+        if (field === "Job_Seniority") {
+          if (operator === "$in") {
+            q.$or = [
+              { Job_Seniority:           { $in: value } },
+              { Job_Seniority_Secondary: { $in: value } },
+              { Job_Seniority_Tertiary:  { $in: value } },
+            ];
+          } else {
+            q.Job_Seniority           = { $nin: value };
+            q.Job_Seniority_Secondary = { $nin: value };
+            q.Job_Seniority_Tertiary  = { $nin: value };
+          }
+          return;
         }
+        const mappedField = fieldMapping[field] || field;
+        q[mappedField] = { [operator]: value };
       });
       return q;
     };
@@ -592,10 +628,23 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
     const buildMongoQuery = (filtersArr, operator = "$in") => {
       const q = {};
       filtersArr.forEach(({ field, value }) => {
-        const mappedField = fieldMapping[field] || field;
-        if (Array.isArray(value) && value.length > 0) {
-          q[mappedField] = { [operator]: value };
+        if (!Array.isArray(value) || !value.length) return;
+        if (field === "Job_Seniority") {
+          if (operator === "$in") {
+            q.$or = [
+              { Job_Seniority:           { $in: value } },
+              { Job_Seniority_Secondary: { $in: value } },
+              { Job_Seniority_Tertiary:  { $in: value } },
+            ];
+          } else {
+            q.Job_Seniority           = { $nin: value };
+            q.Job_Seniority_Secondary = { $nin: value };
+            q.Job_Seniority_Tertiary  = { $nin: value };
+          }
+          return;
         }
+        const mappedField = fieldMapping[field] || field;
+        q[mappedField] = { [operator]: value };
       });
       return q;
     };
@@ -1060,15 +1109,16 @@ const ENTRY_BATCH = 500;
 const MATCH_PAGE_SIZE = 100;
 
 /**
- * Returns true when the dataset is too large for the browser to receive in one response.
- * Estimated JSON bytes: complete×150 + partial×600 + notMatched×30 > 25 MB
+ * Returns true when the dataset is too large to cache as arrays in memory.
+ * notMatched entries are always stream-persisted to DB (never cached as arrays),
+ * so only completelyMatched size matters for the cache OOM check.
+ * ~150 bytes per complete entry → 25 MB cap = ~166 K entries. Well above 50 K limit.
  */
 const isResultTooLarge = ({
   completeCount = 0,
-  partialCount = 0,
-  notMatchedCount = 0,
+  duplicatesCount = 0,
 } = {}) =>
-  completeCount * 150 + partialCount * 600 + notMatchedCount * 30 > 25_000_000;
+  completeCount * 150 + duplicatesCount * 50 > 25_000_000;
 
 /**
  * Persist match results to the flat ClientMatchEntry collection.
@@ -1101,6 +1151,7 @@ const persistToEntryCollection = async (
       ...base,
       matchType: "complete",
       inputName: e.matchedWith || "",
+      clientCompanyName: e.clientCompanyName || "",
       companySpecificId: e.companySpecificId || "",
       segment: e.segment || "",
       companyId: e._id,
@@ -1117,6 +1168,7 @@ const persistToEntryCollection = async (
       ...base,
       matchType: "partial",
       inputName: e.input || e.inputName || "",
+      clientCompanyName: e.clientCompanyName || "",
       companySpecificId: e.companySpecificId || "",
       segment: e.segment || "",
       suggestions: e.suggestions || [],
@@ -1125,31 +1177,37 @@ const persistToEntryCollection = async (
     await yieldControl();
   }
 
-  // Stream-insert notMatched entries (larger batches — just strings)
+  // Stream-insert notMatched entries (larger batches — now objects with all 4 fields)
   const NM_BATCH = ENTRY_BATCH * 4;
   for (let i = 0; i < notMatched.length; i += NM_BATCH) {
-    const batch = notMatched.slice(i, i + NM_BATCH).map((name) => ({
+    const batch = notMatched.slice(i, i + NM_BATCH).map((entry) => ({
       ...base,
       matchType: "notMatched",
-      inputName: typeof name === "string" ? name : name?.inputName || "",
+      inputName: typeof entry === "string" ? entry : (entry?.inputName || ""),
+      clientCompanyName: typeof entry === "string" ? "" : (entry?.clientCompanyName || ""),
+      companySpecificId: typeof entry === "string" ? "" : (entry?.companySpecificId || ""),
+      segment: typeof entry === "string" ? "" : (entry?.segment || ""),
     }));
     await ClientMatchEntry.insertMany(batch, { ordered: false });
     await yieldControl();
   }
 
-  // Stream-insert duplicate entries
-  for (let i = 0; i < duplicates.length; i += NM_BATCH) {
-    const batch = duplicates.slice(i, i + NM_BATCH).map((name) => ({
+  // Stream-insert duplicate entries (user-declared duplicates from upload)
+  for (let i = 0; i < duplicates.length; i += ENTRY_BATCH) {
+    const batch = duplicates.slice(i, i + ENTRY_BATCH).map((e) => ({
       ...base,
       matchType: "duplicate",
-      inputName: typeof name === "string" ? name : name?.inputName || "",
+      inputName: e.name || e.inputName || "",
+      clientCompanyName: e.clientCompanyName || "",
+      companySpecificId: e.companySpecificId || "",
+      segment: e.segment || "",
     }));
     await ClientMatchEntry.insertMany(batch, { ordered: false });
     await yieldControl();
   }
 
   console.log(
-    `[MatchEntry] Persisted session ${uploadSession} — C:${counts.completeCount} P:${counts.partialCount} N:${counts.notMatchedCount} D:${counts.duplicatesCount}`
+    `[MatchEntry] Persisted session ${uploadSession} — C:${counts.completeCount} N:${counts.notMatchedCount} D:${counts.duplicatesCount}`
   );
 
   // Backfill uploadHistory into cache so the next getClientMatchData call doesn't
@@ -1226,116 +1284,78 @@ const loadMatchResultFromEntry = async (campaignId) => {
   }
 
   // Run all queries in a single parallel round-trip.
-  // Complete: limit to MATCH_PAGE_SIZE+1 for display; if there are more, run a second
-  //   lightweight query (companyId + meta only) so the frontend can build the full
-  //   companyIds list for the filter without loading complete docs with all fields.
-  // Partial / notMatched / duplicates: limit to MATCH_PAGE_SIZE+1 to detect hasMore.
   const PG = MATCH_PAGE_SIZE;
   const needAllComplete = (counts.completeCount ?? 0) > PG;
-  const completeBase = {
-    campaignId,
-    dataType: "Client",
-    uploadSession,
-    matchType: "complete",
-  };
+  const completeBase = { campaignId, dataType: "Client", uploadSession, matchType: "complete" };
 
-  const [
-    uploadHistory,
-    completeDocs,
-    allCompleteRaw,
-    partialRaw,
-    notMatchedRaw,
-    duplicateRaw,
-  ] = await Promise.all([
+  const [uploadHistory, completeDocs, allCompleteRaw, notMatchedRaw, duplicateRaw] = await Promise.all([
     loadUploadHistoryFromEntry(campaignId, uploadSession),
     ClientMatchEntry.find(completeBase)
-      .select(
-        "companyId companyName matchedWith inputName companySpecificId segment"
-      )
+      .select("companyId companyName matchedWith inputName companySpecificId segment clientCompanyName")
       .limit(PG + 1)
       .lean(),
-    // Only when completeCount > page size — fetches minimal fields for filter/companyMetaMap
     needAllComplete
       ? ClientMatchEntry.find(completeBase)
-          .select("companyId companyName companySpecificId segment")
+          .select("companyId companyName companySpecificId segment clientCompanyName")
           .lean()
       : Promise.resolve(null),
-    ClientMatchEntry.find({
-      campaignId,
-      dataType: "Client",
-      uploadSession,
-      matchType: "partial",
-    })
-      .select("inputName companySpecificId segment suggestions")
+    ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession, matchType: "notMatched" })
+      .select("inputName clientCompanyName companySpecificId segment remark")
       .limit(PG + 1)
       .lean(),
-    ClientMatchEntry.find({
-      campaignId,
-      dataType: "Client",
-      uploadSession,
-      matchType: "notMatched",
-    })
-      .select("inputName")
-      .limit(PG + 1)
-      .lean(),
-    ClientMatchEntry.find({
-      campaignId,
-      dataType: "Client",
-      uploadSession,
-      matchType: "duplicate",
-    })
-      .select("inputName")
+    ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession, matchType: "duplicate" })
+      .select("inputName clientCompanyName companySpecificId segment")
       .limit(PG + 1)
       .lean(),
   ]);
 
   const completeHasMore = completeDocs.length > PG;
-  const partialHasMore = partialRaw.length > PG;
   const notMatchedHasMore = notMatchedRaw.length > PG;
+  const duplicatesCount = counts.duplicatesCount ?? 0;
   const duplicatesHasMore = duplicateRaw.length > PG;
 
   const mapCompleteDoc = (d) => ({
     _id: d.companyId,
     Company_Name: d.companyName,
     matchedWith: d.matchedWith || d.inputName,
-    ...(d.companySpecificId ? { companySpecificId: d.companySpecificId } : {}),
-    ...(d.segment ? { segment: d.segment } : {}),
+    companySpecificId: d.companySpecificId || "",
+    segment: d.segment || "",
+    clientCompanyName: d.clientCompanyName || "",
   });
 
   return {
     uploadSession,
     uploadHistory,
-    // Accurate totals from meta doc (not array lengths)
     completeCount: counts.completeCount ?? 0,
-    partialCount: counts.partialCount ?? 0,
     notMatchedCount: counts.notMatchedCount ?? 0,
-    duplicatesCount: counts.duplicatesCount ?? 0,
+    duplicatesCount,
     completeHasMore,
-    partialHasMore,
     notMatchedHasMore,
     duplicatesHasMore,
     completelyMatched: completeDocs.slice(0, PG).map(mapCompleteDoc),
-    // Full complete list (minimal fields) for frontend filter — null when fits in first page
     allCompleteEntries: allCompleteRaw
       ? allCompleteRaw.map((d) => ({
           _id: d.companyId,
           Company_Name: d.companyName,
-          ...(d.companySpecificId
-            ? { companySpecificId: d.companySpecificId }
-            : {}),
-          ...(d.segment ? { segment: d.segment } : {}),
+          companySpecificId: d.companySpecificId || "",
+          segment: d.segment || "",
+          clientCompanyName: d.clientCompanyName || "",
         }))
       : null,
-    partiallyMatched: partialRaw.slice(0, PG).map((d) => ({
-      inputName: d.inputName,
-      suggestions: d.suggestions || [],
-      ...(d.companySpecificId
-        ? { companySpecificId: d.companySpecificId }
-        : {}),
-      ...(d.segment ? { segment: d.segment } : {}),
+    partiallyMatched: [],
+    notMatched: notMatchedRaw.slice(0, PG).map((d) => ({
+      inputName: d.inputName || "",
+      clientCompanyName: d.clientCompanyName || "",
+      companySpecificId: d.companySpecificId || "",
+      segment: d.segment || "",
+      remark: d.remark || "",
     })),
-    notMatched: notMatchedRaw.slice(0, PG).map((d) => d.inputName),
-    duplicates: duplicateRaw.slice(0, PG).map((d) => d.inputName),
+    duplicates: duplicateRaw.slice(0, PG).map((d) => ({
+      inputName: d.inputName || "",
+      clientCompanyName: d.clientCompanyName || "",
+      companySpecificId: d.companySpecificId || "",
+      segment: d.segment || "",
+    })),
   };
 };
 
@@ -1410,18 +1430,39 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
       }
       return "";
     };
+    const VALID_STATUSES = ["Matched", "NotMatched", "Duplicate"];
     const parseRow = (row) => {
-      const name = pickVal(row, [
-        "CompanyName",
-        "Company_Name",
-        "company_name",
-        "company",
-        "companyNames",
+      // Status is mandatory and must be one of: Matched / NotMatched / Duplicate
+      const rawStatus = pickVal(row, ["Status", "status"]);
+      const status = VALID_STATUSES.find(
+        (s) => s.toLowerCase() === rawStatus.toLowerCase()
+      ) || null;
+      if (!status) return null;
+
+      const masterDbName = pickVal(row, [
+        "MasterDbMatchedCompanyName",
+        "MasterDBMatchedCompanyName",
+        "Master_Db_Matched_Company_Name",
       ]);
-      if (!name) return null;
+      const clientCompanyName = pickVal(row, [
+        "ClientCompanyName",
+        "Client_Company_Name",
+        "clientCompanyName",
+      ]);
+
+      // For Matched: both ClientCompanyName and MasterDbMatchedCompanyName are mandatory.
+      if (status === "Matched" && (!masterDbName || !clientCompanyName)) return null;
+      // For NotMatched / Duplicate: ClientCompanyName is required as display name.
+      if (status !== "Matched" && !clientCompanyName) return null;
+
+      const name = masterDbName || clientCompanyName;
+
       return {
         name,
+        clientCompanyName,
         companySpecificId: pickVal(row, [
+          "CompanyUniqueId",
+          "Company_Unique_Id",
           "CompanySpecificId",
           "Company_Specific_Id",
           "company_specific_id",
@@ -1436,6 +1477,7 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
           "SegmentName",
           "segment_name",
         ]),
+        status,
       };
     };
 
@@ -1475,35 +1517,26 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
     return;
   }
 
-  const MAX_UPLOAD_ROWS = 50_000;
+  const MAX_UPLOAD_ROWS = 20_000;
   if (companyRows.length > MAX_UPLOAD_ROWS) {
     failMatchJob(
       jobId,
-      `Upload limit exceeded: your file has ${companyRows.length.toLocaleString()} rows. Maximum allowed is ${MAX_UPLOAD_ROWS.toLocaleString()}. Please split the file into batches of up to 50,000 rows.`
+      `Upload limit exceeded: your file has ${companyRows.length.toLocaleString()} rows. Maximum allowed is ${MAX_UPLOAD_ROWS.toLocaleString()} rows per upload. Split into multiple batches.`
     );
     return;
   }
 
-  // Flat names array (for backward-compat with ClientCompanyList + progress messages)
-  const companyNames = companyRows.map((r) => r.name);
+  // Split by user-declared status
+  const matchedToProcess   = companyRows.filter((r) => r.status === "Matched");
+  const userNotMatchedRows = companyRows.filter((r) => r.status === "NotMatched");
+  const duplicateRows      = companyRows.filter((r) => r.status === "Duplicate");
 
-  // Deduplicate: first occurrence of each name → matchRows; extras → duplicates.
-  // e.g. "ABC Corp" × 3  →  1 in matchRows, 2 in duplicates.
-  const seenNameKeys = new Set();
-  const matchRows = [];
-  const duplicates = []; // extra occurrences (strings) shown in Duplicates tab
-  for (const row of companyRows) {
-    const key = row.name.toLowerCase();
-    if (!seenNameKeys.has(key)) {
-      seenNameKeys.add(key);
-      matchRows.push(row);
-    } else {
-      duplicates.push(row.name);
-    }
-  }
+  // Flat names array (for ClientCompanyList + progress messages — only matched rows)
+  const companyNames = matchedToProcess.map((r) => r.name);
+
   updateMatchJob(
     jobId,
-    `Parsed ${companyNames.length.toLocaleString()} companies. Scanning database...`,
+    `Parsed ${companyRows.length.toLocaleString()} companies (${matchedToProcess.length} to match, ${userNotMatchedRows.length} declared not-matched, ${duplicateRows.length} duplicates). Scanning database...`,
     8
   );
   await yieldControl();
@@ -1513,56 +1546,125 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
 
   updateMatchJob(
     jobId,
-    `Index ready. Matching ${matchRows.length.toLocaleString()} unique companies...`,
+    `Index ready. Matching ${matchedToProcess.length.toLocaleString()} companies...`,
     20
   );
   await yieldControl();
 
-  // Stage 3 — 6-step pipeline in batches (yield every 500 rows for SSE flush)
+  // Stage 3 — stream-persist user-declared rows + match "Matched" rows in batches.
+  const uploadSession = new Date().toISOString();
   const BATCH_SIZE = 500;
-  const totalBatches = Math.ceil(matchRows.length / BATCH_SIZE);
-  // Use a Map across all batches so cross-batch duplicate DB companies are caught too.
-  const completeMap = new Map(); // _id string → entry
-  const partiallyMatched = [];
-  const notMatchedRows = [];
-  const sameCompanyDups = []; // names whose DB company was already matched by another name
+  const completeMap = new Map();
+  let notMatchedCount = 0;
+  let duplicatesCount = 0;
+  const NM_STREAM_SIZE = 2_000;
+  const DUP_STREAM_SIZE = 2_000;
+  let nmBuffer = [];
+  let dupBuffer = [];
 
+  const flushNmBuffer = async () => {
+    if (!nmBuffer.length) return;
+    const base = { campaignId, dataType: "Client", uploadSession };
+    const docs = nmBuffer.map((e) => ({
+      ...base,
+      matchType: "notMatched",
+      inputName: e.inputName || "",
+      clientCompanyName: e.clientCompanyName || "",
+      companySpecificId: e.companySpecificId || "",
+      segment: e.segment || "",
+      remark: e.remark || "",
+    }));
+    await ClientMatchEntry.insertMany(docs, { ordered: false });
+    nmBuffer = [];
+  };
+
+  const flushDupBuffer = async () => {
+    if (!dupBuffer.length) return;
+    const base = { campaignId, dataType: "Client", uploadSession };
+    const docs = dupBuffer.map((e) => ({
+      ...base,
+      matchType: "duplicate",
+      inputName: e.name || e.clientCompanyName || "",
+      clientCompanyName: e.clientCompanyName || "",
+      companySpecificId: e.companySpecificId || "",
+      segment: e.segment || "",
+    }));
+    await ClientMatchEntry.insertMany(docs, { ordered: false });
+    dupBuffer = [];
+  };
+
+  // Persist user-declared NotMatched rows directly (no DB matching)
+  for (const r of userNotMatchedRows) {
+    nmBuffer.push({
+      inputName: r.name || r.clientCompanyName || "",
+      clientCompanyName: r.clientCompanyName || "",
+      companySpecificId: r.companySpecificId || "",
+      segment: r.segment || "",
+      remark: "Not Matched",
+    });
+    notMatchedCount++;
+    if (nmBuffer.length >= NM_STREAM_SIZE) await flushNmBuffer();
+  }
+
+  // Persist user-declared Duplicate rows directly (no DB matching)
+  for (const r of duplicateRows) {
+    dupBuffer.push(r);
+    duplicatesCount++;
+    if (dupBuffer.length >= DUP_STREAM_SIZE) await flushDupBuffer();
+  }
+  await flushNmBuffer();
+  await flushDupBuffer();
+
+  // Match only Status=Matched rows through the 6-step pipeline
+  const totalBatches = Math.ceil(matchedToProcess.length / BATCH_SIZE);
   for (let b = 0; b < totalBatches; b++) {
-    const batch = matchRows.slice(b * BATCH_SIZE, (b + 1) * BATCH_SIZE);
-    const done = Math.min((b + 1) * BATCH_SIZE, matchRows.length);
+    const batch = matchedToProcess.slice(b * BATCH_SIZE, (b + 1) * BATCH_SIZE);
+    const done = Math.min((b + 1) * BATCH_SIZE, matchedToProcess.length);
     updateMatchJob(
       jobId,
-      `Matching companies... ${done.toLocaleString()} / ${matchRows.length.toLocaleString()}`,
+      `Matching companies... ${done.toLocaleString()} / ${matchedToProcess.length.toLocaleString()}`,
       20 + Math.round((b / totalBatches) * 73)
     );
     await yieldControl();
 
-    const {
-      completelyMatched: bc,
-      partiallyMatched: bp,
-      notMatched: bn,
-      sameCompanyDuplicates: bsd,
-    } = matchBatch(batch, dbIndex, getSuggestionsLimit, MAX_CANDIDATES);
+    const { completelyMatched: bc, notMatched: bn, inBatchDuplicates: bd } = matchBatch(batch, dbIndex, getSuggestionsLimit, MAX_CANDIDATES);
 
-    // Merge bc into completeMap — batch-level dedup already done; cross-batch dedup here
     for (const entry of bc) {
-      const id = String(entry._id);
-      if (completeMap.has(id)) {
-        sameCompanyDups.push(entry.matchedWith); // second cross-batch match → duplicate
+      if (completeMap.has(String(entry._id))) {
+        // Cross-batch duplicate — same DB company already matched in a previous batch
+        dupBuffer.push(entry);
+        duplicatesCount++;
+        if (dupBuffer.length >= DUP_STREAM_SIZE) await flushDupBuffer();
       } else {
-        completeMap.set(id, entry);
+        completeMap.set(String(entry._id), entry);
       }
     }
-    partiallyMatched.push(...bp);
-    notMatchedRows.push(...bn);
-    if (bsd?.length) sameCompanyDups.push(...bsd);
+
+    // Within-batch duplicates — same DB company matched by multiple rows in this batch
+    for (const entry of bd) {
+      dupBuffer.push(entry);
+      duplicatesCount++;
+      if (dupBuffer.length >= DUP_STREAM_SIZE) await flushDupBuffer();
+    }
+
+    // Match failures — stream-persist with remark
+    for (const entry of bn) {
+      nmBuffer.push({ ...entry, remark: "Not matched with any company in MasterDB" });
+      notMatchedCount++;
+      if (nmBuffer.length >= NM_STREAM_SIZE) await flushNmBuffer();
+    }
   }
 
+  // Flush remaining notMatched + invalid rows
+  for (let i = 0; i < invalidRowCount; i++) {
+    nmBuffer.push({ inputName: "(Invalid Row)", clientCompanyName: "", companySpecificId: "", segment: "", remark: "Invalid row — skipped" });
+    notMatchedCount++;
+    if (nmBuffer.length >= NM_STREAM_SIZE) await flushNmBuffer();
+  }
+  await flushNmBuffer();
+  await flushDupBuffer(); // flush any remaining dedup duplicates from the matching loop
+
   const completelyMatched = [...completeMap.values()];
-  const notMatched = [
-    ...notMatchedRows,
-    ...Array.from({ length: invalidRowCount }, () => "(No Company Name)"),
-  ];
 
   // Stage 4 — save company names list for ClientCompanyList (for re-match on cache miss)
   updateMatchJob(jobId, "Saving results...", 93);
@@ -1584,58 +1686,52 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
     console.warn("[runCompanyMatchJob] ClientCompanyList persist failed:", listErr.message);
   }
 
-  // ISO timestamp used as the unique session ID for this upload
-  const uploadSession = new Date().toISOString();
-
-  // Merge same-DB-company duplicates into the main duplicates list so the total
-  // row count matches the original upload (complete + partial + notMatched + duplicates = uploaded)
-  const allDuplicates = [...duplicates, ...sameCompanyDups];
-
   const counts = {
     completeCount: completelyMatched.length,
-    partialCount: partiallyMatched.length,
-    notMatchedCount: notMatched.length,
-    duplicatesCount: allDuplicates.length,
+    partialCount: 0,
+    notMatchedCount,
+    duplicatesCount,
   };
   const tooLarge = isResultTooLarge(counts);
 
-  // For non-tooLarge: cache arrays NOW so getClientMatchData can serve them even if
-  // the DB persist fails. persistToEntryCollection will then backfill uploadHistory.
   if (!tooLarge) {
     setCachedMatchResult(campaignId, {
       completelyMatched,
-      partiallyMatched,
-      notMatched,
-      duplicates: allDuplicates,
+      partiallyMatched: [],
+      notMatched: [], // already in DB; served via getClientMatchEntries
+      duplicates: [],
       uploadSession,
+      completeCount: counts.completeCount,
+      notMatchedCount: counts.notMatchedCount,
+      duplicatesCount: counts.duplicatesCount,
+      notMatchedHasMore: counts.notMatchedCount > 0,
+      duplicatesHasMore: counts.duplicatesCount > 0,
     });
   }
 
-  // Persist to DB — streaming flat inserts avoid the OOM from building all chunks at once
+  // Persist complete + meta to DB (notMatched already persisted above)
   updateMatchJob(jobId, "Saving to database...", 97);
   try {
     await persistToEntryCollection(campaignId, {
       completelyMatched,
-      partiallyMatched,
-      notMatched,
-      duplicates: allDuplicates,
+      partiallyMatched: [],
+      notMatched: [],
+      duplicates: [],
       uploadSession,
       counts,
     });
   } catch (persistErr) {
-    // Non-fatal: data is already in memory cache (for non-tooLarge)
     console.warn("[runCompanyMatchJob] DB persist failed:", persistErr.message);
   }
 
-  // For tooLarge: cache counts-only AFTER persist (arrays not needed in memory anymore)
   if (tooLarge) {
     setCachedMatchResult(campaignId, {
       tooLarge: true,
       uploadSession,
       completelyMatchedCount: counts.completeCount,
-      partiallyMatchedCount: counts.partialCount,
+      partiallyMatchedCount: 0,
       notMatchedCount: counts.notMatchedCount,
-      duplicatesCount: counts.duplicatesCount,
+      duplicatesCount: 0,
       uploadHistory: [],
     });
   }
@@ -1781,38 +1877,47 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
       { $group: { _id: null, totalContacts: { $sum: 1 } } },
     ];
 
-    // Parallel query for unique companies
-    const [statsResult, uniqueCompaniesCount] = await Promise.all([
+    // Shared sub-pipeline used for both uniqueCompanies and companyBreakdown
+    const postFilterPipeline = [
+      { $match: preLookup },
+      {
+        $lookup: {
+          from: "companies",
+          localField: "Company_ID",
+          foreignField: "_id",
+          as: "company_info",
+        },
+      },
+      {
+        $unwind: {
+          path: "$company_info",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      ...(Object.keys(postLookup).length > 0 ? [{ $match: postLookup }] : []),
+    ];
+
+    // Parallel queries: total contacts, unique companies, per-company contact count
+    const [statsResult, uniqueCompaniesCount, companyBreakdownRaw] = await Promise.all([
       Contact.aggregate(statsPipeline, { allowDiskUse: true }),
       Contact.aggregate(
-        [
-          { $match: preLookup },
-          {
-            $lookup: {
-              from: "companies",
-              localField: "Company_ID",
-              foreignField: "_id",
-              as: "company_info",
-            },
-          },
-          {
-            $unwind: {
-              path: "$company_info",
-              preserveNullAndEmptyArrays: true,
-            },
-          },
-          ...(Object.keys(postLookup).length > 0
-            ? [{ $match: postLookup }]
-            : []),
-          { $group: { _id: "$Company_ID" } },
-          { $count: "uniqueCompanies" },
-        ],
+        [...postFilterPipeline, { $group: { _id: "$Company_ID" } }, { $count: "uniqueCompanies" }],
+        { allowDiskUse: true }
+      ),
+      Contact.aggregate(
+        [...postFilterPipeline, { $group: { _id: "$Company_ID", contactCount: { $sum: 1 } } }],
         { allowDiskUse: true }
       ),
     ]);
 
     const stats = statsResult[0] || { totalContacts: 0 };
     const uniqueCompanies = uniqueCompaniesCount[0]?.uniqueCompanies || 0;
+
+    // All per-company contact counts from the filter pipeline (for the live API response)
+    const companyBreakdown = companyBreakdownRaw.map((r) => ({
+      companyId: String(r._id),
+      contactCount: r.contactCount,
+    }));
 
     const formattedStats = {
       totalContacts: stats.totalContacts,
@@ -1822,6 +1927,19 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
     const filteredData = {
       contactCount: stats.totalContacts,
       summary: formattedStats,
+      companyBreakdown,
+      contacts: [],
+    };
+
+    // DB copy: only store breakdown for the uploaded client's matched companies.
+    // Capped to companyIds (≤ 20k after upload limit) → at most ~1 MB → safe from MongoDB's 16 MB limit.
+    // filteredData is a Schema.Types.Object field so nested keys are saved freely by Mongoose.
+    const relevantIds = new Set(companyIds.map(String));
+    const storedBreakdown = companyBreakdown.filter((e) => relevantIds.has(e.companyId));
+    const filteredDataForDB = {
+      contactCount: stats.totalContacts,
+      summary: formattedStats,
+      companyBreakdown: storedBreakdown,
       contacts: [],
     };
 
@@ -1851,8 +1969,7 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
         {
           filters,
           exclusions,
-          filteredData,
-          contactCount: stats.totalContacts,
+          filteredData: filteredDataForDB,
           status: "Pending",
           "misc.companyIdsUsed": companyIds,
           "misc.companyNamesUsed": companyNamesUsed,
@@ -1875,10 +1992,8 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
         filters,
         exclusions,
         revisionNo,
-        listName,
-        filteredData,
+        filteredData: filteredDataForDB,
         dataType: datatype,
-        contactCount: stats.totalContacts,
         status: "Pending",
         misc: { companyIdsUsed: companyIds, companyNamesUsed, companyMetaMap },
       });
@@ -2585,29 +2700,18 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
     // Helper: build response payload. Uses uploadHistory from the result object
     // when already cached — avoids any extra DB query on the fast path.
     const buildPayload = async (result) => {
-      // tooLarge — return counts only, no arrays (avoids serialization OOM)
+      // tooLarge — load paginated first-page from DB and serve normally
+      // (avoids the "too large" error screen; data is paginated so no OOM risk)
       if (result.tooLarge) {
-        const latestDoc = await latestDocPromise;
-        const approvedIds = (latestDoc?.approvedIds || []).map((e) => ({
-          _id: String(e.companyId),
-          Company_Name: e.Company_Name,
-          inputName: e.inputName,
-        }));
-        const rejectedIds = (latestDoc?.rejectedIds || []).map((e) => ({
-          _id: String(e.companyId),
-          Company_Name: e.Company_Name,
-          inputName: e.inputName,
-        }));
+        const dbResult = await loadMatchResultFromEntry(campaignId);
+        if (dbResult) return buildPayload(dbResult); // recurse with DB data (not tooLarge)
+        // DB not ready yet (race condition on very fast re-fetch) — fall through to error
         return {
+          campaignId: String(campaignId),
           tooLarge: true,
-          completelyMatchedCount:
-            result.completelyMatchedCount ?? result.completeCount ?? 0,
-          partiallyMatchedCount:
-            result.partiallyMatchedCount ?? result.partialCount ?? 0,
+          completelyMatchedCount: result.completelyMatchedCount ?? result.completeCount ?? 0,
           notMatchedCount: result.notMatchedCount ?? 0,
           duplicatesCount: result.duplicatesCount ?? 0,
-          approvedIds,
-          rejectedIds,
           uploadSession: result.uploadSession || null,
           uploadHistory: result.uploadHistory || [],
         };
@@ -2640,67 +2744,49 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
       }
 
       const allComplete = result.completelyMatched || [];
-      const partial = result.partiallyMatched || [];
       const notMatch = result.notMatched || [];
-      const dups = result.duplicates || [];
+      const dupEntries = result.duplicates || [];
 
-      // Prefer explicit counts from meta doc (DB path); fall back to array length (slow path / old cache)
       const completeCount = result.completeCount ?? allComplete.length;
-      const partialCount = result.partialCount ?? partial.length;
       const notMatchedCount = result.notMatchedCount ?? notMatch.length;
-      const duplicatesCount = result.duplicatesCount ?? dups.length;
+      const duplicatesCount = result.duplicatesCount ?? 0;
 
-      // hasMore: use persisted flag (DB path) or detect by length (slow path / old cache)
-      const completeHasMore =
-        result.completeHasMore ?? allComplete.length > MATCH_PAGE_SIZE;
-      const partialHasMore =
-        result.partialHasMore ?? partial.length > MATCH_PAGE_SIZE;
-      const notMatchedHasMore =
-        result.notMatchedHasMore ?? notMatch.length > MATCH_PAGE_SIZE;
-      const duplicatesHasMore =
-        result.duplicatesHasMore ?? dups.length > MATCH_PAGE_SIZE;
+      const completeHasMore = result.completeHasMore ?? allComplete.length > MATCH_PAGE_SIZE;
+      const notMatchedHasMore = result.notMatchedHasMore ?? notMatch.length > MATCH_PAGE_SIZE;
+      const duplicatesHasMore = result.duplicatesHasMore ?? false;
 
-      // allCompleteEntries: full list with minimal fields for frontend filter/companyMetaMap.
-      // DB path: result.allCompleteEntries is already computed (null when fits in first page).
-      // Cache path: result.allCompleteEntries is undefined — derive from full cached array.
       let allCompleteEntries;
       if (result.allCompleteEntries !== undefined) {
-        // DB path — already set (may be null when completeCount <= MATCH_PAGE_SIZE)
         allCompleteEntries = result.allCompleteEntries;
       } else if (completeHasMore) {
-        // Cache path with full array — strip heavy fields for the filter payload
         allCompleteEntries = allComplete.map((e) => ({
           _id: e._id,
           Company_Name: e.Company_Name,
-          ...(e.companySpecificId
-            ? { companySpecificId: e.companySpecificId }
-            : {}),
-          ...(e.segment ? { segment: e.segment } : {}),
+          companySpecificId: e.companySpecificId || "",
+          segment: e.segment || "",
+          clientCompanyName: e.clientCompanyName || "",
         }));
       } else {
-        allCompleteEntries = null; // fits in first page — frontend uses completelyMatched directly
+        allCompleteEntries = null;
       }
 
       return {
-        // ── Meta — always at top ──────────────────────────────────────────────
+        campaignId: String(campaignId),
         completeCount,
-        partialCount,
         notMatchedCount,
         duplicatesCount,
         completeHasMore,
-        partialHasMore,
         notMatchedHasMore,
         duplicatesHasMore,
         uploadSession: result.uploadSession || null,
         uploadHistory: history,
         approvedIds,
         rejectedIds,
-        // ── First page of data ────────────────────────────────────────────────
         completelyMatched: allComplete.slice(0, MATCH_PAGE_SIZE),
-        allCompleteEntries, // full list for filter (or null)
-        partiallyMatched: partial.slice(0, MATCH_PAGE_SIZE),
+        allCompleteEntries,
+        partiallyMatched: [],
         notMatched: notMatch.slice(0, MATCH_PAGE_SIZE),
-        duplicates: dups.slice(0, MATCH_PAGE_SIZE),
+        duplicates: dupEntries.slice(0, MATCH_PAGE_SIZE),
       };
     };
 
@@ -2746,118 +2832,70 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
 
     const allCompanyNames = docs.flatMap((d) => d.companyNames || []);
 
-    const seenSlowKeys = new Set();
-    const slowMatchRows = [];
-    const duplicates = [];
-    for (const name of allCompanyNames) {
-      const key = name.toLowerCase();
-      if (!seenSlowKeys.has(key)) {
-        seenSlowKeys.add(key);
-        slowMatchRows.push({ name });
-      } else duplicates.push(name);
-    }
+    const slowMatchRows = allCompanyNames.map((name) => ({ name }));
 
     const dbIndex = await getOrBuildDbIndex();
     const slowCompleteMap = new Map();
-    const partiallyMatched = [];
     const notMatchedRows = [];
-    const slowSameCompDups = [];
     const REMATCH_BATCH = 500;
 
     for (let i = 0; i < slowMatchRows.length; i += REMATCH_BATCH) {
       await yieldControl();
-      const {
-        completelyMatched: bc,
-        partiallyMatched: bp,
-        notMatched: bn,
-        sameCompanyDuplicates: bsd,
-      } = matchBatch(
+      const { completelyMatched: bc, notMatched: bn } = matchBatch(
         slowMatchRows.slice(i, i + REMATCH_BATCH),
         dbIndex,
         getSuggestionsLimit,
         MAX_CANDIDATES
       );
-      for (const entry of bc) {
-        const id = String(entry._id);
-        if (slowCompleteMap.has(id)) slowSameCompDups.push(entry.matchedWith);
-        else slowCompleteMap.set(id, entry);
-      }
-      partiallyMatched.push(...bp);
+      for (const entry of bc) slowCompleteMap.set(String(entry._id), entry);
       notMatchedRows.push(...bn);
-      if (bsd?.length) slowSameCompDups.push(...bsd);
     }
     const completelyMatched = [...slowCompleteMap.values()];
     const notMatched = notMatchedRows;
-    const allDuplicates = [...duplicates, ...slowSameCompDups];
     const uploadSession = new Date().toISOString();
 
     const slowCounts = {
       completeCount: completelyMatched.length,
-      partialCount: partiallyMatched.length,
+      partialCount: 0,
       notMatchedCount: notMatched.length,
-      duplicatesCount: allDuplicates.length,
+      duplicatesCount: 0,
     };
     const slowTooLarge = isResultTooLarge(slowCounts);
 
     if (!slowTooLarge) {
       setCachedMatchResult(campaignId, {
         completelyMatched,
-        partiallyMatched,
+        partiallyMatched: [],
         notMatched,
-        duplicates: allDuplicates,
+        duplicates: [],
         uploadSession,
       });
     }
 
-    // Persist to DB in background
     persistToEntryCollection(campaignId, {
       completelyMatched,
-      partiallyMatched,
+      partiallyMatched: [],
       notMatched,
-      duplicates: allDuplicates,
       uploadSession,
       counts: slowCounts,
-    }).catch((e) =>
-      console.error(
-        "[getClientMatchData] Background persist failed:",
-        e.message
-      )
-    );
+    }).catch((e) => console.error("[getClientMatchData] Background persist failed:", e.message));
 
     if (slowTooLarge) {
       setCachedMatchResult(campaignId, {
         tooLarge: true,
         uploadSession,
         completelyMatchedCount: slowCounts.completeCount,
-        partiallyMatchedCount: slowCounts.partialCount,
         notMatchedCount: slowCounts.notMatchedCount,
-        duplicatesCount: slowCounts.duplicatesCount,
+        duplicatesCount: 0,
         uploadHistory: [],
       });
-      return sendResponse(
-        res,
-        200,
-        "Client match data fetched",
-        await buildPayload({
-          tooLarge: true,
-          uploadSession,
-          ...slowCounts,
-          uploadHistory: [],
-        })
+      return sendResponse(res, 200, "Client match data fetched",
+        await buildPayload({ tooLarge: true, uploadSession, ...slowCounts, uploadHistory: [] })
       );
     }
 
-    return sendResponse(
-      res,
-      200,
-      "Client match data fetched",
-      await buildPayload({
-        completelyMatched,
-        partiallyMatched,
-        notMatched,
-        duplicates: allDuplicates,
-        uploadSession,
-      })
+    return sendResponse(res, 200, "Client match data fetched",
+      await buildPayload({ completelyMatched, partiallyMatched: [], notMatched, duplicates: [], uploadSession })
     );
   } catch (err) {
     return sendError(next, err.message, 500);
@@ -2907,18 +2945,18 @@ const getClientMatchSessionData = asyncHandler(async (req, res, next) => {
         clientList,
       ] = await Promise.all([
         ClientMatchEntry.find({ ...base, matchType: "complete" })
-          .select("companyId companyName matchedWith companySpecificId segment")
+          .select("companyId companyName matchedWith companySpecificId segment clientCompanyName")
           .limit(PG + 1)
           .lean(),
         ClientMatchEntry.find({ ...base, matchType: "partial" })
           .select("inputName")
           .lean(),
         ClientMatchEntry.find({ ...base, matchType: "notMatched" })
-          .select("inputName")
+          .select("inputName clientCompanyName companySpecificId segment")
           .limit(PG + 1)
           .lean(),
         ClientMatchEntry.find({ ...base, matchType: "duplicate" })
-          .select("inputName")
+          .select("inputName clientCompanyName companySpecificId segment")
           .limit(PG + 1)
           .lean(),
         ClientCompanyList.findOne({ campaignId, dataType: "Client" })
@@ -2939,10 +2977,16 @@ const getClientMatchSessionData = asyncHandler(async (req, res, next) => {
 
       return sendResponse(res, 200, "Historical session fetched", {
         uploadSession,
+        counts: {
+          completeCount:    counts.completeCount    ?? 0,
+          notMatchedCount:  counts.notMatchedCount  ?? 0,
+          duplicatesCount:  counts.duplicatesCount  ?? 0,
+        },
         completelyMatched: completeDocs.slice(0, PG).map((d) => ({
           _id: d.companyId,
           Company_Name: d.companyName,
           matchedWith: d.matchedWith || d.inputName,
+          clientCompanyName: d.clientCompanyName || "",
           ...(d.companySpecificId
             ? { companySpecificId: d.companySpecificId }
             : {}),
@@ -2964,9 +3008,19 @@ const getClientMatchSessionData = asyncHandler(async (req, res, next) => {
             approvedCompanyName: approvedName || null,
           };
         }),
-        notMatched: notMatchedDocs.slice(0, PG).map((d) => d.inputName),
+        notMatched: notMatchedDocs.slice(0, PG).map((d) => ({
+          inputName: d.inputName || "",
+          clientCompanyName: d.clientCompanyName || "",
+          companySpecificId: d.companySpecificId || "",
+          segment: d.segment || "",
+        })),
         notMatchedHasMore: notMatchedDocs.length > PG,
-        duplicates: duplicateDocs.slice(0, PG).map((d) => d.inputName),
+        duplicates: duplicateDocs.slice(0, PG).map((d) => ({
+          inputName: d.inputName || "",
+          clientCompanyName: d.clientCompanyName || "",
+          companySpecificId: d.companySpecificId || "",
+          segment: d.segment || "",
+        })),
         duplicatesHasMore: duplicateDocs.length > PG,
       });
     }
@@ -3079,14 +3133,15 @@ const getClientMatchEntries = asyncHandler(async (req, res, next) => {
       session = meta.uploadSession;
     }
 
-    const skip = parseInt(page) * Math.min(parseInt(limit), 500);
-    const lim = Math.min(parseInt(limit), 500);
+    // Allow up to 50 K entries per request (used by frontend download flow).
+    const skip = parseInt(page) * Math.min(parseInt(limit), 50_000);
+    const lim = Math.min(parseInt(limit), 50_000);
 
     const selectByType = {
-      complete: "companyId companyName matchedWith companySpecificId segment",
-      partial: "inputName companySpecificId segment suggestions",
-      notMatched: "inputName",
-      duplicate: "inputName",
+      complete: "companyId companyName matchedWith companySpecificId segment clientCompanyName",
+      partial: "inputName clientCompanyName companySpecificId segment suggestions",
+      notMatched: "inputName clientCompanyName companySpecificId segment remark",
+      duplicate: "inputName clientCompanyName companySpecificId segment",
     };
     const projection = selectByType[matchType] || "inputName";
 
@@ -3098,6 +3153,7 @@ const getClientMatchEntries = asyncHandler(async (req, res, next) => {
         matchType,
       })
         .select(projection)
+        .sort({ _id: 1 })
         .skip(skip)
         .limit(lim + 1)
         .lean(),
@@ -3118,19 +3174,32 @@ const getClientMatchEntries = asyncHandler(async (req, res, next) => {
         _id: d.companyId,
         Company_Name: d.companyName,
         matchedWith: d.matchedWith,
-        ...(d.companySpecificId
-          ? { companySpecificId: d.companySpecificId }
-          : {}),
+        ...(d.companySpecificId ? { companySpecificId: d.companySpecificId } : {}),
         ...(d.segment ? { segment: d.segment } : {}),
+        ...(d.clientCompanyName ? { clientCompanyName: d.clientCompanyName } : {}),
       }));
     } else if (matchType === "partial") {
       entries = page_docs.map((d) => ({
         inputName: d.inputName,
         suggestions: d.suggestions || [],
-        ...(d.companySpecificId
-          ? { companySpecificId: d.companySpecificId }
-          : {}),
+        ...(d.companySpecificId ? { companySpecificId: d.companySpecificId } : {}),
         ...(d.segment ? { segment: d.segment } : {}),
+        ...(d.clientCompanyName ? { clientCompanyName: d.clientCompanyName } : {}),
+      }));
+    } else if (matchType === "notMatched") {
+      entries = page_docs.map((d) => ({
+        inputName: d.inputName || "",
+        clientCompanyName: d.clientCompanyName || "",
+        companySpecificId: d.companySpecificId || "",
+        segment: d.segment || "",
+        remark: d.remark || "",
+      }));
+    } else if (matchType === "duplicate") {
+      entries = page_docs.map((d) => ({
+        inputName: d.inputName || "",
+        clientCompanyName: d.clientCompanyName || "",
+        companySpecificId: d.companySpecificId || "",
+        segment: d.segment || "",
       }));
     } else {
       entries = page_docs.map((d) => d.inputName);

@@ -36,6 +36,7 @@ const createCampaign = asyncHandler(async (req, res, next) => {
       keyAccountManager,
       jcNumber,
       brandName,
+      brandId,
       clientName,
       clientEmail,
       clientContact,
@@ -82,6 +83,7 @@ const createCampaign = asyncHandler(async (req, res, next) => {
       keyAccountManager,
       jcNumber,
       brandName,
+      brandId,
       clientName,
       clientEmail,
       clientContact,
@@ -149,6 +151,12 @@ const getAllCampaigns = asyncHandler(async (req, res, next) => {
     const search = req.query.search?.trim();
 
     const filter = {};
+
+    // PM can only see their own campaigns
+    if (req.user.role === PROGRAM_MANAGER) {
+      filter.programManager = req.user._id;
+    }
+
     if (search) {
       const regex = new RegExp(search, "i");
       filter.$or = [
@@ -457,7 +465,7 @@ const updateCampaignStage = asyncHandler(async (req, res, next) => {
 const CONTACT_FIELDS = [
   "Contact_ID", "Contact_Source", "Contact_Create_Date",
   "Salutation", "First_Name", "Last_Name", "Full_Name",
-  "Gender", "Job_Title", "Job_Seniority", "Job_Function",
+  "Gender", "Job_Title", "Job_Seniority", "Job_Seniority_Secondary", "Job_Seniority_Tertiary", "Job_Function",
   "Contact_Address_1", "Contact_Address_2", "Contact_Address_3",
   "Contact_City", "Contact_Pin", "Contact_State", "Contact_Region", "Contact_Country",
   "Contact_STD_ISD_Code", "Contact_Location_Tier",
@@ -508,6 +516,7 @@ const createReconfirmationCampaign = asyncHandler(async (req, res, next) => {
       keyAccountManager: original.keyAccountManager,
       jcNumber: original.jcNumber,
       brandName: original.brandName,
+      brandId: original.brandId,
       clientName: original.clientName,
       clientEmail: original.clientEmail,
       clientContact: original.clientContact,
@@ -616,6 +625,38 @@ const checkEndedCampaigns = asyncHandler(async () => {
   }
 });
 
+const updateAllowedTemplates = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId, whatsapp, email } = req.body;
+    if (!campaignId) return sendError(next, "Campaign ID is required", 400);
+
+    const campaign = await Campaign.findByIdAndUpdate(
+      campaignId,
+      { "allowedTemplates.whatsapp": whatsapp || [], "allowedTemplates.email": email || [] },
+      { new: true }
+    ).select("name allowedTemplates");
+
+    if (!campaign) return sendError(next, "Campaign not found", 404);
+    return sendResponse(res, 200, "Templates updated successfully", campaign);
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
+const getCampaignAllowedTemplates = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    if (!campaignId) return sendError(next, "Campaign ID is required", 400);
+
+    const campaign = await Campaign.findById(campaignId).select("name allowedTemplates").lean();
+    if (!campaign) return sendError(next, "Campaign not found", 404);
+
+    return sendResponse(res, 200, "Allowed templates fetched", campaign.allowedTemplates || { whatsapp: [], email: [] });
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
 export {
   createCampaign,
   getAllCampaigns,
@@ -628,4 +669,6 @@ export {
   checkEndedCampaigns,
   createReconfirmationCampaign,
   getReconfirmationCampaigns,
+  updateAllowedTemplates,
+  getCampaignAllowedTemplates,
 };

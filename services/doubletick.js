@@ -48,7 +48,7 @@ class WhatsAppService {
     from,
     to,
     placeholders = [],
-    language = "en",
+    language = "en_US",
   }) {
     try {
       const payload = {
@@ -94,7 +94,7 @@ class WhatsAppService {
   /**
    * Send bulk personalized messages
    */
-  async sendBulkMessages({ templateName, from, recipients, language = "en" }) {
+  async sendBulkMessages({ templateName, from, recipients, language = "en_US" }) {
     const results = [];
 
     for (const recipient of recipients) {
