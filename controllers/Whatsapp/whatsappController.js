@@ -1,7 +1,7 @@
 import errorHandler from "../../utils/index.js";
 import WhatsAppService from "../../services/doubletick.js";
 import pLimit from "p-limit";
-import CallingData from "../../models/callingDataModal.js";
+import CallingData, { normalizePhoneDigits } from "../../models/callingDataModal.js";
 import DoubleTickData from "../../models/Webhook/webHookModel.js";
 import Campaign from "../../models/campaignModel.js";
 import { createJob, updateJob, completeJob, failJob } from "../../utils/jobTracker.js";
@@ -14,29 +14,17 @@ const BATCH_SIZE = 50; // Number of messages to send in each batch
 // Initialize WhatsApp Service
 const whatsappService = new WhatsAppService();
 
-const normalizeNumber = (num) => {
-  if (!num) return "";
-  return String(num)
-    .replace(/[^0-9]/g, "")
-    .replace(/^91/, "")
-    .replace(/^0/, "");
-};
-
 // Prefer callingDataId (exact record) when available; fall back to phone-number
-// search only when it is absent (e.g. webhook updates).
+// search only when it is absent (e.g. webhook updates). Exact match against the
+// indexed phoneLookup field instead of an unscoped 3-field suffix-regex scan
+// across the whole collection.
 const findCallingDataContact = async (contactNo, callingDataId = null) => {
   if (callingDataId) {
     return await CallingData.findById(callingDataId);
   }
-  const normalized = normalizeNumber(contactNo);
+  const normalized = normalizePhoneDigits(contactNo);
   if (!normalized) return null;
-  return await CallingData.findOne({
-    $or: [
-      { Contact_Direct_Phone1: new RegExp(`${normalized}$`) },
-      { Contact_Direct_Phone2: new RegExp(`${normalized}$`) },
-      { Mobile_No: new RegExp(`${normalized}$`) },
-    ],
-  });
+  return await CallingData.findOne({ phoneLookup: normalized });
 };
 
 /**
@@ -346,7 +334,7 @@ const sendTemplateMessage = asyncHandler(async (req, res, next) => {
                     {
                       $setOnInsert: {
                         webhookType: "MessageStatus",
-                        mobileNumber: normalizeNumber(contactNo),
+                        mobileNumber: normalizePhoneDigits(contactNo) || "",
                         contactId: callingDoc?._id || null,
                         templateName,
                         waMessageId,

@@ -1,6 +1,26 @@
 import mongoose from "mongoose";
 import { getPrimaryConnection } from "../config/db.js";
 
+// Strips everything but digits, then a leading "91" country code, then a leading
+// trunk "0" — same convention as the webhook/WhatsApp controllers' normalizeNumber,
+// kept here so phoneLookup entries and incoming webhook numbers compare on identical values.
+export const normalizePhoneDigits = (raw) => {
+  if (!raw) return null;
+  const digits = String(raw).replace(/[^0-9]/g, "").replace(/^91/, "").replace(/^0/, "");
+  return digits || null;
+};
+
+// Builds the deduped set of normalized numbers used for O(1) indexed phone lookups
+// (webhook contact resolution) instead of an unindexed multi-field regex scan.
+export const computePhoneLookup = (doc) => {
+  const values = [doc.Mobile_No, doc.Contact_Direct_Phone1, doc.Contact_Direct_Phone2]
+    .map(normalizePhoneDigits)
+    .filter(Boolean);
+  return [...new Set(values)];
+};
+
+const PHONE_FIELDS = ["Mobile_No", "Contact_Direct_Phone1", "Contact_Direct_Phone2"];
+
 const CallingDataSchema = new mongoose.Schema(
   {
     Contact_ID: { type: String, trim: true },
@@ -30,6 +50,10 @@ const CallingDataSchema = new mongoose.Schema(
     Contact_Direct_Phone2: { type: String, trim: true },
     Contact_Extn_No: { type: String, trim: true },
     Mobile_No: { type: String, trim: true },
+    // Normalized (digits-only, no country/trunk code) copy of Mobile_No/Contact_Direct_Phone1/2,
+    // kept in sync via hooks below. Lets webhook contact-resolution do an exact indexed match
+    // instead of an unscoped 3-field suffix-regex scan across the whole collection.
+    phoneLookup: { type: [String], default: [] },
     Office_Email_1: { type: String, trim: true },
     Office_Email_2: { type: String, trim: true },
     Personal_Email1: { type: String, trim: true },
@@ -242,6 +266,51 @@ const CallingDataSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+// ── Keep phoneLookup in sync with the source phone fields ──────────────────────
+// Covers Model.create() / doc.save() (new docs and full-doc edits).
+CallingDataSchema.pre("validate", function (next) {
+  if (this.isNew || PHONE_FIELDS.some((f) => this.isModified(f))) {
+    this.phoneLookup = computePhoneLookup(this);
+  }
+  next();
+});
+
+// Covers bulk campaign-data uploads via Model.insertMany().
+CallingDataSchema.pre("insertMany", function (next, docs) {
+  (docs || []).forEach((doc) => {
+    doc.phoneLookup = computePhoneLookup(doc);
+  });
+  next();
+});
+
+// Covers findByIdAndUpdate/findOneAndUpdate($set: {...}) — the pattern used by
+// editcallingData/UpdateCallingData/setPriority — which bypass document middleware.
+// Re-derives phoneLookup from whichever phone fields are in this $set plus whatever
+// wasn't touched (fetched from the existing doc), so a partial update still lands
+// on a fully-correct phoneLookup rather than a stale or incomplete one.
+CallingDataSchema.pre(["findOneAndUpdate", "updateOne", "updateMany"], async function (next) {
+  try {
+    const update = this.getUpdate();
+    const setOps = update && update.$set;
+    if (!setOps || !PHONE_FIELDS.some((f) => f in setOps)) return next();
+
+    const existing = await this.model.findOne(this.getQuery()).select(PHONE_FIELDS.join(" ")).lean();
+    const merged = {
+      Mobile_No:             setOps.Mobile_No             ?? existing?.Mobile_No,
+      Contact_Direct_Phone1: setOps.Contact_Direct_Phone1 ?? existing?.Contact_Direct_Phone1,
+      Contact_Direct_Phone2: setOps.Contact_Direct_Phone2 ?? existing?.Contact_Direct_Phone2,
+    };
+    setOps.phoneLookup = computePhoneLookup(merged);
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Webhook contact resolution (findCallingDataForNumber) — exact match on normalized
+// digits instead of an unscoped 3-field suffix regex scan across the whole collection.
+CallingDataSchema.index({ phoneLookup: 1 });
 
 // Covers: CampaignId-only, CampaignId+agentId, and CampaignId+agentId+sort(createdAt) queries
 CallingDataSchema.index({ CampaignId: 1, agentId: 1, createdAt: 1 });

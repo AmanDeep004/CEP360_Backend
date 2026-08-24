@@ -1,5 +1,5 @@
 import DoubleTickData from "../../models/Webhook/webHookModel.js";
-import CallingData from "../../models/callingDataModal.js";
+import CallingData, { normalizePhoneDigits } from "../../models/callingDataModal.js";
 import Contact from "../../models/MasterDBModel/contactModel.js";
 import Template from "../../models/Webhook/templateModel.js";
 import errorHandler from "../../utils/index.js";
@@ -28,15 +28,13 @@ const findContactForNumber = async (mobile) => {
 const findCallingDataForNumber = async (mobile) => {
   if (!mobile) return null;
 
-  const normalizedMobile = normalizeNumber(mobile);
+  // normalizeNumber() here and normalizePhoneDigits() on the stored side both reduce
+  // to the same digits-only, no-country/trunk-code form, so this is an exact match
+  // against the indexed phoneLookup array — no more unscoped multi-field regex scan.
+  const normalizedMobile = normalizePhoneDigits(normalizeNumber(mobile));
+  if (!normalizedMobile) return null;
 
-  const orQuery = [
-    { Contact_Direct_Phone1: new RegExp(`${normalizedMobile}$`) },
-    { Contact_Direct_Phone2: new RegExp(`${normalizedMobile}$`) },
-    { Mobile_No: new RegExp(`${normalizedMobile}$`) },
-  ];
-
-  return await CallingData.findOne({ $or: orQuery }).lean();
+  return await CallingData.findOne({ phoneLookup: normalizedMobile }).lean();
 };
 
 // MESSAGE STATUS UPDATE WEBHOOK (legacy)

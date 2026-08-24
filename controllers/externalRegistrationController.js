@@ -4,7 +4,7 @@ import { UserRoleEnum } from "../utils/enum.js";
 import XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import mongoose from "mongoose";
-import CallingData from "../models/callingDataModal.js";
+import CallingData, { computePhoneLookup } from "../models/callingDataModal.js";
 
 const { ADMIN, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT } = UserRoleEnum;
 const { asyncHandler, sendError, sendResponse } = errorHandler;
@@ -505,6 +505,13 @@ const uploadExternalDataController = asyncHandler(async (req, res, next) => {
               Contact_Direct_Phone2:    String(contact_Direct_Phone2 || ""),
               Contact_Extn_No:          String(row.Contact_Extn_No   || ""),
               Mobile_No:                String(mobileNo              || ""),
+              // bulkWrite() bypasses Mongoose's insertMany/save hooks, so phoneLookup
+              // must be computed explicitly here (see models/callingDataModal.js).
+              phoneLookup: computePhoneLookup({
+                Mobile_No: mobileNo,
+                Contact_Direct_Phone1: contact_Direct_Phone1,
+                Contact_Direct_Phone2: contact_Direct_Phone2,
+              }),
               Office_Email_1:           officeEmail1                 || "",
               Office_Email_2:           officeEmail2                 || "",
               Personal_Email1:          personalEmail1               || "",
