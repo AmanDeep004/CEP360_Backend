@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import Invoice from "../models/invoiceModel.js";
 import Campaign from "../models/campaignModel.js";
+import InvoiceSettings, { getInvoiceSettings } from "../models/invoiceSettingsModel.js";
 import AgentAssigned from "../models/agentAssigned.js";
 import Attendance from "../models/attendenceModel.js";
 import errorHandler from "../utils/index.js";
@@ -709,6 +710,12 @@ const getAgentInvoicesDataByMonth = asyncHandler(async (req, res, next) => {
 
 const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
   try {
+    // ── Global invoice generation lock ────────────────────────────────────
+    const invoiceSettings = await getInvoiceSettings();
+    if (!invoiceSettings.invoiceGenerationEnabled) {
+      return sendError(next, "Invoice generation is currently disabled by the Resource Manager.", 403);
+    }
+
     const {
       invoiceId,
       agentId,      // used to auto-create invoice if invoiceId missing
@@ -1411,6 +1418,53 @@ const downloadInvoicesZip = asyncHandler(async (req, res, next) => {
   }
 });
 
+// ── Invoice Generation Settings (RM only) ─────────────────────────────────────
+const getInvoiceGenerationSettings = asyncHandler(async (req, res, next) => {
+  try {
+    const settings = await getInvoiceSettings();
+    return sendResponse(res, 200, "Invoice settings fetched", settings);
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+const updateInvoiceGenerationSettings = asyncHandler(async (req, res, next) => {
+  try {
+    const { enabled } = req.body;
+    if (typeof enabled !== "boolean") {
+      return sendError(next, "'enabled' must be a boolean", 400);
+    }
+
+    const now = new Date();
+    const setData = { invoiceGenerationEnabled: enabled };
+
+    if (enabled) {
+      setData.enabledAt     = now;
+      setData.enabledBy     = req.user._id;
+      setData.enabledByName = req.user.employeeName || null;
+    } else {
+      setData.disabledAt     = now;
+      setData.disabledBy     = req.user._id;
+      setData.disabledByName = req.user.employeeName || null;
+    }
+
+    // Upsert the single settings document
+    const settings = await InvoiceSettings.findOneAndUpdate(
+      {},
+      { $set: setData },
+      { upsert: true, new: true }
+    ).lean();
+
+    return sendResponse(
+      res, 200,
+      `Invoice generation ${enabled ? "enabled" : "disabled"} successfully`,
+      settings
+    );
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
 export {
   createInvoice,
   updateInvoice,
@@ -1428,4 +1482,6 @@ export {
   getAllInvoicesOfPmMonthWise,
   getSalaryDashboard,
   downloadInvoicesZip,
+  getInvoiceGenerationSettings,
+  updateInvoiceGenerationSettings,
 };
