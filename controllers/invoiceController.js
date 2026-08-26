@@ -36,13 +36,17 @@ async function getAttendanceSummary(userId, startDate, endDate) {
   const end = new Date(endDate);
   end.setHours(23, 59, 59, 999);
 
+  // Schema uses employeeId + createdAt (timestamps) — same as getSalaryDashboard
   const attendanceRecords = await Attendance.find({
-    userId,
-    loginDate: { $gte: start, $lte: end },
+    employeeId: userId,
+    createdAt: { $gte: start, $lte: end },
   }).lean();
 
+  // Convert to IST dates (same as dashboard) to avoid UTC-midnight mismatches
   const presentDatesSet = new Set(
-    attendanceRecords.map((rec) => rec.loginDate.toISOString().slice(0, 10))
+    attendanceRecords.map((rec) =>
+      new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date(rec.createdAt))
+    )
   );
 
   let totalCalendarDays = 0;
@@ -52,7 +56,8 @@ async function getAttendanceSummary(userId, startDate, endDate) {
 
   let current = new Date(start);
   while (current <= end) {
-    const dateStr = current.toISOString().slice(0, 10);
+    // Use IST date string to match presentDatesSet keys
+    const dateStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(current);
     const day = current.getDay(); // 0=Sun, 6=Sat
     totalCalendarDays++;
 
@@ -250,8 +255,15 @@ const getAllInvoicesData = asyncHandler(async (req, res, next) => {
       return sendError(next, "Month is required", 400);
     }
 
+    // Only return invoices that were successfully generated (PDF exists)
+    const filter = {
+      month,
+      "invoiceGenerated.status": true,
+      "invoiceGenerated.invoiceUrl": { $nin: [null, ""] },
+    };
+
     if (!page) {
-      const invoices = await Invoice.find({ month })
+      const invoices = await Invoice.find(filter)
         .populate(
           "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
         )
@@ -262,8 +274,8 @@ const getAllInvoicesData = asyncHandler(async (req, res, next) => {
 
     const skip = (page - 1) * limit;
     const [total, invoices] = await Promise.all([
-      Invoice.countDocuments({ month }),
-      Invoice.find({ month })
+      Invoice.countDocuments(filter),
+      Invoice.find(filter)
         .populate(
           "employeeId campaign_id programManagers salaryGenBy salaryModBy invoiceGenerated.genBy"
         )
@@ -1274,9 +1286,13 @@ const getSalaryDashboard = asyncHandler(async (req, res, next) => {
       .populate({ path: "invoiceGenerated.genBy", select: "employeeName" })
       .lean();
 
-    // Per-agent total payable days already generated across ALL campaigns this month
+    // Per-agent total payable days already SUCCESSFULLY generated across all campaigns this month.
+    // Only count invoices where the PDF was generated (status: true) — same set the PM can see.
+    // Failed/incomplete invoices are excluded from the count but still returned as existingInvoice
+    // so the form can pre-fill and the PM can re-generate them.
     const agentGenDays = {};
     for (const inv of existingInvoices) {
+      if (!inv.invoiceGenerated?.status) continue;
       const aId = inv.employeeId.toString();
       agentGenDays[aId] = (agentGenDays[aId] || 0) + (inv.payableDays || 0);
     }
