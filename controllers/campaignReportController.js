@@ -1,8 +1,10 @@
 import mongoose from "mongoose";
 import utils from "../utils/index.js";
 import CallingData from "../models/callingDataModal.js";
+import CallHistory from "../models/callHistoryModel.js";
 import Campaign from "../models/campaignModel.js";
 import CampaignReport from "../models/campaignReportModel.js";
+import User from "../models/userModel.js";
 import ExcelJS from "exceljs";
 
 const { asyncHandler, sendResponse, sendError } = utils;
@@ -275,9 +277,22 @@ const SELECT_DOWNLOAD = "Contact_ID Full_Name Gender Job_Title Job_Seniority Job
 
 const fmtDate = (d) => d ? new Date(d).toLocaleString("en-GB") : "";
 
+const CHUNK_SIZE = 500;
+
 /**
  * GET /api/campaignReport/:reportId/download
- * Returns an Excel (.xlsx) of all filtered rows with agent info and full call history.
+ *
+ * Streams an Excel file directly to the HTTP response without buffering
+ * the full dataset in memory. Handles large reports (10L+ rows) without OOM
+ * or proxy timeouts, because bytes are flushed to the client continuously.
+ *
+ * Strategy:
+ *  1. maxCalls — single $lookup aggregate (avoids a huge $in query).
+ *  2. ExcelJS streaming WorkbookWriter — each row is committed and flushed
+ *     to the response immediately, keeping Nginx / the browser connection alive.
+ *  3. MongoDB cursor — O(n) traversal, no skip/limit re-scanning.
+ *  4. Per-chunk batch lookups for User and CallHistory (small $in queries).
+ *  5. No res.end() — WorkbookWriter.commit() already closes the stream.
  */
 const downloadReport = asyncHandler(async (req, res, next) => {
   const report = await CampaignReport.findById(req.params.reportId).lean();
@@ -287,8 +302,8 @@ const downloadReport = asyncHandler(async (req, res, next) => {
 
   const query = buildBaseQuery(
     report.campaignId, report.reportType,
-    report.dateFrom, report.dateTo,
-    report.timeFrom, report.timeTo
+    report.dateFrom,   report.dateTo,
+    report.timeFrom,   report.timeTo
   );
   if (segment)                         query.Company_Segment = segment;
   if (registered === "Registered")     query.isRegistered = true;
@@ -296,88 +311,116 @@ const downloadReport = asyncHandler(async (req, res, next) => {
   if (called === "Called")             query.lastCallingDate = { ...(query.lastCallingDate || {}), $ne: null };
   if (called === "Not Called")         query.lastCallingDate = null;
 
-  // Populate agentId (user info) and callHistory (chat entries)
-  const records = await CallingData.find(query)
-    .select(SELECT_DOWNLOAD)
-    .populate({ path: "agentId",     select: "employeeName email mobile employeeCode" })
-    .populate({ path: "callHistory", select: "chatHistory", options: { lean: true } })
-    .lean();
+  // ── 1. maxCalls via $lookup aggregate (no giant $in array) ─────────────────
+  const [mxResult] = await CallingData.aggregate([
+    { $match: { ...query, callHistory: { $exists: true, $ne: null } } },
+    { $lookup: { from: "callhistories", localField: "callHistory", foreignField: "_id", as: "ch" } },
+    { $unwind: { path: "$ch", preserveNullAndEmptyArrays: false } },
+    { $project: { n: { $size: { $ifNull: ["$ch.chatHistory", []] } } } },
+    { $group: { _id: null, max: { $max: "$n" } } },
+  ]);
+  const maxCalls = mxResult?.max || 0;
 
-  // Find max number of calls across all records for dynamic call columns
-  let maxCalls = 0;
-  for (const r of records) {
-    const n = r.callHistory?.chatHistory?.length || 0;
-    if (n > maxCalls) maxCalls = n;
-  }
-
-  // Build dynamic call columns: Call 1 Date, Call 1 Duration, Call 1 Remark, Call 1 Recording, ...
+  // ── 2. Build column list ────────────────────────────────────────────────────
   const callColumns = [];
   for (let i = 1; i <= maxCalls; i++) {
     callColumns.push({ key: `call${i}_date`,     header: `Call ${i} Date`,     width: 20 });
     callColumns.push({ key: `call${i}_duration`, header: `Call ${i} Duration`, width: 16 });
     callColumns.push({ key: `call${i}_remark`,   header: `Call ${i} Remark`,   width: 30 });
   }
-
   const allColumns = [...STATIC_COLUMNS, ...callColumns];
 
-  // Build workbook
-  const wb = new ExcelJS.Workbook();
-  wb.creator = "CEP360 CRM";
-  wb.created = new Date();
+  // ── 3. Set headers and open streaming workbook ──────────────────────────────
+  const safeName = (report.campaignName || "report").replace(/[^a-zA-Z0-9_-]/g, "_");
+  const filename  = `campaign_report_${safeName}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
 
+  const wb = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: res, useStyles: true, useSharedStrings: false });
   const ws = wb.addWorksheet("Campaign Report");
   ws.columns = allColumns;
 
-  // Style header row
   const headerRow = ws.getRow(1);
   headerRow.font      = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
   headerRow.fill      = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0D9A8F" } };
   headerRow.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
   headerRow.height    = 28;
+  headerRow.commit(); // flush header row immediately — keeps connection alive early
 
-  // Add data rows
-  for (const r of records) {
-    const row = {};
+  // ── 4. Stream rows via cursor — O(n), no skip/limit ────────────────────────
+  const cursor = CallingData.find(query)
+    .select(SELECT_DOWNLOAD)
+    .lean()
+    .cursor({ batchSize: CHUNK_SIZE });
 
-    // Static fields
-    for (const col of STATIC_COLUMNS) {
-      const k = col.key;
-      if (k === "uniqueId")        { row[k] = String(r._id); continue; }
-      if (k === "isRegistered")    { row[k] = r[k] ? "Yes" : "No"; continue; }
-      if (k === "lastCallingDate") { row[k] = fmtDate(r[k]); continue; }
-      if (k === "agentName")       { row[k] = r.agentId?.employeeName  || ""; continue; }
-      if (k === "agentEmail")      { row[k] = r.agentId?.email         || ""; continue; }
-      if (k === "agentId")         { row[k] = r.agentId?.employeeCode  || String(r.agentId?._id || ""); continue; }
-      if (k === "agentMobile")     { row[k] = r.agentId?.mobile        || ""; continue; }
-      row[k] = r[k] != null ? r[k] : "";
+  let buffer = [];
+
+  const flushBuffer = async () => {
+    if (!buffer.length) return;
+    const chunk = buffer;
+    buffer = [];
+
+    // Collect unique IDs for this chunk only — keeps $in queries small
+    const agentIdSet = new Set();
+    const chIdSet    = new Set();
+    for (const r of chunk) {
+      if (r.agentId)     agentIdSet.add(String(r.agentId));
+      if (r.callHistory) chIdSet.add(String(r.callHistory));
     }
 
-    // Dynamic call history columns
-    const chatHistory = r.callHistory?.chatHistory || [];
-    for (let i = 0; i < maxCalls; i++) {
-      const entry = chatHistory[i];
-      row[`call${i + 1}_date`]      = entry ? fmtDate(entry.callingDate) : "";
-      row[`call${i + 1}_duration`]  = entry?.overallTime != null
-        ? (() => { const s = entry.overallTime; return s >= 60 ? `${Math.floor(s/60)}m ${s%60}s` : `${s}s`; })()
-        : "";
-      row[`call${i + 1}_remark`]    = entry ? (entry.remarks || "") : "";
-    }
+    const [users, histories] = await Promise.all([
+      agentIdSet.size
+        ? User.find({ _id: { $in: [...agentIdSet] } })
+            .select("employeeName email mobile employeeCode").lean()
+        : [],
+      chIdSet.size
+        ? CallHistory.find({ _id: { $in: [...chIdSet] } })
+            .select("chatHistory").lean()
+        : [],
+    ]);
 
-    const dataRow = ws.addRow(row);
-    dataRow.alignment = { vertical: "middle", wrapText: false };
+    const userMap    = new Map(users.map(u    => [String(u._id), u]));
+    const historyMap = new Map(histories.map(h => [String(h._id), h]));
+
+    for (const r of chunk) {
+      const agent       = userMap.get(String(r.agentId))        || {};
+      const history     = historyMap.get(String(r.callHistory)) || {};
+      const chatHistory = history.chatHistory || [];
+
+      const row = {};
+      for (const col of STATIC_COLUMNS) {
+        const k = col.key;
+        if (k === "uniqueId")        { row[k] = String(r._id);                                  continue; }
+        if (k === "isRegistered")    { row[k] = r[k] ? "Yes" : "No";                            continue; }
+        if (k === "lastCallingDate") { row[k] = fmtDate(r[k]);                                  continue; }
+        if (k === "agentName")       { row[k] = agent.employeeName || "";                       continue; }
+        if (k === "agentEmail")      { row[k] = agent.email        || "";                       continue; }
+        if (k === "agentId")         { row[k] = agent.employeeCode || String(r.agentId || ""); continue; }
+        if (k === "agentMobile")     { row[k] = agent.mobile       || "";                       continue; }
+        row[k] = r[k] != null ? r[k] : "";
+      }
+      for (let i = 0; i < maxCalls; i++) {
+        const entry = chatHistory[i];
+        row[`call${i + 1}_date`]     = entry ? fmtDate(entry.callingDate) : "";
+        row[`call${i + 1}_duration`] = entry?.overallTime != null
+          ? (() => { const s = entry.overallTime; return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`; })()
+          : "";
+        row[`call${i + 1}_remark`]   = entry ? (entry.remarks || "") : "";
+      }
+
+      const dataRow = ws.addRow(row);
+      dataRow.commit(); // write row to stream immediately — no memory accumulation
+    }
+  };
+
+  for await (const doc of cursor) {
+    buffer.push(doc);
+    if (buffer.length >= CHUNK_SIZE) await flushBuffer();
   }
+  await flushBuffer(); // remaining rows in final partial chunk
 
-  // Freeze header
-  ws.views = [{ state: "frozen", ySplit: 1 }];
-
-  const safeName = (report.campaignName || "report").replace(/[^a-zA-Z0-9_-]/g, "_");
-  const filename  = `campaign_report_${safeName}_${new Date().toISOString().slice(0, 10)}.xlsx`;
-
-  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-
-  await wb.xlsx.write(res);
-  res.end();
+  // Finalises the XLSX zip and ends the response — do NOT call res.end() after this
+  await wb.commit();
 });
 
 export { generateReport, getAllReportHistory, getReportHistory, getReportById, getSharedReport, downloadReport };
