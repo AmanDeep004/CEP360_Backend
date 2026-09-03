@@ -1101,6 +1101,12 @@ const CONTACT_READONLY_FIELDS = [
   "totalEmailSent",
   "totalEngagements",
   "hasEngagements",
+  // Denormalized company fields — synced automatically via updateCompany; never set directly
+  "Industry",
+  "Sub_Industry",
+  "Company_Segment",
+  "Employees_Range",
+  "Turnover_Range",
 ];
 
 const updateData = asyncHandler(async (req, res, next) => {
@@ -1214,6 +1220,20 @@ const updateData = asyncHandler(async (req, res, next) => {
       ];
       if (changedFieldNames.some((f) => COMPANY_DROPDOWN_FIELDS.includes(f))) {
         cacheInvalidatePattern("dropdown:*");
+
+        // Sync denormalized company fields on all linked Contacts (fire-and-forget)
+        Contact.updateMany(
+          { Company_ID: id },
+          {
+            $set: {
+              Industry:        updatedCompany.Industry        ?? "",
+              Sub_Industry:    updatedCompany.Sub_Industry    ?? "",
+              Company_Segment: updatedCompany.Company_Segment ?? "",
+              Employees_Range: updatedCompany.Employees_Range ?? "",
+              Turnover_Range:  updatedCompany.Turnover_Range  ?? "",
+            },
+          }
+        ).catch((err) => console.error("[updateData/company] contact sync error:", err));
       }
 
       return sendResponse(
@@ -1342,6 +1362,20 @@ const updateCompany = asyncHandler(async (req, res, next) => {
       updatedData,
       { new: true }
     );
+
+    // Sync denormalized company fields on all linked Contacts (fire-and-forget)
+    Contact.updateMany(
+      { Company_ID: companyId },
+      {
+        $set: {
+          Industry:        updatedData.Industry        ?? "",
+          Sub_Industry:    updatedData.Sub_Industry    ?? "",
+          Company_Segment: updatedData.Company_Segment ?? "",
+          Employees_Range: updatedData.Employees_Range ?? "",
+          Turnover_Range:  updatedData.Turnover_Range  ?? "",
+        },
+      }
+    ).catch((err) => console.error("[updateCompany] contact sync error:", err));
 
     return sendResponse(
       res,

@@ -11,11 +11,11 @@ const ContactSchema = new mongoose.Schema(
     Last_Name: { type: String, trim: true },
     Full_Name: { type: String, trim: true },
     Gender: { type: String, trim: true },
-    Job_Title: { type: String, trim: true },
-    Job_Seniority: { type: String, trim: true },
+    Job_Title: { type: String, trim: true, index: true },
+    Job_Seniority: { type: String, trim: true, index: true },
     Job_Seniority_Secondary: { type: String, trim: true },
     Job_Seniority_Tertiary: { type: String, trim: true },
-    Job_Function: { type: String, trim: true },
+    Job_Function: { type: String, trim: true, index: true },
 
     // Address
     Contact_Address_1: { type: String, trim: true },
@@ -24,7 +24,7 @@ const ContactSchema = new mongoose.Schema(
     Contact_City: { type: String, trim: true, index: true },
     Contact_Pin: { type: String, trim: true },
     Contact_State: { type: String, trim: true, index: true },
-    Contact_Region: { type: String, trim: true },
+    Contact_Region: { type: String, trim: true, index: true },
     Contact_Country: { type: String, trim: true, index: true },
     Contact_STD_ISD_Code: { type: String, trim: true },
     Contact_Location_Tier: { type: String, trim: true },
@@ -95,6 +95,14 @@ const ContactSchema = new mongoose.Schema(
     // Extra
     BatchName: { type: String, required: true, trim: true },
 
+    // Denormalized from Company — for 2Cr-scale filtration (eliminates $lookup)
+    // READ-ONLY via API: synced automatically when Company fields change
+    Industry:        { type: String, trim: true, index: true },
+    Sub_Industry:    { type: String, trim: true, index: true },
+    Company_Segment: { type: String, trim: true, index: true },
+    Employees_Range: { type: String, trim: true },
+    Turnover_Range:  { type: String, trim: true },
+
     Company_ID: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Company",
@@ -113,6 +121,13 @@ const ContactSchema = new mongoose.Schema(
 
 // Index for default sort by createdAt
 ContactSchema.index({ createdAt: -1 });
+
+// Partial index — only indexes the ~0.1% of records flagged as bad data
+// Every filtration query has { "discrepencyInData.status": { $ne: true } }
+ContactSchema.index(
+  { "discrepencyInData.status": 1 },
+  { partialFilterExpression: { "discrepencyInData.status": true } }
+);
 
 // Compound text index for fast full-text search across key contact fields
 ContactSchema.index(

@@ -84,81 +84,31 @@ const parseDateVal = (v) => {
 async function processChunk(rows, batchName, lastNumber, job) {
   const DUP_BATCH = 1000;
 
-  // ── Step 1: Collect phones & emails from all rows for DB duplicate check ──
-  const phonesToCheck = new Set();
-  const emailsToCheck = new Set();
-
+  // ── Step 1: Collect Mobile_No values for DB duplicate check ──────────────
+  const mobilesToCheck = new Set();
   for (const r of rows) {
-    const p1  = safeStr(r.Contact_Direct_Phone1);
-    const p2  = safeStr(r.Contact_Direct_Phone2);
     const mob = safeStr(r.Mobile_No);
-    const e1  = safeStr(r.Personal_Email1).toLowerCase();
-    const e2  = safeStr(r.Personal_Email2).toLowerCase();
-    const oe1 = safeStr(r.Office_Email_1).toLowerCase();
-    const oe2 = safeStr(r.Office_Email_2).toLowerCase();
-
-    // Only add real phone numbers / real emails — skip blank/placeholder values
-    if (isValidPhone(p1))  phonesToCheck.add(p1);
-    if (isValidPhone(p2))  phonesToCheck.add(p2);
-    if (isValidPhone(mob)) phonesToCheck.add(mob);
-    if (isValidEmail(e1))  emailsToCheck.add(e1);
-    if (isValidEmail(e2))  emailsToCheck.add(e2);
-    if (isValidEmail(oe1)) emailsToCheck.add(oe1);
-    if (isValidEmail(oe2)) emailsToCheck.add(oe2);
+    if (isValidPhone(mob)) mobilesToCheck.add(mob);
   }
 
-  // DB duplicate check — phones (Contact_Direct_Phone1, Contact_Direct_Phone2, Mobile_No)
-  const duplicatePhones = new Set();
-  const phonesArr = [...phonesToCheck];
-  for (let i = 0; i < phonesArr.length; i += DUP_BATCH) {
-    const batch = phonesArr.slice(i, i + DUP_BATCH);
+  // DB duplicate check — Mobile_No only
+  const existingMobiles = new Set();
+  const mobilesArr = [...mobilesToCheck];
+  for (let i = 0; i < mobilesArr.length; i += DUP_BATCH) {
+    const batch = mobilesArr.slice(i, i + DUP_BATCH);
     const found = await Contact.find(
-      {
-        $or: [
-          { Contact_Direct_Phone1: { $in: batch } },
-          { Contact_Direct_Phone2: { $in: batch } },
-          { Mobile_No: { $in: batch } },
-        ],
-      },
-      { Contact_Direct_Phone1: 1, Contact_Direct_Phone2: 1, Mobile_No: 1 }
+      { Mobile_No: { $in: batch } },
+      { Mobile_No: 1 }
     ).lean();
     for (const c of found) {
-      // Guard DB values too — stored blanks must not become false duplicate keys
-      if (isValidPhone(c.Contact_Direct_Phone1)) duplicatePhones.add(c.Contact_Direct_Phone1);
-      if (isValidPhone(c.Contact_Direct_Phone2)) duplicatePhones.add(c.Contact_Direct_Phone2);
-      if (isValidPhone(c.Mobile_No))             duplicatePhones.add(c.Mobile_No);
+      if (isValidPhone(c.Mobile_No)) existingMobiles.add(c.Mobile_No);
     }
   }
 
-  // DB duplicate check — emails (all 4 email fields)
-  const duplicateEmails = new Set();
-  const emailsArr = [...emailsToCheck];
-  for (let i = 0; i < emailsArr.length; i += DUP_BATCH) {
-    const batch = emailsArr.slice(i, i + DUP_BATCH);
-    const found = await Contact.find(
-      {
-        $or: [
-          { Personal_Email1: { $in: batch } },
-          { Personal_Email2: { $in: batch } },
-          { Office_Email_1: { $in: batch } },
-          { Office_Email_2: { $in: batch } },
-        ],
-      },
-      { Personal_Email1: 1, Personal_Email2: 1, Office_Email_1: 1, Office_Email_2: 1 }
-    ).lean();
-    for (const c of found) {
-      if (isValidEmail(c.Personal_Email1)) duplicateEmails.add(c.Personal_Email1.toLowerCase());
-      if (isValidEmail(c.Personal_Email2)) duplicateEmails.add(c.Personal_Email2.toLowerCase());
-      if (isValidEmail(c.Office_Email_1))  duplicateEmails.add(c.Office_Email_1.toLowerCase());
-      if (isValidEmail(c.Office_Email_2))  duplicateEmails.add(c.Office_Email_2.toLowerCase());
-    }
-  }
-
-  // ── Step 2: Filter valid rows ──
+  // ── Step 2: Filter valid rows ─────────────────────────────────────────────
   // Duplicate rows  → skip (company not touched)
   // Missing company → fail
-  const seenPhonesInChunk = new Set();
-  const seenEmailsInChunk = new Set();
+  const seenMobilesInChunk = new Set();
   const validRows = [];
 
   for (const r of rows) {
@@ -172,52 +122,19 @@ async function processChunk(rows, batchName, lastNumber, job) {
       continue;
     }
 
-    const p1  = safeStr(r.Contact_Direct_Phone1);
-    const p2  = safeStr(r.Contact_Direct_Phone2);
     const mob = safeStr(r.Mobile_No);
-    const e1  = safeStr(r.Personal_Email1).toLowerCase();
-    const e2  = safeStr(r.Personal_Email2).toLowerCase();
-    const oe1 = safeStr(r.Office_Email_1).toLowerCase();
-    const oe2 = safeStr(r.Office_Email_2).toLowerCase();
 
-    // Duplicate: matches an existing DB contact (only checked for real values)
-    const isDbDuplicate =
-      (isValidPhone(p1)  && duplicatePhones.has(p1))  ||
-      (isValidPhone(p2)  && duplicatePhones.has(p2))  ||
-      (isValidPhone(mob) && duplicatePhones.has(mob)) ||
-      (isValidEmail(e1)  && duplicateEmails.has(e1))  ||
-      (isValidEmail(e2)  && duplicateEmails.has(e2))  ||
-      (isValidEmail(oe1) && duplicateEmails.has(oe1)) ||
-      (isValidEmail(oe2) && duplicateEmails.has(oe2));
-
-    // Duplicate: matches another row in the same chunk (only checked for real values)
-    const isChunkDuplicate =
-      (isValidPhone(p1)  && seenPhonesInChunk.has(p1))  ||
-      (isValidPhone(p2)  && seenPhonesInChunk.has(p2))  ||
-      (isValidPhone(mob) && seenPhonesInChunk.has(mob)) ||
-      (isValidEmail(e1)  && seenEmailsInChunk.has(e1))  ||
-      (isValidEmail(e2)  && seenEmailsInChunk.has(e2))  ||
-      (isValidEmail(oe1) && seenEmailsInChunk.has(oe1)) ||
-      (isValidEmail(oe2) && seenEmailsInChunk.has(oe2));
-
-    if (isDbDuplicate || isChunkDuplicate) {
+    // Duplicate: Mobile_No already in DB or seen earlier in this chunk
+    if (isValidPhone(mob) && (existingMobiles.has(mob) || seenMobilesInChunk.has(mob))) {
       job.progress.duplicates++;
       if (job.skippedRows) {
-        const reason = isDbDuplicate ? "Duplicate (already in DB)" : "Duplicate (within file)";
+        const reason = existingMobiles.has(mob) ? "Duplicate (already in DB)" : "Duplicate (within file)";
         job.skippedRows.push({ ...r, Skip_Reason: reason });
       }
       continue; // company is NOT touched
     }
 
-    // Mark only real phones/emails as seen in this chunk
-    if (isValidPhone(p1))  seenPhonesInChunk.add(p1);
-    if (isValidPhone(p2))  seenPhonesInChunk.add(p2);
-    if (isValidPhone(mob)) seenPhonesInChunk.add(mob);
-    if (isValidEmail(e1))  seenEmailsInChunk.add(e1);
-    if (isValidEmail(e2))  seenEmailsInChunk.add(e2);
-    if (isValidEmail(oe1)) seenEmailsInChunk.add(oe1);
-    if (isValidEmail(oe2)) seenEmailsInChunk.add(oe2);
-
+    if (isValidPhone(mob)) seenMobilesInChunk.add(mob);
     validRows.push(r);
   }
 
@@ -364,6 +281,12 @@ async function processChunk(rows, batchName, lastNumber, job) {
             Telecalling_Remarks:      safeStr(r.Telecalling_Remarks),
             BatchName:                batchName,
             Company_ID:               companyId,
+            // Denormalized company fields for 2Cr-scale filtration
+            Industry:                 safeStr(r.Industry),
+            Sub_Industry:             safeStr(r.Sub_Industry),
+            Company_Segment:          safeStr(r.Company_Segment),
+            Employees_Range:          safeStr(r.Employees_Range),
+            Turnover_Range:           safeStr(r.Turnover_Range),
           },
         },
         upsert: true,
