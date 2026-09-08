@@ -192,6 +192,10 @@ const CallingDataSchema = new mongoose.Schema(
       assignedAt: { type: Date, default: null },
       filters: { type: Object, default: null }, // snapshot of filters used
     },
+    // Company exclusion flag — set by presales when the contact's company is in the exclusion list.
+    // Contacts with companyExcluded: true are skipped when assigning priority groups.
+    companyExcluded: { type: Boolean, default: false },
+    companyExcludedAt: { type: Date, default: null },
     clientInfo: {
       companySpecificId:        { type: String, trim: true, default: "" },
       segment:                  { type: String, trim: true, default: "" },
@@ -335,6 +339,9 @@ CallingDataSchema.index({
 
 // Campaign-level priority group sorting
 CallingDataSchema.index({ CampaignId: 1, "priorityGroup.no": 1 });
+
+// Company exclusion filtering (presales priority assignment excludes these)
+CallingDataSchema.index({ CampaignId: 1, companyExcluded: 1 });
 
 // PM assignment view multi-filter: CampaignId + agentId + priorityGroup.label + lastRemarks
 // Covers the most common combination of filters used together in getDatabaseByAssignment.

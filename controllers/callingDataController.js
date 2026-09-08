@@ -1516,7 +1516,10 @@ const priorityPreview = asyncHandler(async (req, res, next) => {
       ? req.query.contactIds.split(",").filter(Boolean)
       : [];
 
-    let baseQuery = { CampaignId: campaignId };
+    let baseQuery = { CampaignId: campaignId, companyExcluded: { $ne: true } };
+
+    // scope param — used when previewing exclusion-based priority assignment
+    if (req.query.scope === "registered") baseQuery.isRegistered = true;
 
     if (contactIds.length > 0 && Object.keys(fieldMatch).length > 0) {
       // union: matches filter OR is in contactIds list
@@ -1579,8 +1582,8 @@ const assignPriorityGroup = asyncHandler(async (req, res, next) => {
     const label = `P-${nextNo}`;
     const assignedAt = new Date();
 
-    // Build query
-    let baseQuery = { CampaignId: campaignId };
+    // Build query — always skip "Excluded" records regardless of overwrite flag
+    let baseQuery = { CampaignId: campaignId, companyExcluded: { $ne: true } };
     if (hasContactIds && hasFilters) {
       baseQuery.$or = [
         fieldMatch,
@@ -1653,7 +1656,7 @@ const getPriorityGroups = asyncHandler(async (req, res, next) => {
           },
         },
       ]),
-      CallingData.countDocuments({ CampaignId: campaignId, "priorityGroup.no": null }),
+      CallingData.countDocuments({ CampaignId: campaignId, "priorityGroup.no": null, companyExcluded: { $ne: true } }),
     ]);
 
     return sendResponse(res, 200, "Priority groups fetched", { groups, unassignedCount });
@@ -2336,6 +2339,208 @@ const reshuffleCallingData = asyncHandler(async (req, res, next) => {
 
 // ═══════════════════════════════════════════════════════════════════════════
 
+/**
+ * GET /callingData/:campaignId/distinctCompanies?search=xxx&limit=30
+ * Returns distinct Company_Name values in this campaign matching the search term.
+ * Returns top `limit` results (default 30, max 100) sorted alphabetically.
+ */
+const getDistinctCampaignCompanies = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    const search = (req.query.search || "").trim();
+    const limit  = Math.min(parseInt(req.query.limit) || 30, 100);
+    if (!campaignId) return sendError(next, "campaignId is required", 400);
+
+    // Aggregation pipelines do NOT auto-cast strings → ObjectId; cast explicitly
+    const campObjId = new mongoose.Types.ObjectId(campaignId);
+    const matchStage = { CampaignId: campObjId };
+    if (search) matchStage.Company_Name = { $regex: search, $options: "i" };
+
+    const results = await CallingData.aggregate([
+      { $match: matchStage },
+      { $group: { _id: "$Company_Name" } },
+      { $match: { _id: { $ne: null, $ne: "" } } },
+      { $sort: { _id: 1 } },
+      { $limit: limit },
+      { $project: { _id: 0, name: "$_id" } },
+    ]);
+
+    const companies = results.map((r) => r.name).filter(Boolean);
+    return sendResponse(res, 200, "Distinct companies fetched", { companies });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+/**
+ * POST /callingData/:campaignId/matchCompanyNames
+ * Body: { names: string[] }
+ * Server-side fuzzy match of uploaded company names against this campaign's calling data.
+ * Returns { matched: string[], notMatched: string[] }
+ */
+const matchCampaignCompanyNames = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    const { names } = req.body;
+    if (!campaignId) return sendError(next, "campaignId is required", 400);
+    if (!Array.isArray(names) || names.length === 0)
+      return sendError(next, "names array required", 400);
+
+    // Load all distinct company names for this campaign (server memory, not client)
+    const allRaw = await CallingData.distinct("Company_Name", { CampaignId: campaignId });
+    const campaignCompanies = allRaw.filter(Boolean);
+
+    // Tier-1 key: lowercase + remove all spaces (handles case & spacing differences)
+    const key1 = (s) => (s || "").toLowerCase().replace(/\s/g, "");
+
+    // Tier-2 key: same + strip common business suffixes
+    // e.g. "Kestone Solutions Pvt Ltd" and "Kestone Solutions" both → "kestonesolutions"
+    const SUFFIX = /\b(pvt|private|public|ltd|limited|llp|llc|inc|corp|corporation|co|group|india|global|international|solutions|services|technologies|technology|tech|holdings|ventures|enterprises|enterprise|industries|industry|infra|infrastructure|management|consulting|consultancy|associates|partners|exports|imports|trading|systems|system|infotech|digital|media|communications|works|worldwide)\b/gi;
+    const key2 = (s) => key1(s.replace(SUFFIX, ""));
+
+    // Build both lookup maps
+    const exactMap    = new Map(); // key1 → original
+    const strippedMap = new Map(); // key2 → original
+    for (const original of campaignCompanies) {
+      const k1 = key1(original);
+      const k2 = key2(original);
+      if (k1 && !exactMap.has(k1))    exactMap.set(k1, original);
+      if (k2 && !strippedMap.has(k2)) strippedMap.set(k2, original);
+    }
+
+    const matched     = [];
+    const notMatched  = [];
+    const selectedSet = new Set();
+
+    for (const inputName of names) {
+      if (!inputName) { notMatched.push(inputName); continue; }
+
+      // Tier 1: exact (case + space insensitive)
+      const k1 = key1(inputName);
+      if (k1 && exactMap.has(k1)) {
+        const original = exactMap.get(k1);
+        if (!selectedSet.has(original)) { selectedSet.add(original); matched.push(original); }
+        continue;
+      }
+
+      // Tier 2: suffix-stripped (handles "Pvt Ltd" missing/extra on either side)
+      const k2 = key2(inputName);
+      if (k2 && strippedMap.has(k2)) {
+        const original = strippedMap.get(k2);
+        if (!selectedSet.has(original)) { selectedSet.add(original); matched.push(original); }
+        continue;
+      }
+
+      notMatched.push(inputName);
+    }
+
+    return sendResponse(res, 200, "Match complete", {
+      matched,
+      notMatched,
+      matchedCount:    matched.length,
+      notMatchedCount: notMatched.length,
+    });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+/**
+ * POST /callingData/:campaignId/applyCompanyExclusion
+ * Body: { companyNames: string[], scope: "all" | "registered" }
+ * Marks matching CallingData records as "Excluded".
+ * scope="registered" → only contacts where isRegistered=true are excluded.
+ * Returns: { excludedCount, totalContacts, remainingCount }
+ */
+const applyCompanyExclusion = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    const { companyNames, scope = "all" } = req.body;
+    if (!campaignId) return sendError(next, "campaignId is required", 400);
+    if (!Array.isArray(companyNames) || companyNames.length === 0)
+      return sendError(next, "companyNames array is required", 400);
+
+    const baseQuery = { CampaignId: campaignId };
+    if (scope === "registered") baseQuery.isRegistered = true;
+
+    // Reset any previous exclusions for this campaign+scope so re-uploads start fresh
+    await CallingData.updateMany(
+      { ...baseQuery, companyExcluded: true },
+      { $set: { companyExcluded: false, companyExcludedAt: null } }
+    );
+
+    const totalContacts = await CallingData.countDocuments(baseQuery);
+
+    const updateQuery = { ...baseQuery, Company_Name: { $in: companyNames } };
+
+    const result = await CallingData.updateMany(updateQuery, {
+      $set: {
+        companyExcluded:   true,
+        companyExcludedAt: new Date(),
+      },
+    });
+
+    const remainingCount = await CallingData.countDocuments({
+      ...baseQuery,
+      companyExcluded: { $ne: true },
+    });
+
+    return sendResponse(res, 200, `${result.modifiedCount} contacts excluded`, {
+      excludedCount:  result.modifiedCount,
+      totalContacts,
+      remainingCount,
+    });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+/**
+ * POST /callingData/:campaignId/assignExclusionPriority
+ * Body: { scope: "all" | "registered", groupNo?: number, label?: string }
+ * Assigns a priority group to all non-excluded, currently-unassigned contacts.
+ * scope="registered" → only contacts where isRegistered=true.
+ */
+const assignExclusionPriority = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId } = req.params;
+    const { scope = "all", groupNo, label, overwriteExisting = false } = req.body;
+    if (!campaignId) return sendError(next, "campaignId is required", 400);
+
+    // Determine group number
+    let assignedNo = groupNo ? Number(groupNo) : null;
+    if (!assignedNo || !Number.isInteger(assignedNo) || assignedNo <= 0) {
+      const maxDoc = await CallingData.findOne(
+        { CampaignId: campaignId, "priorityGroup.no": { $gt: 0 } },
+        { "priorityGroup.no": 1 }
+      ).sort({ "priorityGroup.no": -1 }).lean();
+      assignedNo = (maxDoc?.priorityGroup?.no ?? 0) + 1;
+    }
+    const assignedLabel = (label && label.trim()) ? label.trim() : `P-${assignedNo}`;
+
+    const query = { CampaignId: campaignId, companyExcluded: { $ne: true } };
+    // If not overwriting, only assign contacts that don't yet have a priority group
+    if (!overwriteExisting) query["priorityGroup.no"] = null;
+    if (scope === "registered") query.isRegistered = true;
+
+    const result = await CallingData.updateMany(query, {
+      $set: {
+        "priorityGroup.no":         assignedNo,
+        "priorityGroup.label":      assignedLabel,
+        "priorityGroup.assignedAt": new Date(),
+      },
+    });
+
+    return sendResponse(res, 200, `Assigned ${assignedLabel} to ${result.modifiedCount} records`, {
+      assignedCount: result.modifiedCount,
+      no:            assignedNo,
+      label:         assignedLabel,
+    });
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
 export {
   uploadcallingData,
   getCallingDataById,
@@ -2366,4 +2571,8 @@ export {
   downloadExternalUploadTemplate,
   resetNoResponseToYetToCall,
   reshuffleCallingData,
+  getDistinctCampaignCompanies,
+  matchCampaignCompanyNames,
+  applyCompanyExclusion,
+  assignExclusionPriority,
 };

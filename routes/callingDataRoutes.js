@@ -29,6 +29,10 @@ import {
   downloadExternalUploadTemplate,
   resetNoResponseToYetToCall,
   reshuffleCallingData,
+  getDistinctCampaignCompanies,
+  matchCampaignCompanyNames,
+  applyCompanyExclusion,
+  assignExclusionPriority,
 } from "../controllers/callingDataController.js";
 import {
   uploadExternalDataController,
@@ -132,6 +136,12 @@ router.get("/:campaignId/distinctFilterValues",   protect, getDistinctFilterValu
 router.post("/:campaignId/assignPriorityGroup",   protect, assignPriorityGroup);
 router.delete("/:campaignId/priorityGroup/:groupNo", protect, deletePriorityGroup);
 router.patch("/:campaignId/swapPriorityGroups",   protect, swapPriorityGroups);
+
+// ── Company exclusion ───────────────────────────────────────────────────────
+router.get( "/:campaignId/distinctCompanies",      protect, getDistinctCampaignCompanies);
+router.post("/:campaignId/matchCompanyNames",      protect, matchCampaignCompanyNames);
+router.post("/:campaignId/applyCompanyExclusion",    protect, applyCompanyExclusion);
+router.post("/:campaignId/assignExclusionPriority",  protect, assignExclusionPriority);
 
 // ── Priority slot definitions (persisted) ──────────────────────────────────
 router.get("/:campaignId/prioritySlots",          protect, getPrioritySlots);
