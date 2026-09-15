@@ -2056,73 +2056,101 @@ const getHourlyAnalysis = asyncHandler(async (req, res, next) => {
       });
     }
 
-    const agents   = await User.find({ _id: { $in: agentIds } }).select("_id employeeName email").lean();
-    const agentMap = new Map(agents.map((a) => [String(a._id), a]));
+    // ── Run all 3 queries in parallel ─────────────────────────────────────
+    // 1. User details
+    // 2. CallHistory aggregate → calls + reg remarks (remarks === "Registered") per agent per slot
+    // 3. CallingData aggregate → actual registrations per agent (set via external upload, not agent remark)
+    const [agents, rawData, regData] = await Promise.all([
+      User.find({ _id: { $in: agentIds } }).select("_id employeeName email").lean(),
 
-    // ── Main aggregation ───────────────────────────────────────────────────
-    // Always scope by CampaignId to prevent cross-PM data leakage
-    const matchStage = {
-      agentId: { $in: agentIds },
-      CampaignId: { $in: allowedCampIds },
-    };
-
-    const rawData = await CallingData.aggregate([
-      { $match: matchStage },
-      {
-        $lookup: {
-          from: "callhistories",
-          localField: "callHistory",
-          foreignField: "_id",
-          as: "ch",
-          pipeline: [{ $project: { chatHistory: 1 } }],
+      CallHistory.aggregate([
+        {
+          $match: {
+            campaign_id: { $in: allowedCampIds },
+            chatHistory: { $elemMatch: { callingDate: { $gte: startDT, $lte: endDT } } },
+          },
         },
-      },
-      { $unwind: { path: "$ch", preserveNullAndEmptyArrays: false } },
-      { $unwind: { path: "$ch.chatHistory", preserveNullAndEmptyArrays: false } },
-      {
-        $match: {
-          "ch.chatHistory.callingDate": { $gte: startDT, $lte: endDT },
-        },
-      },
-      {
-        $group: {
-          _id: {
-            agentId: "$agentId",
-            slotStart: {
-              $multiply: [
-                {
-                  $floor: {
-                    $divide: [
-                      { $hour: { date: "$ch.chatHistory.callingDate", timezone: "Asia/Kolkata" } },
-                      slotSz,
-                    ],
-                  },
+        {
+          $project: {
+            chatHistory: {
+              $filter: {
+                input: "$chatHistory",
+                as: "entry",
+                cond: {
+                  $and: [
+                    { $gte: ["$$entry.callingDate", startDT] },
+                    { $lte: ["$$entry.callingDate", endDT] },
+                    { $in: ["$$entry.agent_id", agentIds] },
+                  ],
                 },
-                slotSz,
-              ],
+              },
             },
           },
-          calls:         { $sum: 1 },
-          registrations: { $sum: { $cond: ["$ch.chatHistory.isRegistered", 1, 0] } },
         },
-      },
-      { $sort: { "_id.agentId": 1, "_id.slotStart": 1 } },
+        { $unwind: "$chatHistory" },
+        {
+          $group: {
+            _id: {
+              agentId: "$chatHistory.agent_id",
+              slotStart: {
+                $multiply: [
+                  {
+                    $floor: {
+                      $divide: [
+                        { $hour: { date: "$chatHistory.callingDate", timezone: "Asia/Kolkata" } },
+                        slotSz,
+                      ],
+                    },
+                  },
+                  slotSz,
+                ],
+              },
+            },
+            calls:     { $sum: 1 },
+            // reg remarks = agent selected "Registered" as remark during the call
+            regRemarks: { $sum: { $cond: [{ $eq: ["$chatHistory.remarks", "Registered"] }, 1, 0] } },
+          },
+        },
+        { $sort: { "_id.agentId": 1, "_id.slotStart": 1 } },
+      ], { allowDiskUse: true }),
+
+      // Actual registrations — set only via external upload (CallingData.isRegistered)
+      // registeredOn filter ensures only registrations confirmed within the selected date range are counted
+      CallingData.aggregate([
+        {
+          $match: {
+            agentId:      { $in: agentIds },
+            CampaignId:   { $in: allowedCampIds },
+            isRegistered: true,
+            registeredOn: { $gte: startDT, $lte: endDT },
+          },
+        },
+        { $group: { _id: "$agentId", registrations: { $sum: 1 } } },
+      ], { allowDiskUse: true }),
     ]);
+
+    const agentMap       = new Map(agents.map((a) => [String(a._id), a]));
+    // registrationMap: agentId → actual confirmed registration count from CallingData
+    const registrationMap = new Map(regData.map((r) => [String(r._id), r.registrations]));
 
     // ── Build per-agent maps ───────────────────────────────────────────────
     const agentDataMap = new Map();
 
     for (const entry of rawData) {
-      const key  = String(entry._id.agentId);
-      const s    = entry._id.slotStart;
-      const end  = s + slotSz;
-      const lbl  = `${String(s).padStart(2, "0")}:00-${String(end).padStart(2, "0")}:00`;
+      const key = String(entry._id.agentId);
+      const s   = entry._id.slotStart;
+      const end = Math.min(s + slotSz, 24); // cap at 24 — prevents "25:00" labels for slotSz=5
+      const lbl = `${String(s).padStart(2, "0")}:00-${String(end).padStart(2, "0")}:00`;
 
-      if (!agentDataMap.has(key)) agentDataMap.set(key, { slots: {}, totalCalls: 0, totalRegistrations: 0 });
+      if (!agentDataMap.has(key)) {
+        agentDataMap.set(key, { slots: {}, totalCalls: 0, totalRegRemarks: 0 });
+      }
       const d = agentDataMap.get(key);
-      d.slots[lbl]        = (d.slots[lbl] || 0) + entry.calls;
-      d.totalCalls        += entry.calls;
-      d.totalRegistrations += entry.registrations;
+      if (!d.slots[lbl]) d.slots[lbl] = { calls: 0, regRemarks: 0 };
+      d.slots[lbl].calls      += entry.calls;
+      d.slots[lbl].regRemarks += entry.regRemarks;
+      d.totalCalls             += entry.calls;
+      d.totalRegRemarks        += entry.regRemarks;
     }
 
     // Collect only occupied slot labels sorted chronologically
@@ -2132,42 +2160,44 @@ const getHourlyAnalysis = asyncHandler(async (req, res, next) => {
 
     // ── Hourly Call Analysis ───────────────────────────────────────────────
     const hourlyCallAnalysis = agents.map((agent) => {
-      const d = agentDataMap.get(String(agent._id)) || { slots: {}, totalCalls: 0, totalRegistrations: 0 };
+      const d = agentDataMap.get(String(agent._id)) || { slots: {}, totalCalls: 0, totalRegRemarks: 0 };
       return {
-        agentId:   agent._id,
-        agentName: agent.employeeName,
-        email:     agent.email,
-        totalCalls: d.totalCalls,
-        slots: occupiedSlots.map((slot) => ({ slot, calls: d.slots[slot] || 0 })),
+        agentId:        agent._id,
+        agentName:      agent.employeeName,
+        email:          agent.email,
+        totalCalls:     d.totalCalls,
+        totalRegRemarks: d.totalRegRemarks,
+        slots: occupiedSlots.map((slot) => ({
+          slot,
+          calls:      d.slots[slot]?.calls     || 0,
+          regRemarks: d.slots[slot]?.regRemarks || 0,
+        })),
       };
     });
 
     // ── Productivity Analysis ──────────────────────────────────────────────
-    const totalHours = Math.max(1, (endDT - startDT) / (1000 * 60 * 60));
-
     const productivityAnalysis = agents.map((agent) => {
-      const d  = agentDataMap.get(String(agent._id)) || { slots: {}, totalCalls: 0, totalRegistrations: 0 };
-      const cr = d.totalCalls > 0 ? ((d.totalRegistrations / d.totalCalls) * 100).toFixed(1) : "0.0";
-      const avgCPH = (d.totalCalls / totalHours).toFixed(1);
-
-      const bestSlot = Object.entries(d.slots).sort((a, b) => b[1] - a[1])[0]?.[0] || "-";
+      const key  = String(agent._id);
+      const d    = agentDataMap.get(key) || { slots: {}, totalCalls: 0, totalRegRemarks: 0 };
+      const regs = registrationMap.get(key) || 0;
+      // bestSlot by calls count
+      const bestSlot = Object.entries(d.slots).sort((a, b) => b[1].calls - a[1].calls)[0]?.[0] || "-";
 
       return {
-        agentId:          agent._id,
-        agentName:        agent.employeeName,
-        email:            agent.email,
-        totalCalls:       d.totalCalls,
-        registrations:    d.totalRegistrations,
-        conversionRate:   `${cr}%`,
-        avgCallsPerHour:  parseFloat(avgCPH),
+        agentId:       agent._id,
+        agentName:     agent.employeeName,
+        email:         agent.email,
+        totalCalls:    d.totalCalls,
+        regRemarks:    d.totalRegRemarks,  // agent-marked "Registered" remarks
+        registrations: regs,               // confirmed via external upload (registeredOn in date range)
         bestSlot,
       };
     });
 
     // ── Summary ────────────────────────────────────────────────────────────
-    const totCalls = productivityAnalysis.reduce((s, a) => s + a.totalCalls, 0);
-    const totReg   = productivityAnalysis.reduce((s, a) => s + a.registrations, 0);
-    const ovrCR    = totCalls > 0 ? ((totReg / totCalls) * 100).toFixed(1) : "0.0";
+    const totCalls    = productivityAnalysis.reduce((s, a) => s + a.totalCalls,    0);
+    const totRegRem   = productivityAnalysis.reduce((s, a) => s + a.regRemarks,    0);
+    const totReg      = productivityAnalysis.reduce((s, a) => s + a.registrations, 0);
 
     const slotTotals = {};
     hourlyCallAnalysis.forEach((a) =>
@@ -2175,19 +2205,23 @@ const getHourlyAnalysis = asyncHandler(async (req, res, next) => {
     );
     const peakSlot = Object.entries(slotTotals).sort((a, b) => b[1] - a[1])[0]?.[0] || "-";
 
-    const sortedByCalls = [...productivityAnalysis].sort((a, b) => b.totalCalls - a.totalCalls);
+    const sortedByCalls = [...productivityAnalysis].sort((a, b) => b.totalCalls    - a.totalCalls);
     const sortedByReg   = [...productivityAnalysis].sort((a, b) => b.registrations - a.registrations);
 
+    const activeAgents = productivityAnalysis.filter((a) => a.totalCalls > 0).length;
+
     const summary = {
-      totalCalls:                 totCalls,
-      totalRegistrations:         totReg,
-      overallConversionRate:      `${ovrCR}%`,
+      totalCalls:       totCalls,
+      totalRegRemarks:  totRegRem,  // agent remarks of "Registered"
+      totalRegistrations: totReg,   // confirmed external registrations
       peakSlot,
-      activeAgents:               productivityAnalysis.filter((a) => a.totalCalls > 0).length,
-      totalAgents:                agents.length,
-      avgCallsPerAgent:           agents.length > 0 ? (totCalls / agents.length).toFixed(1) : "0",
-      topPerformerByCalls:        sortedByCalls[0]  ? { name: sortedByCalls[0].agentName,  calls: sortedByCalls[0].totalCalls }            : null,
-      topPerformerByRegistrations: sortedByReg[0]   ? { name: sortedByReg[0].agentName,    registrations: sortedByReg[0].registrations }   : null,
+      activeAgents,
+      totalAgents:      agents.length,
+      // divide by active agents only — inactive agents shouldn't dilute the average
+      avgCallsPerAgent: activeAgents > 0 ? (totCalls / activeAgents).toFixed(1) : "0",
+      // only show top performer if they actually have calls / registrations
+      topPerformerByCalls:         sortedByCalls[0]?.totalCalls    > 0 ? { name: sortedByCalls[0].agentName, calls: sortedByCalls[0].totalCalls }               : null,
+      topPerformerByRegistrations: sortedByReg[0]?.registrations   > 0 ? { name: sortedByReg[0].agentName,   registrations: sortedByReg[0].registrations }       : null,
     };
 
     return sendResponse(res, 200, "Hourly analysis fetched successfully", {

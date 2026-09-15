@@ -22,8 +22,8 @@ const callRecordingSchema = new mongoose.Schema(
     // Call identification & status
     callId: { type: String },
     callStatus: { type: String, default: "initiated" }, // initiated | ringing | connected | completed | failed
-    callSource: { type: String, default: "tata" },      // tata | telecmi
-    callDuration: { type: Number },                     // in seconds
+    callSource: { type: String, default: "tata" }, // tata | telecmi
+    callDuration: { type: Number }, // in seconds
 
     // Recording & webhook audit trail
     recording: { type: String },
