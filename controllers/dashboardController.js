@@ -2235,6 +2235,212 @@ const getHourlyAnalysis = asyncHandler(async (req, res, next) => {
   }
 });
 
+// ─── Admin Hourly Analysis (ADMIN / SUPERADMIN only) ────────────────────────
+// GET /dashboard/adminHourlyAnalysis
+// Query params: campaignId?, pmId?, startDateTime, endDateTime, slotHours (1|2|3|5)
+const getAdminHourlyAnalysis = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignId, pmId, startDateTime, endDateTime, slotHours = "1" } = req.query;
+    const callerRole = req.user.role;
+
+    // Role guard — only ADMIN / SUPERADMIN
+    if (callerRole !== UserRoleEnum.ADMIN && callerRole !== UserRoleEnum.SUPERADMIN) {
+      return sendError(next, "Access denied", 403);
+    }
+
+    const slotSz  = Math.max(1, parseInt(slotHours, 10) || 1);
+    const now     = new Date();
+    const startDT = startDateTime ? new Date(startDateTime) : new Date(new Date().setHours(0, 0, 0, 0));
+    const endDT   = endDateTime   ? new Date(endDateTime)   : now;
+
+    // ── Resolve campaigns ──────────────────────────────────────────────────
+    let campQuery = {};
+    if (campaignId) {
+      campQuery._id = new mongoose.Types.ObjectId(campaignId);
+    } else if (pmId) {
+      campQuery.programManager = new mongoose.Types.ObjectId(pmId);
+    }
+    // else: all campaigns
+
+    const campaigns   = await Campaign.find(campQuery).select("_id name programManager").lean();
+    const allowedCampIds = campaigns.map((c) => c._id);
+
+    if (!allowedCampIds.length) {
+      return sendResponse(res, 200, "No campaigns found", {
+        hourlyCallAnalysis: [], productivityAnalysis: [], summary: {}, allSlots: [],
+      });
+    }
+
+    // ── Resolve agents ─────────────────────────────────────────────────────
+    const assignedRows = await AgentAssigned.find({
+      campaign_id: { $in: allowedCampIds },
+      isAssigned:  true,
+    }).select("agent_id").lean();
+
+    const unique   = new Map();
+    assignedRows.forEach((r) => unique.set(String(r.agent_id), r.agent_id));
+    const agentIds = [...unique.values()];
+
+    if (!agentIds.length) {
+      return sendResponse(res, 200, "No agents found", {
+        hourlyCallAnalysis: [], productivityAnalysis: [], summary: {}, allSlots: [],
+      });
+    }
+
+    // ── Run all 3 queries in parallel ──────────────────────────────────────
+    const [agents, rawData, regData] = await Promise.all([
+      User.find({ _id: { $in: agentIds } }).select("_id employeeName email").lean(),
+
+      CallHistory.aggregate([
+        {
+          $match: {
+            campaign_id: { $in: allowedCampIds },
+            chatHistory: { $elemMatch: { callingDate: { $gte: startDT, $lte: endDT } } },
+          },
+        },
+        {
+          $project: {
+            chatHistory: {
+              $filter: {
+                input: "$chatHistory",
+                as:    "entry",
+                cond: {
+                  $and: [
+                    { $gte: ["$$entry.callingDate", startDT] },
+                    { $lte: ["$$entry.callingDate", endDT] },
+                    { $in:  ["$$entry.agent_id", agentIds] },
+                  ],
+                },
+              },
+            },
+          },
+        },
+        { $unwind: "$chatHistory" },
+        {
+          $group: {
+            _id: {
+              agentId: "$chatHistory.agent_id",
+              slotStart: {
+                $multiply: [
+                  { $floor: { $divide: [{ $hour: { date: "$chatHistory.callingDate", timezone: "Asia/Kolkata" } }, slotSz] } },
+                  slotSz,
+                ],
+              },
+            },
+            calls:      { $sum: 1 },
+            regRemarks: { $sum: { $cond: [{ $eq: ["$chatHistory.remarks", "Registered"] }, 1, 0] } },
+          },
+        },
+        { $sort: { "_id.agentId": 1, "_id.slotStart": 1 } },
+      ], { allowDiskUse: true }),
+
+      CallingData.aggregate([
+        {
+          $match: {
+            agentId:      { $in: agentIds },
+            CampaignId:   { $in: allowedCampIds },
+            isRegistered: true,
+            registeredOn: { $gte: startDT, $lte: endDT },
+          },
+        },
+        { $group: { _id: "$agentId", registrations: { $sum: 1 } } },
+      ], { allowDiskUse: true }),
+    ]);
+
+    const registrationMap = new Map(regData.map((r) => [String(r._id), r.registrations]));
+
+    // ── Build per-agent maps ───────────────────────────────────────────────
+    const agentDataMap = new Map();
+
+    for (const entry of rawData) {
+      const key = String(entry._id.agentId);
+      const s   = entry._id.slotStart;
+      const end = Math.min(s + slotSz, 24);
+      const lbl = `${String(s).padStart(2, "0")}:00-${String(end).padStart(2, "0")}:00`;
+
+      if (!agentDataMap.has(key)) agentDataMap.set(key, { slots: {}, totalCalls: 0, totalRegRemarks: 0 });
+      const d = agentDataMap.get(key);
+      if (!d.slots[lbl]) d.slots[lbl] = { calls: 0, regRemarks: 0 };
+      d.slots[lbl].calls      += entry.calls;
+      d.slots[lbl].regRemarks += entry.regRemarks;
+      d.totalCalls             += entry.calls;
+      d.totalRegRemarks        += entry.regRemarks;
+    }
+
+    const occupiedSlots = [...new Set(
+      [...agentDataMap.values()].flatMap((d) => Object.keys(d.slots))
+    )].sort();
+
+    // ── Hourly Call Analysis ───────────────────────────────────────────────
+    const hourlyCallAnalysis = agents.map((agent) => {
+      const d = agentDataMap.get(String(agent._id)) || { slots: {}, totalCalls: 0, totalRegRemarks: 0 };
+      return {
+        agentId:         agent._id,
+        agentName:       agent.employeeName,
+        email:           agent.email,
+        totalCalls:      d.totalCalls,
+        totalRegRemarks: d.totalRegRemarks,
+        slots: occupiedSlots.map((slot) => ({
+          slot,
+          calls:      d.slots[slot]?.calls      || 0,
+          regRemarks: d.slots[slot]?.regRemarks || 0,
+        })),
+      };
+    });
+
+    // ── Productivity Analysis ──────────────────────────────────────────────
+    const productivityAnalysis = agents.map((agent) => {
+      const key  = String(agent._id);
+      const d    = agentDataMap.get(key) || { slots: {}, totalCalls: 0, totalRegRemarks: 0 };
+      const regs = registrationMap.get(key) || 0;
+      const bestSlot = Object.entries(d.slots).sort((a, b) => b[1].calls - a[1].calls)[0]?.[0] || "-";
+      return {
+        agentId:       agent._id,
+        agentName:     agent.employeeName,
+        email:         agent.email,
+        totalCalls:    d.totalCalls,
+        regRemarks:    d.totalRegRemarks,
+        registrations: regs,
+        bestSlot,
+      };
+    });
+
+    // ── Summary ────────────────────────────────────────────────────────────
+    const totCalls   = productivityAnalysis.reduce((s, a) => s + a.totalCalls,    0);
+    const totRegRem  = productivityAnalysis.reduce((s, a) => s + a.regRemarks,    0);
+    const totReg     = productivityAnalysis.reduce((s, a) => s + a.registrations, 0);
+    const activeAgts = productivityAnalysis.filter((a) => a.totalCalls > 0).length;
+
+    const slotTotals = {};
+    hourlyCallAnalysis.forEach((a) =>
+      a.slots.forEach((s) => { slotTotals[s.slot] = (slotTotals[s.slot] || 0) + s.calls; })
+    );
+    const peakSlot = Object.entries(slotTotals).sort((a, b) => b[1] - a[1])[0]?.[0] || "-";
+
+    const sortedByCalls = [...productivityAnalysis].sort((a, b) => b.totalCalls    - a.totalCalls);
+    const sortedByReg   = [...productivityAnalysis].sort((a, b) => b.registrations - a.registrations);
+
+    return sendResponse(res, 200, "Admin hourly analysis fetched successfully", {
+      hourlyCallAnalysis,
+      productivityAnalysis,
+      summary: {
+        totalCalls:                  totCalls,
+        totalRegRemarks:             totRegRem,
+        totalRegistrations:          totReg,
+        peakSlot,
+        activeAgents:                activeAgts,
+        totalAgents:                 agents.length,
+        avgCallsPerAgent:            activeAgts > 0 ? (totCalls / activeAgts).toFixed(1) : "0",
+        topPerformerByCalls:         sortedByCalls[0]?.totalCalls    > 0 ? { name: sortedByCalls[0].agentName, calls: sortedByCalls[0].totalCalls }             : null,
+        topPerformerByRegistrations: sortedByReg[0]?.registrations   > 0 ? { name: sortedByReg[0].agentName,  registrations: sortedByReg[0].registrations }     : null,
+      },
+      allSlots: occupiedSlots,
+    });
+  } catch (err) {
+    return sendError(next, err.message || "Failed to fetch admin hourly analysis", 500);
+  }
+});
+
 export {
   dashboardData,
   getAllAgentsDashboardData,
@@ -2243,4 +2449,5 @@ export {
   getCombinedReport,
   getCallHistoryReport,
   getHourlyAnalysis,
+  getAdminHourlyAnalysis,
 };

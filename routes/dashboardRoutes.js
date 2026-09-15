@@ -8,6 +8,7 @@ import {
   getRegisteredUsersWithCampaign,
   getCallHistoryReport,
   getHourlyAnalysis,
+  getAdminHourlyAnalysis,
 } from "../controllers/dashboardController.js";
 import { protect } from "../middleware/authMiddleware.js";
 
@@ -18,5 +19,6 @@ router.get("/registeredUsersReport", protect, getRegisteredUsersWithCampaign);
 router.get("/combinedReport", protect, getCombinedReport);
 router.get("/callHistoryReport/:pmId", protect, getCallHistoryReport);
 router.get("/hourlyAnalysis", protect, getHourlyAnalysis);
+router.get("/adminHourlyAnalysis", protect, getAdminHourlyAnalysis);
 
 export default router;
