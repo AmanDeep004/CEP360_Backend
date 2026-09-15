@@ -58,7 +58,8 @@ const startServer = async () => {
     const campaignReportRoutes = (
       await import("./routes/campaignReportRoutes.js")
     ).default;
-    const assetRoutes = (await import("./routes/assetRoutes.js")).default;
+    const assetRoutes     = (await import("./routes/assetRoutes.js")).default;
+    const recordingsRoute = (await import("./routes/recordingsRoute.js")).default;
     const checkEndedCampaigns = await import("./utils/endedCampaign.js");
 
     const app = express();
@@ -299,6 +300,7 @@ const startServer = async () => {
     app.use("/api/tataCalling", tataCallingRoutes);
     app.use("/api/campaignReport", campaignReportRoutes);
     app.use("/api/asset", assetRoutes);
+    app.use("/api/recordings", recordingsRoute);
 
     // Job status endpoint — poll progress of bulk email/whatsapp sends
     app.get("/api/jobs/:jobId", async (req, res) => {
