@@ -84,7 +84,7 @@ export const getAssetStats = asyncHandler(async (req, res, next) => {
 export const createAsset = asyncHandler(async (req, res, next) => {
   try {
     const Asset = getAsset();
-    const { assetNo, vendorName, assetBrand, assetModel, assetSerialNumber } = req.body;
+    const { assetNo, vendorName, assetBrand, assetModel, assetSerialNumber, assetType } = req.body;
 
     if (!assetSerialNumber?.trim()) return sendError(next, "Asset Serial Number is required", 400);
 
@@ -97,6 +97,7 @@ export const createAsset = asyncHandler(async (req, res, next) => {
       assetBrand:        assetBrand?.trim() || "",
       assetModel:        assetModel?.trim() || "",
       assetSerialNumber: assetSerialNumber.trim(),
+      assetType:         assetType?.trim() || "",
       addedBy:           req.user._id,
     });
 
@@ -112,7 +113,7 @@ export const updateAsset = asyncHandler(async (req, res, next) => {
   try {
     const Asset = getAsset();
     const { id } = req.params;
-    const { assetNo, vendorName, assetBrand, assetModel, assetSerialNumber } = req.body;
+    const { assetNo, vendorName, assetBrand, assetModel, assetSerialNumber, assetType } = req.body;
 
     const asset = await Asset.findById(id);
     if (!asset) return sendError(next, "Asset not found", 404);
@@ -132,6 +133,7 @@ export const updateAsset = asyncHandler(async (req, res, next) => {
     if (vendorName !== undefined) asset.vendorName = vendorName.trim();
     if (assetBrand !== undefined) asset.assetBrand = assetBrand.trim();
     if (assetModel !== undefined) asset.assetModel = assetModel.trim();
+    if (assetType  !== undefined) asset.assetType  = assetType.trim();
 
     await asset.save();
 
@@ -352,10 +354,21 @@ export const getPMReport = asyncHandler(async (req, res, next) => {
     const Asset = getAsset();
     const report = await Asset.aggregate([
       { $match: { status: "assigned", associatedPM: { $ne: null }, isDeleted: { $ne: true } } },
+      // group by PM + vendor to get per-vendor counts
       {
         $group: {
-          _id:   "$associatedPM",
+          _id:   { pm: "$associatedPM", vendor: { $ifNull: ["$vendorName", "Unknown"] } },
           count: { $sum: 1 },
+        },
+      },
+      // roll up to PM level, keeping vendor breakdown
+      {
+        $group: {
+          _id:           "$_id.pm",
+          assignedCount: { $sum: "$count" },
+          vendors: {
+            $push: { vendor: "$_id.vendor", count: "$count" },
+          },
         },
       },
       {
@@ -369,11 +382,12 @@ export const getPMReport = asyncHandler(async (req, res, next) => {
       { $unwind: { path: "$pmDetails", preserveNullAndEmptyArrays: true } },
       {
         $project: {
-          _id:            0,
-          pmId:           "$_id",
-          pmName:         "$pmDetails.employeeName",
-          pmEmail:        "$pmDetails.email",
-          assignedCount:  "$count",
+          _id:           0,
+          pmId:          "$_id",
+          pmName:        "$pmDetails.employeeName",
+          pmEmail:       "$pmDetails.email",
+          assignedCount: 1,
+          vendors:       1,
         },
       },
       { $sort: { assignedCount: -1 } },
