@@ -15,7 +15,7 @@ import XLSX from "xlsx";
 import path from "path";
 import os from "os";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
-const { SUPERADMIN, ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT, DATABASE_MANAGER } =
+const { SUPERADMIN, ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT, DATABASE_MANAGER, MIS_MANAGER } =
   UserRoleEnum;
 
 // Set time to end of day (23:59:59.999) so today's records are always included
@@ -475,7 +475,7 @@ const dashboardData = asyncHandler(async (req, res, next) => {
 
     } else if (user.role === ADMIN) {
       parentData.Name = "Admin";
-    } else if (user.role === SUPERADMIN) {
+    } else if (user.role === SUPERADMIN || user.role === MIS_MANAGER) {
       parentData.Name = "Super Admin";
 
       const now = new Date();
@@ -2243,8 +2243,8 @@ const getAdminHourlyAnalysis = asyncHandler(async (req, res, next) => {
     const { campaignId, pmId, startDateTime, endDateTime, slotHours = "1" } = req.query;
     const callerRole = req.user.role;
 
-    // Role guard — only ADMIN / SUPERADMIN
-    if (callerRole !== UserRoleEnum.ADMIN && callerRole !== UserRoleEnum.SUPERADMIN) {
+    // Role guard — only ADMIN / SUPERADMIN / MIS_MANAGER
+    if (callerRole !== UserRoleEnum.ADMIN && callerRole !== UserRoleEnum.SUPERADMIN && callerRole !== UserRoleEnum.MIS_MANAGER) {
       return sendError(next, "Access denied", 403);
     }
 

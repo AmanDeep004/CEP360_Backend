@@ -45,6 +45,7 @@ const {
   DATABASE_MANAGER,
   PRESALES_MANAGER,
   IT_ADMINISTRATOR,
+  MIS_MANAGER,
 } = UserRoleEnum;
 const userSchema = new Schema(
   {
@@ -95,6 +96,7 @@ const userSchema = new Schema(
           AGENT,
           PRESALES_MANAGER,
           IT_ADMINISTRATOR,
+          MIS_MANAGER,
         ],
         message: "{VALUE} is not a valid role",
       },

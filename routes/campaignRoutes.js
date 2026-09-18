@@ -18,7 +18,7 @@ import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
 const upload = multer({ storage: multer.memoryStorage() });
 
-const { ADMIN, PROGRAM_MANAGER, PRESALES_MANAGER, AGENT, RESOURCE_MANAGER } =
+const { ADMIN, PROGRAM_MANAGER, PRESALES_MANAGER, AGENT, RESOURCE_MANAGER, MIS_MANAGER } =
   UserRoleEnum;
 const router = Router();
 
@@ -34,7 +34,7 @@ router.post(
 router.get(
   "/allCampaigns",
   protect,
-  authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER),
+  authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER, MIS_MANAGER),
   getAllCampaigns
 );
 
