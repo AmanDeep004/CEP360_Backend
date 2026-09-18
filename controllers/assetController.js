@@ -357,7 +357,7 @@ export const getPMReport = asyncHandler(async (req, res, next) => {
       // group by PM + vendor to get per-vendor counts
       {
         $group: {
-          _id:   { pm: "$associatedPM", vendor: { $ifNull: ["$vendorName", "Unknown"] } },
+          _id:   { pm: "$associatedPM", vendor: { $cond: [{ $gt: [{ $strLenCP: { $ifNull: ["$vendorName", ""] } }, 0] }, "$vendorName", "Unknown"] } },
           count: { $sum: 1 },
         },
       },

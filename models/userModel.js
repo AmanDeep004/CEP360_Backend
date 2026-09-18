@@ -245,4 +245,5 @@ userSchema.methods.matchPassword = async function (enteredPassword) {
 };
 
 const User = getPrimaryConnection().model("User", userSchema);
+export { decryptPAN };
 export default User;

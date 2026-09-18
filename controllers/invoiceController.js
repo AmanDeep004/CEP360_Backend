@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import Invoice from "../models/invoiceModel.js";
+import { decryptPAN } from "../models/userModel.js";
 import Campaign from "../models/campaignModel.js";
 import InvoiceSettings, { getInvoiceSettings } from "../models/invoiceSettingsModel.js";
 import AgentAssigned from "../models/agentAssigned.js";
@@ -245,6 +246,16 @@ const getAllInvoices = asyncHandler(async (req, res, next) => {
  * @route   GET /api/invoices
  * @access  Private
  */
+// Decrypt PAN on lean invoice results (.lean() skips Mongoose getters)
+const decryptInvoicePANs = (invoices) => {
+  invoices.forEach((inv) => {
+    if (inv.employeeId?.pan) {
+      inv.employeeId.pan = decryptPAN(inv.employeeId.pan);
+    }
+  });
+  return invoices;
+};
+
 const getAllInvoicesData = asyncHandler(async (req, res, next) => {
   try {
     const { month } = req.query;
@@ -269,7 +280,7 @@ const getAllInvoicesData = asyncHandler(async (req, res, next) => {
         )
         .sort({ createdAt: -1 })
         .lean();
-      return sendResponse(res, 200, "Invoices retrieved successfully", invoices);
+      return sendResponse(res, 200, "Invoices retrieved successfully", decryptInvoicePANs(invoices));
     }
 
     const skip = (page - 1) * limit;
@@ -290,7 +301,7 @@ const getAllInvoicesData = asyncHandler(async (req, res, next) => {
       page,
       limit,
       totalPages: Math.ceil(total / limit),
-      data: invoices,
+      data: decryptInvoicePANs(invoices),
     });
   } catch (error) {
     return sendError(next, error.message, 500);
