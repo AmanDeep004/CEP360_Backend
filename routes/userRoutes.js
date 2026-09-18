@@ -13,6 +13,7 @@ import {
   bulkCreateAgents,
   changeOwnPassword,
   getProgramManagers,
+  updateOwnPan,
   // getUsers,
 } from "../controllers/userController.js";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -80,6 +81,7 @@ router.get("/program-managers", protect, authorize(...ALL), getProgramManagers);
 router.delete("/:id", protect, authorize(ADMIN, RESOURCE_MANAGER), deleteUser);
 router.post("/logout", protect, logout);
 router.put("/change-password", protect, authorize(...ALL), changeOwnPassword);
+router.put("/update-pan", protect, authorize(...ALL), updateOwnPan);
 
 router.post(
   "/bulk-create-agents",

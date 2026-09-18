@@ -582,6 +582,26 @@ const changeOwnPassword = asyncHandler(async (req, res, next) => {
  * @route   GET /api/users/program-managers
  * @access  Private
  */
+const updateOwnPan = asyncHandler(async (req, res, next) => {
+  try {
+    const { pan } = req.body;
+    if (!pan || typeof pan !== "string") {
+      return sendError(next, "PAN is required", 400);
+    }
+    const panClean = pan.trim().toUpperCase();
+    if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(panClean)) {
+      return sendError(next, "Invalid PAN format. Example: ABCDE1234F", 400);
+    }
+    const user = await User.findById(req.user._id);
+    if (!user) return sendError(next, "User not found", 404);
+    user.pan = panClean; // setter auto-encrypts
+    await user.save();
+    return sendResponse(res, 200, "PAN updated successfully", { pan: panClean });
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
 const getProgramManagers = asyncHandler(async (req, res, next) => {
   try {
     const managers = await User.find({ role: UserRoleEnum.PROGRAM_MANAGER })
@@ -607,4 +627,5 @@ export {
   getAllUsers,
   changeOwnPassword,
   getProgramManagers,
+  updateOwnPan,
 };
