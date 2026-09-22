@@ -582,6 +582,15 @@ const changeOwnPassword = asyncHandler(async (req, res, next) => {
  * @route   GET /api/users/program-managers
  * @access  Private
  */
+const dismissPanAlert = asyncHandler(async (req, res, next) => {
+  try {
+    await User.findByIdAndUpdate(req.user._id, { panAlertDismissed: true });
+    return sendResponse(res, 200, "Pan alert dismissed", {});
+  } catch (error) {
+    return sendError(next, error.message, 500);
+  }
+});
+
 const updateOwnPan = asyncHandler(async (req, res, next) => {
   try {
     const { pan } = req.body;
@@ -628,4 +637,5 @@ export {
   changeOwnPassword,
   getProgramManagers,
   updateOwnPan,
+  dismissPanAlert,
 };

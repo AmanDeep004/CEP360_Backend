@@ -205,6 +205,10 @@ const userSchema = new Schema(
       type: String,
       trim: true,
     },
+    panAlertDismissed: {
+      type: Boolean,
+      default: false,
+    },
     tokenVersion: {
       type: Number,
       default: 0,
