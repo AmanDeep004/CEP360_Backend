@@ -179,6 +179,8 @@ const loginUser = asyncHandler(async (req, res, next) => {
       email: user.email,
       role: user.role,
       status: user.status,
+      pan: user.pan || "",
+      panAlertDismissed: user.panAlertDismissed || false,
       // token,
     });
   } catch (error) {
