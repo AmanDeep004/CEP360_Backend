@@ -1,4 +1,5 @@
-import User from "../models/userModel.js";
+import User, { calcContractEndDate } from "../models/userModel.js";
+import ContractHistory from "../models/contractHistoryModel.js";
 import Campaign from "../models/campaignModel.js";
 import Attendence from "../models/attendenceModel.js";
 import errorHandler from "../utils/index.js";
@@ -41,6 +42,7 @@ const registerUser = asyncHandler(async (req, res, next) => {
       tataSmartFlowPassword,
       tataDIDNo,
       tataTeleLoginId,
+      contractDuration,
     } = req.body;
 
     // Role assignment restrictions
@@ -89,7 +91,37 @@ const registerUser = asyncHandler(async (req, res, next) => {
       tataSmartFlowPassword,
       tataDIDNo,
       tataTeleLoginId,
+      contractDuration: contractDuration || "6months",
     });
+
+    // Write ContractHistory + stamp contractLastAction for new agents
+    if (user.role === AGENT) {
+      const contractStart = user.contractStartDate || user.doj || user.createdAt;
+      await Promise.all([
+        ContractHistory.create({
+          agent:       user._id,
+          agentName:   user.employeeName,
+          agentCode:   user.employeeCode,
+          performedBy: req.user?._id || null,
+          action:      "created",
+          duration:    user.contractDuration,
+          startDate:   contractStart,
+          endDate:     user.contractEndDate,
+        }),
+        user.updateOne({
+          $set: {
+            contractLastAction: {
+              action:    "created",
+              updatedAt: new Date(),
+              updatedBy: req.user?._id || null,
+              tenure:    user.contractDuration,
+              startDate: contractStart,
+              endDate:   user.contractEndDate,
+            },
+          },
+        }),
+      ]);
+    }
 
     return sendResponse(res, 200, "User Created Successfully", {
       _id: user._id,
@@ -181,6 +213,10 @@ const loginUser = asyncHandler(async (req, res, next) => {
       status: user.status,
       pan: user.pan || "",
       panAlertDismissed: user.panAlertDismissed || false,
+      contractDuration:  user.contractDuration  || null,
+      contractStartDate: user.contractStartDate  || null,
+      contractEndDate:   user.contractEndDate    || null,
+      contractStatus:    user.contractStatus     || null,
       // token,
     });
   } catch (error) {
@@ -247,17 +283,59 @@ const updateUserProfile = asyncHandler(async (req, res, next) => {
       updateFields.push("ctc");
     }
 
+    // Contract duration — only relevant for agents
+    const effectiveRole = req.body.role || user.role;
+    if (effectiveRole === AGENT && req.body.contractDuration !== undefined) {
+      updateFields.push("contractDuration");
+    }
+
     updateFields.forEach((field) => {
       if (req.body[field] !== undefined) {
         user[field] = req.body[field];
       }
     });
 
+    // Recalculate contractEndDate when contractDuration changes for an agent.
+    // Start from current contractEndDate if still in the future, otherwise from today.
+    let contractDurationChanged = false;
+    if (effectiveRole === AGENT && req.body.contractDuration !== undefined) {
+      const now      = new Date();
+      const newStart = user.contractEndDate && user.contractEndDate > now
+        ? new Date(user.contractEndDate)
+        : now;
+      user.contractStartDate   = newStart;
+      user.contractEndDate     = calcContractEndDate(newStart, req.body.contractDuration);
+      user.contractStatus      = "active";
+      user.contractLastAction  = {
+        action:    "renewed",
+        updatedAt: now,
+        updatedBy: req.user._id,
+        tenure:    req.body.contractDuration,
+        startDate: newStart,
+        endDate:   user.contractEndDate,
+      };
+      contractDurationChanged = true;
+    }
+
     if (req.body.password) {
       user.password = req.body.password;
     }
 
-    const updatedUser = await user.save();
+    const updatedUser = await user.save({ validateModifiedOnly: true });
+
+    // Write ContractHistory if duration changed
+    if (contractDurationChanged) {
+      await ContractHistory.create({
+        agent:       updatedUser._id,
+        agentName:   updatedUser.employeeName,
+        agentCode:   updatedUser.employeeCode,
+        performedBy: req.user._id,
+        action:      "renewed",
+        duration:    req.body.contractDuration,
+        startDate:   updatedUser.contractStartDate,
+        endDate:     updatedUser.contractEndDate,
+      });
+    }
 
     const { password, tokenVersion, __v, ...safeUser } = updatedUser.toObject();
     return sendResponse(res, 200, "Profile updated successfully", safeUser);
@@ -276,8 +354,18 @@ const getAllUsers = asyncHandler(async (req, res, next) => {
     const page = parseInt(req.query.page);
     const limit = Math.min(parseInt(req.query.limit) || 20, 200);
     const search = req.query.search?.trim();
+    const roleFilter = req.query.role?.trim();
+    const statusFilter = req.query.status?.trim();
 
     const filter = { role: { $nin: ["admin", "superadmin"] } };
+
+    if (roleFilter && roleFilter !== "all") {
+      filter.role = roleFilter;
+    }
+    if (statusFilter && statusFilter !== "all") {
+      filter.status = statusFilter;
+    }
+
     if (search) {
       const regex = new RegExp(search, "i");
       filter.$or = [

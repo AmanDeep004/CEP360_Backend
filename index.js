@@ -59,6 +59,7 @@ const startServer = async () => {
       await import("./routes/campaignReportRoutes.js")
     ).default;
     const assetRoutes = (await import("./routes/assetRoutes.js")).default;
+    const contractRoutes = (await import("./routes/contractRoutes.js")).default;
     const checkEndedCampaigns = await import("./utils/endedCampaign.js");
 
     const app = express();
@@ -299,6 +300,7 @@ const startServer = async () => {
     app.use("/api/tataCalling", tataCallingRoutes);
     app.use("/api/campaignReport", campaignReportRoutes);
     app.use("/api/asset", assetRoutes);
+    app.use("/api/contract", contractRoutes);
 
     // Job status endpoint — poll progress of bulk email/whatsapp sends
     app.get("/api/jobs/:jobId", async (req, res) => {
@@ -429,6 +431,20 @@ const startServer = async () => {
         timezone: "Asia/Kolkata",
       }
     );
+    // Daily contract auto-expiry — runs at 00:05 IST every day
+    cron.schedule(
+      "5 0 * * *",
+      async () => {
+        try {
+          const { autoExpireContracts } = await import("./controllers/contractController.js");
+          await autoExpireContracts();
+        } catch (err) {
+          console.error("[CONTRACT-CRON] Auto-expiry failed:", err?.message || err);
+        }
+      },
+      { timezone: "Asia/Kolkata" }
+    );
+
     app.use("*", (req, res) => {
       res.status(404).json({
         success: false,
