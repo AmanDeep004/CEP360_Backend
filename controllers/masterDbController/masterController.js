@@ -413,12 +413,7 @@ const batchCreateFromExcel = asyncHandler(async (req, res, next) => {
     cacheInvalidatePattern("dropdown:*");
 
     // Respond immediately — don't wait for processing to finish
-    res.status(202).json({
-      success: true,
-      message:
-        "File accepted. Processing in background. Poll GET /api/masterdb/batchJobStatus/:jobId for progress.",
-      jobId,
-    });
+    sendResponse(res, 200, "File accepted. Processing in background.", { jobId });
 
     // Fire-and-forget background processing
     processExcelInBackground(jobId, req.file.path, batchName).catch((err) => {
@@ -449,20 +444,28 @@ const getBatchJobStatus = asyncHandler(async (req, res, next) => {
     startedAt: job.startedAt,
     completedAt: job.completedAt,
     summary: {
-      totalRows: progress.totalRows,
-      inserted: progress.inserted,
-      updated: progress.updated,
-      duplicates: progress.duplicates,
-      failed: progress.failed,
+      totalRows:        progress.totalRows,
+      inserted:         progress.inserted,
+      updated:          progress.updated,
+      duplicates:       progress.duplicates,
+      failed:           progress.failed,
       companiesCreated: progress.companiesCreated,
     },
     failReasons: {
       missingCompanyName: progress.failReasons?.missingCompanyName ?? 0,
-      companyNotFound: progress.failReasons?.companyNotFound ?? 0,
+      companyNotFound:    progress.failReasons?.companyNotFound    ?? 0,
     },
-    error: job.error || null,
-    reportUrl: job.reportUrl || null,
+    error:      job.error      || null,
+    reportReady: job.status === "completed" && !!job.reportPath,
   });
+});
+
+const downloadBatchReport = asyncHandler(async (req, res, next) => {
+  const { jobId } = req.params;
+  const job = jobStore.get(jobId);
+  if (!job)           return sendError(next, "Job not found or expired", 404);
+  if (!job.reportPath) return sendError(next, "Report not available yet", 404);
+  res.download(job.reportPath, job.reportFile || `upload_report_${jobId}.xlsx`);
 });
 
 // ---- DEAD CODE BELOW (old synchronous implementation, kept for reference) ----
@@ -3537,6 +3540,7 @@ async function assignIndividualSearch(req, res, next) {
 export {
   batchCreateFromExcel,
   getBatchJobStatus,
+  downloadBatchReport,
   getAllData,
   getAllCompanyData,
   updateData,

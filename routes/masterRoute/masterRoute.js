@@ -6,6 +6,7 @@ import {
   getAllData,
   batchCreateFromExcel,
   getBatchJobStatus,
+  downloadBatchReport,
   updateData,
   getAllCompanyData,
   createANewCompany,
@@ -62,6 +63,7 @@ router.get("/getDropdownFilters", protect, getDropdownFilters);
 router.get("/getFiltersStats", protect, getFiltersStats);
 router.get("/getAllDumpHistoryData", dumpAllHistoryData);
 router.get("/batchJobStatus/:jobId", protect, getBatchJobStatus);
+router.get("/batchJobStatus/:jobId/download", protect, downloadBatchReport);
 
 router.get("/getContactsWithEngagements", protect, getContactsWithEngagements);
 router.post("/mergeCompanies", protect, mergeCompanies);

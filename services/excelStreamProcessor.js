@@ -118,7 +118,11 @@ async function processChunk(rows, batchName, lastNumber, job) {
     if (!companyName) {
       job.progress.failed++;
       job.progress.failReasons.missingCompanyName++;
-      if (job.skippedRows) job.skippedRows.push({ ...r, Skip_Reason: "Missing Company_Name" });
+      if (job.failedRows) job.failedRows.push({
+        Full_Name: safeStr(r.Full_Name), Company_Name: companyName,
+        Mobile_No: safeStr(r.Mobile_No), Office_Email_1: safeStr(r.Office_Email_1),
+        Job_Title: safeStr(r.Job_Title), Failure_Reason: "Missing Company_Name",
+      });
       continue;
     }
 
@@ -127,9 +131,13 @@ async function processChunk(rows, batchName, lastNumber, job) {
     // Duplicate: Mobile_No already in DB or seen earlier in this chunk
     if (isValidPhone(mob) && (existingMobiles.has(mob) || seenMobilesInChunk.has(mob))) {
       job.progress.duplicates++;
-      if (job.skippedRows) {
+      if (job.duplicateRows) {
         const reason = existingMobiles.has(mob) ? "Duplicate (already in DB)" : "Duplicate (within file)";
-        job.skippedRows.push({ ...r, Skip_Reason: reason });
+        job.duplicateRows.push({
+          Full_Name: safeStr(r.Full_Name), Company_Name: companyName,
+          Mobile_No: mob, Office_Email_1: safeStr(r.Office_Email_1),
+          Job_Title: safeStr(r.Job_Title), Duplicate_Reason: reason,
+        });
       }
       continue; // company is NOT touched
     }
@@ -217,7 +225,11 @@ async function processChunk(rows, batchName, lastNumber, job) {
       // Company upsert succeeded but _id fetch failed (very rare edge case)
       job.progress.failed++;
       job.progress.failReasons.companyNotFound++;
-      if (job.skippedRows) job.skippedRows.push({ ...r, Skip_Reason: "Company not found after upsert" });
+      if (job.failedRows) job.failedRows.push({
+        Full_Name: safeStr(r.Full_Name), Company_Name: safeStr(r.Company_Name),
+        Mobile_No: safeStr(r.Mobile_No), Office_Email_1: safeStr(r.Office_Email_1),
+        Job_Title: safeStr(r.Job_Title), Failure_Reason: "Company not found after upsert",
+      });
       continue;
     }
 
@@ -233,6 +245,18 @@ async function processChunk(rows, batchName, lastNumber, job) {
     const e2  = safeStr(r.Personal_Email2).toLowerCase();
     const oe1 = safeStr(r.Office_Email_1).toLowerCase();
     const oe2 = safeStr(r.Office_Email_2).toLowerCase();
+
+    // Track success row (key fields only to avoid memory bloat)
+    if (job.successRows) job.successRows.push({
+      Contact_ID:    r.Contact_ID,
+      Full_Name:     safeStr(r.Full_Name),
+      Company_Name:  safeStr(r.Company_Name),
+      Job_Title:     safeStr(r.Job_Title),
+      Mobile_No:     mob,
+      Office_Email_1: oe1,
+      Contact_City:  safeStr(r.Contact_City),
+      Contact_State: safeStr(r.Contact_State),
+    });
 
     contactOps.push({
       updateOne: {
@@ -315,7 +339,9 @@ async function processChunk(rows, batchName, lastNumber, job) {
  */
 export async function processExcelInBackground(jobId, filePath, batchName) {
   const job = jobStore.get(jobId);
-  job.skippedRows = [];
+  job.successRows   = [];
+  job.duplicateRows = [];
+  job.failedRows    = [];
   try {
     const ExcelJS = (await import("exceljs")).default;
 
@@ -385,21 +411,48 @@ export async function processExcelInBackground(jobId, filePath, batchName) {
       `Duplicates: ${job.progress.duplicates}, Failed: ${job.progress.failed}`
     );
 
-    // Write skipped-rows report if any rows were skipped
-    if (job.skippedRows.length > 0) {
-      try {
-        const reportDir = path.join(process.cwd(), "public", "reports");
-        fs.mkdirSync(reportDir, { recursive: true });
-        const fileName = `skipped_${jobId}.xlsx`;
-        const ws = XLSX.utils.json_to_sheet(job.skippedRows);
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Skipped Rows");
-        XLSX.writeFile(wb, path.join(reportDir, fileName));
-        job.reportUrl = `/reports/${fileName}`;
-        console.log(`[Job ${jobId}] Skipped-rows report: ${fileName} (${job.skippedRows.length} rows)`);
-      } catch (reportErr) {
-        console.error(`[Job ${jobId}] Failed to write skipped report:`, reportErr);
+    // Write multi-sheet report
+    try {
+      const reportDir = path.join(process.cwd(), "public", "reports");
+      fs.mkdirSync(reportDir, { recursive: true });
+      const fileName   = `upload_report_${jobId}.xlsx`;
+      const reportPath = path.join(reportDir, fileName);
+      const wb = XLSX.utils.book_new();
+
+      // Sheet 1: Summary
+      const summaryData = [
+        { Metric: "Total Rows Processed",         Value: job.progress.totalRows },
+        { Metric: "Contacts Inserted",             Value: job.progress.inserted },
+        { Metric: "Contacts Updated",              Value: job.progress.updated },
+        { Metric: "Duplicates Skipped",            Value: job.progress.duplicates },
+        { Metric: "Failed – Missing Company Name", Value: job.progress.failReasons.missingCompanyName },
+        { Metric: "Failed – Company Not Found",    Value: job.progress.failReasons.companyNotFound },
+        { Metric: "New Companies Created",         Value: job.progress.companiesCreated },
+        { Metric: "Batch Name",                    Value: batchName },
+      ];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryData), "Summary");
+
+      // Sheet 2: Inserted Contacts
+      if (job.successRows.length > 0) {
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(job.successRows), "Inserted Contacts");
       }
+
+      // Sheet 3: Duplicates
+      if (job.duplicateRows.length > 0) {
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(job.duplicateRows), "Duplicates");
+      }
+
+      // Sheet 4: Failed
+      if (job.failedRows.length > 0) {
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(job.failedRows), "Failed");
+      }
+
+      XLSX.writeFile(wb, reportPath);
+      job.reportPath = reportPath;
+      job.reportFile = fileName;
+      console.log(`[Job ${jobId}] Report written: ${fileName}`);
+    } catch (reportErr) {
+      console.error(`[Job ${jobId}] Failed to write report:`, reportErr);
     }
   } catch (err) {
     job.status      = "failed";
@@ -407,7 +460,10 @@ export async function processExcelInBackground(jobId, filePath, batchName) {
     job.completedAt = new Date();
     console.error(`[Job ${jobId}] Failed:`, err);
   } finally {
-    job.skippedRows = []; // free memory
+    // Free row arrays from memory
+    job.successRows   = [];
+    job.duplicateRows = [];
+    job.failedRows    = [];
     fs.unlink(filePath, () => {});
   }
 }
