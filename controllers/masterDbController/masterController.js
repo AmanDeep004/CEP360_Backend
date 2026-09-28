@@ -1,5 +1,6 @@
 import XLSX from "xlsx";
 import fs from "fs";
+import path from "path";
 import mongoose from "mongoose";
 import errorHandler from "../../utils/index.js";
 import Company from "../../models/MasterDBModel/companyModel.js";
@@ -403,6 +404,7 @@ const batchCreateFromExcel = asyncHandler(async (req, res, next) => {
         failReasons: {
           missingCompanyName: 0,
           companyNotFound: 0,
+          missingMobileNo: 0,
         },
       },
       error: null,
@@ -413,11 +415,11 @@ const batchCreateFromExcel = asyncHandler(async (req, res, next) => {
     cacheInvalidatePattern("dropdown:*");
 
     // Respond immediately — don't wait for processing to finish
-    res.status(202).json({
+    // NOTE: must use { data: { jobId } } wrapper so frontend getByPath reads res.data.data correctly
+    res.status(200).json({
       success: true,
-      message:
-        "File accepted. Processing in background. Poll GET /api/masterdb/batchJobStatus/:jobId for progress.",
-      jobId,
+      message: "File accepted. Processing in background.",
+      data: { jobId },
     });
 
     // Fire-and-forget background processing
@@ -459,9 +461,11 @@ const getBatchJobStatus = asyncHandler(async (req, res, next) => {
     failReasons: {
       missingCompanyName: progress.failReasons?.missingCompanyName ?? 0,
       companyNotFound: progress.failReasons?.companyNotFound ?? 0,
+      missingMobileNo: progress.failReasons?.missingMobileNo ?? 0,
     },
     error: job.error || null,
     reportUrl: job.reportUrl || null,
+    reportReady: !!job.reportUrl,
   });
 });
 
@@ -3534,9 +3538,23 @@ async function assignIndividualSearch(req, res, next) {
   }
 }
 
+const downloadBatchReport = asyncHandler(async (req, res, next) => {
+  const { jobId } = req.params;
+  const job = jobStore.get(jobId);
+
+  if (!job) return sendError(next, "Job not found or expired", 404);
+  if (!job.reportUrl) return sendError(next, "Report not ready or no skipped rows to report", 404);
+
+  const filePath = path.join(process.cwd(), "public", job.reportUrl);
+  if (!fs.existsSync(filePath)) return sendError(next, "Report file not found on server", 404);
+
+  res.download(filePath, `skipped_rows_report_${jobId}.xlsx`);
+});
+
 export {
   batchCreateFromExcel,
   getBatchJobStatus,
+  downloadBatchReport,
   getAllData,
   getAllCompanyData,
   updateData,

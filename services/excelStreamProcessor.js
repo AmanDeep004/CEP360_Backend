@@ -118,23 +118,29 @@ async function processChunk(rows, batchName, lastNumber, job) {
     if (!companyName) {
       job.progress.failed++;
       job.progress.failReasons.missingCompanyName++;
-      if (job.skippedRows) job.skippedRows.push({ ...r, Skip_Reason: "Missing Company_Name" });
+      job.failedRows?.push({ ...r, Reason: "Missing Company_Name" });
       continue;
     }
 
     const mob = safeStr(r.Mobile_No);
 
+    // Fail: Mobile_No is missing or a placeholder (e.g. "-", "N/A", "")
+    if (!isValidPhone(mob)) {
+      job.progress.failed++;
+      job.progress.failReasons.missingMobileNo = (job.progress.failReasons.missingMobileNo || 0) + 1;
+      job.failedRows?.push({ ...r, Reason: "Missing/invalid Mobile_No" });
+      continue;
+    }
+
     // Duplicate: Mobile_No already in DB or seen earlier in this chunk
-    if (isValidPhone(mob) && (existingMobiles.has(mob) || seenMobilesInChunk.has(mob))) {
+    if (existingMobiles.has(mob) || seenMobilesInChunk.has(mob)) {
       job.progress.duplicates++;
-      if (job.skippedRows) {
-        const reason = existingMobiles.has(mob) ? "Duplicate (already in DB)" : "Duplicate (within file)";
-        job.skippedRows.push({ ...r, Skip_Reason: reason });
-      }
+      const reason = existingMobiles.has(mob) ? "Duplicate (already in DB)" : "Duplicate (within file)";
+      job.duplicateRows?.push({ ...r, Reason: reason });
       continue; // company is NOT touched
     }
 
-    if (isValidPhone(mob)) seenMobilesInChunk.add(mob);
+    seenMobilesInChunk.add(mob);
     validRows.push(r);
   }
 
@@ -217,7 +223,7 @@ async function processChunk(rows, batchName, lastNumber, job) {
       // Company upsert succeeded but _id fetch failed (very rare edge case)
       job.progress.failed++;
       job.progress.failReasons.companyNotFound++;
-      if (job.skippedRows) job.skippedRows.push({ ...r, Skip_Reason: "Company not found after upsert" });
+      job.failedRows?.push({ ...r, Reason: "Company not found after upsert" });
       continue;
     }
 
@@ -295,6 +301,8 @@ async function processChunk(rows, batchName, lastNumber, job) {
   }
 
   // Write contacts in sub-chunks of 2000
+  // validRows and contactOps share the same index order
+  const validRowsForReport = validRows.filter((r) => companyMap.get(safeStr(r.Company_Name))); // exclude company-not-found
   for (let i = 0; i < contactOps.length; i += 2000) {
     const slice  = contactOps.slice(i, i + 2000);
     const result = await Contact.bulkWrite(slice, {
@@ -304,6 +312,18 @@ async function processChunk(rows, batchName, lastNumber, job) {
     job.progress.inserted  += result.upsertedCount;
     job.progress.updated   += result.modifiedCount;
     job.progress.processed += slice.length;
+
+    // Track inserted rows for the report
+    const upsertedIndexes = new Set(Object.keys(result.upsertedIds || {}).map(Number));
+    slice.forEach((_, idx) => {
+      const rowIdx = i + idx;
+      const row    = validRowsForReport[rowIdx];
+      if (!row) return;
+      if (upsertedIndexes.has(idx)) {
+        job.insertedRows?.push({ ...row, Status: "Inserted" });
+      }
+      // updated rows are not tracked to keep memory lean — only inserted + skipped go in report
+    });
   }
 
   return lastNumber;
@@ -315,7 +335,10 @@ async function processChunk(rows, batchName, lastNumber, job) {
  */
 export async function processExcelInBackground(jobId, filePath, batchName) {
   const job = jobStore.get(jobId);
-  job.skippedRows = [];
+  job.skippedRows  = []; // legacy — kept for internal use
+  job.insertedRows = [];
+  job.duplicateRows = [];
+  job.failedRows   = [];
   try {
     const ExcelJS = (await import("exceljs")).default;
 
@@ -385,21 +408,30 @@ export async function processExcelInBackground(jobId, filePath, batchName) {
       `Duplicates: ${job.progress.duplicates}, Failed: ${job.progress.failed}`
     );
 
-    // Write skipped-rows report if any rows were skipped
-    if (job.skippedRows.length > 0) {
-      try {
-        const reportDir = path.join(process.cwd(), "public", "reports");
-        fs.mkdirSync(reportDir, { recursive: true });
-        const fileName = `skipped_${jobId}.xlsx`;
-        const ws = XLSX.utils.json_to_sheet(job.skippedRows);
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Skipped Rows");
-        XLSX.writeFile(wb, path.join(reportDir, fileName));
-        job.reportUrl = `/reports/${fileName}`;
-        console.log(`[Job ${jobId}] Skipped-rows report: ${fileName} (${job.skippedRows.length} rows)`);
-      } catch (reportErr) {
-        console.error(`[Job ${jobId}] Failed to write skipped report:`, reportErr);
-      }
+    // Write 3-sheet report: Inserted | Duplicates | Failed
+    try {
+      const reportDir = path.join(process.cwd(), "public", "reports");
+      fs.mkdirSync(reportDir, { recursive: true });
+      const fileName = `upload_report_${jobId}.xlsx`;
+      const wb = XLSX.utils.book_new();
+
+      const makeSheet = (rows, fallbackMsg) => {
+        if (rows.length > 0) return XLSX.utils.json_to_sheet(rows);
+        return XLSX.utils.aoa_to_sheet([[fallbackMsg]]);
+      };
+
+      XLSX.utils.book_append_sheet(wb, makeSheet(job.insertedRows,  "No records inserted"), "Inserted");
+      XLSX.utils.book_append_sheet(wb, makeSheet(job.duplicateRows, "No duplicates found"), "Duplicates");
+      XLSX.utils.book_append_sheet(wb, makeSheet(job.failedRows,    "No failed rows"),      "Failed");
+
+      XLSX.writeFile(wb, path.join(reportDir, fileName));
+      job.reportUrl = `/reports/${fileName}`;
+      console.log(
+        `[Job ${jobId}] Report: ${fileName} — ` +
+        `Inserted: ${job.insertedRows.length}, Duplicates: ${job.duplicateRows.length}, Failed: ${job.failedRows.length}`
+      );
+    } catch (reportErr) {
+      console.error(`[Job ${jobId}] Failed to write report:`, reportErr);
     }
   } catch (err) {
     job.status      = "failed";
@@ -407,7 +439,10 @@ export async function processExcelInBackground(jobId, filePath, batchName) {
     job.completedAt = new Date();
     console.error(`[Job ${jobId}] Failed:`, err);
   } finally {
-    job.skippedRows = []; // free memory
+    job.skippedRows   = []; // free memory
+    job.insertedRows  = [];
+    job.duplicateRows = [];
+    job.failedRows    = [];
     fs.unlink(filePath, () => {});
   }
 }
