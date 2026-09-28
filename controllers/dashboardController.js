@@ -15,7 +15,7 @@ import XLSX from "xlsx";
 import path from "path";
 import os from "os";
 const { asyncHandler, sendError, sendResponse } = errorHandler;
-const { SUPERADMIN, ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT, DATABASE_MANAGER } =
+const { SUPERADMIN, ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER, RESOURCE_MANAGER, AGENT, DATABASE_MANAGER, MIS_MANAGER } =
   UserRoleEnum;
 
 // Set time to end of day (23:59:59.999) so today's records are always included
@@ -477,6 +477,49 @@ const dashboardData = asyncHandler(async (req, res, next) => {
       parentData.Name = "Admin";
     } else if (user.role === SUPERADMIN) {
       parentData.Name = "Super Admin";
+
+      const now = new Date();
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+      const [
+        totalResources,
+        activeResources,
+        inactiveResources,
+        pendingResources,
+        roleWise,
+        totalCampaigns,
+        activeCampaigns,
+        totalContacts,
+        totalCompanies,
+        contactsThisMonth,
+      ] = await Promise.all([
+        User.countDocuments(),
+        User.countDocuments({ status: "active" }),
+        User.countDocuments({ status: "inactive" }),
+        User.countDocuments({ status: "pending" }),
+        User.aggregate([
+          { $group: { _id: "$role", count: { $sum: 1 } } },
+          { $sort: { count: -1 } },
+        ]),
+        Campaign.countDocuments(),
+        Campaign.countDocuments({ status: "active" }),
+        Contact.countDocuments(),
+        Company.countDocuments(),
+        Contact.countDocuments({ createdAt: { $gte: startOfMonth } }),
+      ]);
+
+      parentData.totalResources = totalResources;
+      parentData.activeResources = activeResources;
+      parentData.inactiveResources = inactiveResources;
+      parentData.pendingResources = pendingResources;
+      parentData.roleWise = roleWise.map((r) => ({ role: r._id, count: r.count }));
+      parentData.totalCampaigns = totalCampaigns;
+      parentData.activeCampaigns = activeCampaigns;
+      parentData.totalContacts = totalContacts;
+      parentData.totalCompanies = totalCompanies;
+      parentData.contactsThisMonth = contactsThisMonth;
+    } else if (user.role === MIS_MANAGER) {
+      parentData.Name = "Management Information System (MIS) Manager";
 
       const now = new Date();
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -2201,6 +2244,305 @@ const getHourlyAnalysis = asyncHandler(async (req, res, next) => {
   }
 });
 
+// GET /dashboard/adminHourlyAnalysis
+// For ADMIN / MIS_MANAGER — sees ALL agents across all PMs.
+// Query params: pmId (optional), campaignId (optional), startDateTime, endDateTime, slotHours
+const getAdminHourlyAnalysis = asyncHandler(async (req, res, next) => {
+  try {
+    const { pmId, campaignId, startDateTime, endDateTime, slotHours = "1" } = req.query;
+    const slotSz = Math.max(1, parseInt(slotHours, 10) || 1);
+
+    const now     = new Date();
+    const startDT = startDateTime ? new Date(startDateTime) : new Date(now.setHours(0, 0, 0, 0));
+    const endDT   = endDateTime   ? new Date(endDateTime)   : new Date();
+
+    // ── Resolve campaigns ───────────────────────────────────────────────────
+    let campQuery = {};
+    if (pmId)       campQuery.programManager = new mongoose.Types.ObjectId(pmId);
+    if (campaignId) campQuery._id            = new mongoose.Types.ObjectId(campaignId);
+
+    const campaigns    = await Campaign.find(campQuery).select("_id").lean();
+    const allowedCampIds = campaigns.map((c) => c._id);
+
+    if (!allowedCampIds.length) {
+      return sendResponse(res, 200, "No campaigns found", {
+        hourlyCallAnalysis: [], productivityAnalysis: [], summary: {}, allSlots: [],
+      });
+    }
+
+    // ── Resolve agents ──────────────────────────────────────────────────────
+    const assignedRows = await AgentAssigned.find({
+      campaign_id: { $in: allowedCampIds },
+      isAssigned:  true,
+    }).select("agent_id").lean();
+
+    const unique = new Map();
+    assignedRows.forEach((r) => unique.set(String(r.agent_id), r.agent_id));
+    const agentIds = [...unique.values()];
+
+    if (!agentIds.length) {
+      return sendResponse(res, 200, "No agents found", {
+        hourlyCallAnalysis: [], productivityAnalysis: [], summary: {}, allSlots: [],
+      });
+    }
+
+    const agents   = await User.find({ _id: { $in: agentIds } }).select("_id employeeName email").lean();
+    const agentMap = new Map(agents.map((a) => [String(a._id), a]));
+
+    // ── Aggregation ─────────────────────────────────────────────────────────
+    const rawData = await CallingData.aggregate([
+      { $match: { agentId: { $in: agentIds }, CampaignId: { $in: allowedCampIds } } },
+      {
+        $lookup: {
+          from: "callhistories",
+          localField: "callHistory",
+          foreignField: "_id",
+          as: "ch",
+          pipeline: [{ $project: { chatHistory: 1 } }],
+        },
+      },
+      { $unwind: { path: "$ch",              preserveNullAndEmptyArrays: false } },
+      { $unwind: { path: "$ch.chatHistory",  preserveNullAndEmptyArrays: false } },
+      { $match: { "ch.chatHistory.callingDate": { $gte: startDT, $lte: endDT } } },
+      {
+        $group: {
+          _id: {
+            agentId:   "$agentId",
+            slotStart: {
+              $multiply: [
+                { $floor: { $divide: [{ $hour: { date: "$ch.chatHistory.callingDate", timezone: "Asia/Kolkata" } }, slotSz] } },
+                slotSz,
+              ],
+            },
+          },
+          calls:         { $sum: 1 },
+          registrations: { $sum: { $cond: ["$ch.chatHistory.isRegistered", 1, 0] } },
+        },
+      },
+      { $sort: { "_id.agentId": 1, "_id.slotStart": 1 } },
+    ]);
+
+    // ── Build per-agent maps ─────────────────────────────────────────────────
+    const agentDataMap = new Map();
+    for (const entry of rawData) {
+      const key = String(entry._id.agentId);
+      const s   = entry._id.slotStart;
+      const end = s + slotSz;
+      const lbl = `${String(s).padStart(2, "0")}:00-${String(end).padStart(2, "0")}:00`;
+      if (!agentDataMap.has(key)) agentDataMap.set(key, { slots: {}, totalCalls: 0, totalRegistrations: 0 });
+      const d = agentDataMap.get(key);
+      d.slots[lbl]         = (d.slots[lbl] || 0) + entry.calls;
+      d.totalCalls         += entry.calls;
+      d.totalRegistrations += entry.registrations;
+    }
+
+    const occupiedSlots = [...new Set(
+      [...agentDataMap.values()].flatMap((d) => Object.keys(d.slots))
+    )].sort();
+
+    const hourlyCallAnalysis = agents.map((agent) => {
+      const d = agentDataMap.get(String(agent._id)) || { slots: {}, totalCalls: 0, totalRegistrations: 0 };
+      return {
+        agentId:    agent._id,
+        agentName:  agent.employeeName,
+        email:      agent.email,
+        totalCalls: d.totalCalls,
+        slots:      occupiedSlots.map((slot) => ({ slot, calls: d.slots[slot] || 0 })),
+      };
+    });
+
+    const totalHours = Math.max(1, (endDT - startDT) / (1000 * 60 * 60));
+    const productivityAnalysis = agents.map((agent) => {
+      const d      = agentDataMap.get(String(agent._id)) || { slots: {}, totalCalls: 0, totalRegistrations: 0 };
+      const cr     = d.totalCalls > 0 ? ((d.totalRegistrations / d.totalCalls) * 100).toFixed(1) : "0.0";
+      const avgCPH = (d.totalCalls / totalHours).toFixed(1);
+      const bestSlot = Object.entries(d.slots).sort((a, b) => b[1] - a[1])[0]?.[0] || "-";
+      return {
+        agentId:          agent._id,
+        agentName:        agent.employeeName,
+        email:            agent.email,
+        totalCalls:       d.totalCalls,
+        registrations:    d.totalRegistrations,
+        conversionRate:   `${cr}%`,
+        avgCallsPerHour:  parseFloat(avgCPH),
+        bestSlot,
+      };
+    });
+
+    const totCalls = productivityAnalysis.reduce((s, a) => s + a.totalCalls, 0);
+    const totReg   = productivityAnalysis.reduce((s, a) => s + a.registrations, 0);
+    const ovrCR    = totCalls > 0 ? ((totReg / totCalls) * 100).toFixed(1) : "0.0";
+    const slotTotals = {};
+    hourlyCallAnalysis.forEach((a) =>
+      a.slots.forEach((s) => { slotTotals[s.slot] = (slotTotals[s.slot] || 0) + s.calls; })
+    );
+    const peakSlot       = Object.entries(slotTotals).sort((a, b) => b[1] - a[1])[0]?.[0] || "-";
+    const sortedByCalls  = [...productivityAnalysis].sort((a, b) => b.totalCalls - a.totalCalls);
+    const sortedByReg    = [...productivityAnalysis].sort((a, b) => b.registrations - a.registrations);
+
+    const summary = {
+      totalCalls:                  totCalls,
+      totalRegistrations:          totReg,
+      overallConversionRate:       `${ovrCR}%`,
+      peakSlot,
+      activeAgents:                productivityAnalysis.filter((a) => a.totalCalls > 0).length,
+      totalAgents:                 agents.length,
+      avgCallsPerAgent:            agents.length > 0 ? (totCalls / agents.length).toFixed(1) : "0",
+      topPerformerByCalls:         sortedByCalls[0] ? { name: sortedByCalls[0].agentName,  calls: sortedByCalls[0].totalCalls }           : null,
+      topPerformerByRegistrations: sortedByReg[0]   ? { name: sortedByReg[0].agentName,    registrations: sortedByReg[0].registrations }  : null,
+    };
+
+    return sendResponse(res, 200, "Admin hourly analysis fetched successfully", {
+      hourlyCallAnalysis, productivityAnalysis, summary, allSlots: occupiedSlots,
+    });
+  } catch (err) {
+    return sendError(next, err.message || "Failed to fetch admin hourly analysis", 500);
+  }
+});
+
+// GET /dashboard/pmCampaignReport
+// Returns per-PM campaign performance with stats and per-campaign breakdown.
+// Query: pmId (optional), startDate, endDate
+const getPMCampaignReport = asyncHandler(async (req, res, next) => {
+  try {
+    const { pmId, startDate, endDate } = req.query;
+
+    const now       = new Date();
+    const startDT   = startDate ? new Date(startDate) : new Date(now.getFullYear(), now.getMonth(), 1);
+    const endDT     = endDate   ? new Date(endDate)   : now;
+    endDT.setHours(23, 59, 59, 999);
+
+    // ── Resolve PMs ─────────────────────────────────────────────────────────
+    const pmQuery = pmId
+      ? { _id: new mongoose.Types.ObjectId(pmId), role: "program_manager" }
+      : { role: "program_manager" };
+
+    const pms = await User.find(pmQuery)
+      .select("_id employeeName email telecmiId status")
+      .lean();
+
+    if (!pms.length) {
+      return sendResponse(res, 200, "No PMs found", { pmReports: [], overallSummary: {} });
+    }
+
+    const pmIds = pms.map((p) => p._id);
+    const pmMap = new Map(pms.map((p) => [String(p._id), p]));
+
+    // ── Get all campaigns for these PMs ─────────────────────────────────────
+    const campaigns = await Campaign.find({ programManager: { $in: pmIds } })
+      .select("_id name status startDate endDate programManager type")
+      .lean();
+
+    const campaignIds = campaigns.map((c) => c._id);
+
+    // ── Aggregate CallingData per campaign (with date filter on lastCallingDate) ─
+    const callingMatch = { CampaignId: { $in: campaignIds } };
+    // totalCalled counts records called within the selected date range
+    // totalRecords counts all records assigned to the campaign (no date filter)
+    const callingAgg = await CallingData.aggregate([
+      { $match: { CampaignId: { $in: campaignIds } } },
+      {
+        $group: {
+          _id:           "$CampaignId",
+          totalRecords:  { $sum: 1 },
+          totalCalled: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $gt: [{ $ifNull: ["$lastCallingDate", null] }, null] },
+                    { $gte: ["$lastCallingDate", startDT] },
+                    { $lte: ["$lastCallingDate", endDT] },
+                  ],
+                },
+                1, 0,
+              ],
+            },
+          },
+          registrations: { $sum: { $cond: ["$isRegistered", 1, 0] } },
+          uniqueAgents:  { $addToSet: "$agentId" },
+        },
+      },
+    ]);
+
+    const callingMap = new Map(
+      callingAgg.map((c) => [String(c._id), {
+        totalRecords:  c.totalRecords,
+        totalCalled:   c.totalCalled,
+        registrations: c.registrations,
+        agentsCount:   (c.uniqueAgents || []).filter(Boolean).length,
+      }])
+    );
+
+    // ── Build per-PM report ─────────────────────────────────────────────────
+    // programManager is an array — add campaign to each PM's list
+    const pmCampaignMap = new Map(); // pmId → [campaigns]
+    for (const camp of campaigns) {
+      const pmList = Array.isArray(camp.programManager) ? camp.programManager : [camp.programManager];
+      for (const pmRef of pmList) {
+        const key = String(pmRef);
+        if (!pmCampaignMap.has(key)) pmCampaignMap.set(key, []);
+        const stats = callingMap.get(String(camp._id)) || { totalRecords: 0, totalCalled: 0, registrations: 0, agentsCount: 0 };
+        const cr    = stats.totalCalled > 0 ? ((stats.registrations / stats.totalCalled) * 100).toFixed(1) : "0.0";
+        pmCampaignMap.get(key).push({
+          campaignId:     camp._id,
+          campaignName:   camp.name,
+          status:         camp.status,
+          type:           camp.type,
+          startDate:      camp.startDate,
+          endDate:        camp.endDate,
+          totalRecords:   stats.totalRecords,
+          totalCalled:    stats.totalCalled,
+          registrations:  stats.registrations,
+          agentsCount:    stats.agentsCount,
+          conversionRate: `${cr}%`,
+        });
+      }
+    }
+
+    const pmReports = pms.map((pm) => {
+      const camps   = pmCampaignMap.get(String(pm._id)) || [];
+      const totRec  = camps.reduce((s, c) => s + c.totalRecords,  0);
+      const totCall = camps.reduce((s, c) => s + c.totalCalled,   0);
+      const totReg  = camps.reduce((s, c) => s + c.registrations, 0);
+      const cr      = totCall > 0 ? ((totReg / totCall) * 100).toFixed(1) : "0.0";
+      return {
+        pmId:             pm._id,
+        pmName:           pm.employeeName,
+        email:            pm.email,
+        telecmiId:        pm.telecmiId,
+        status:           pm.status,
+        totalCampaigns:   camps.length,
+        activeCampaigns:  camps.filter((c) => c.status === "active").length,
+        totalRecords:     totRec,
+        totalCalled:      totCall,
+        registrations:    totReg,
+        conversionRate:   `${cr}%`,
+        campaigns:        camps.sort((a, b) => b.totalCalled - a.totalCalled),
+      };
+    }).sort((a, b) => b.totalCalled - a.totalCalled);
+
+    // ── Overall summary ─────────────────────────────────────────────────────
+    const oTotCall = pmReports.reduce((s, p) => s + p.totalCalled,    0);
+    const oTotReg  = pmReports.reduce((s, p) => s + p.registrations,  0);
+    const oCR      = oTotCall > 0 ? ((oTotReg / oTotCall) * 100).toFixed(1) : "0.0";
+
+    const overallSummary = {
+      totalPMs:              pmReports.length,
+      totalCampaigns:        campaigns.length,
+      activeCampaigns:       campaigns.filter((c) => c.status === "active").length,
+      totalRecords:          pmReports.reduce((s, p) => s + p.totalRecords,    0),
+      totalCalled:           oTotCall,
+      totalRegistrations:    oTotReg,
+      overallConversionRate: `${oCR}%`,
+    };
+
+    return sendResponse(res, 200, "PM campaign report fetched", { pmReports, overallSummary });
+  } catch (err) {
+    return sendError(next, err.message || "Failed to fetch PM campaign report", 500);
+  }
+});
+
 export {
   dashboardData,
   getAllAgentsDashboardData,
@@ -2209,4 +2551,6 @@ export {
   getCombinedReport,
   getCallHistoryReport,
   getHourlyAnalysis,
+  getAdminHourlyAnalysis,
+  getPMCampaignReport,
 };

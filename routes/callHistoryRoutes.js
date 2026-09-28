@@ -10,7 +10,7 @@ import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
 
 const router = Router();
-const { ADMIN, PROGRAM_MANAGER, PRESALES_MANAGER, AGENT, RESOURCE_MANAGER } =
+const { ADMIN, PROGRAM_MANAGER, PRESALES_MANAGER, AGENT, RESOURCE_MANAGER, MIS_MANAGER } =
   UserRoleEnum;
 
 router.post(
@@ -30,7 +30,7 @@ router.put(
 router.get(
   "/:callingDataId",
   protect,
-  authorize(ADMIN, PROGRAM_MANAGER, AGENT),
+  authorize(ADMIN, PROGRAM_MANAGER, AGENT, MIS_MANAGER),
   getAllCallHistoryByCallingDataId
 );
 
