@@ -88,7 +88,7 @@ export const createAsset = asyncHandler(async (req, res, next) => {
 
     if (!assetSerialNumber?.trim()) return sendError(next, "Asset Serial Number is required", 400);
 
-    const exists = await Asset.findOne({ assetSerialNumber: assetSerialNumber.trim() }).lean();
+    const exists = await Asset.findOne({ assetSerialNumber: assetSerialNumber.trim(), isDeleted: { $ne: true } }).lean();
     if (exists) return sendError(next, "Asset Serial Number already exists", 400);
 
     const asset = await Asset.create({
