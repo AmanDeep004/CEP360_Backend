@@ -3250,11 +3250,14 @@ async function individualSearch(req, res, next) {
       designation,
       company,
       email,
+      jobSeniority,
+      jobFunction,
+      mobile,
       page = 1,
       limit = 20,
     } = req.query;
 
-    if (!name && !designation && !company && !email) {
+    if (!name && !designation && !company && !email && !jobSeniority && !jobFunction && !mobile) {
       return sendError(next, "At least one search field is required", 400);
     }
 
@@ -3285,6 +3288,28 @@ async function individualSearch(req, res, next) {
       });
     }
 
+    if (jobSeniority?.trim()) {
+      const r = new RegExp(esc(jobSeniority), "i");
+      andConditions.push({
+        $or: [
+          { Job_Seniority: r },
+          { Job_Seniority_Secondary: r },
+          { Job_Seniority_Tertiary: r },
+        ],
+      });
+    }
+
+    if (jobFunction?.trim()) {
+      andConditions.push({ Job_Function: new RegExp(esc(jobFunction), "i") });
+    }
+
+    if (mobile?.trim()) {
+      const r = new RegExp(esc(mobile), "i");
+      andConditions.push({
+        $or: [{ Mobile_No: r }, { Contact_Direct_Phone1: r }],
+      });
+    }
+
     // Company is on the same secondary connection — resolve IDs first, then filter Contact
     if (company?.trim()) {
       const matchingCompanies = await Company.find(
@@ -3307,14 +3332,66 @@ async function individualSearch(req, res, next) {
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     const [rawContacts, total] = await Promise.all([
-      Contact.find(query)
-        .populate(
-          "Company_ID",
-          "Company_Name Industry Company_Segment Employees_Range Turnover_Range Website Company_ID_Kestone Company_Source Company_Phone1 Company_Phone2 Year_Founded Sub_Industry Company_LinkedIn_Profile"
-        )
-        .skip(skip)
-        .limit(parseInt(limit))
-        .lean(),
+      Contact.aggregate([
+        { $match: query },
+        {
+          $lookup: {
+            from: "companies",
+            localField: "Company_ID",
+            foreignField: "_id",
+            as: "Company_ID",
+            pipeline: [
+              {
+                $project: {
+                  Company_Name: 1,
+                  Industry: 1,
+                  Company_Segment: 1,
+                  Employees_Range: 1,
+                  Turnover_Range: 1,
+                  Website: 1,
+                  Company_ID_Kestone: 1,
+                  Company_Source: 1,
+                  Company_Phone1: 1,
+                  Company_Phone2: 1,
+                  Year_Founded: 1,
+                  Sub_Industry: 1,
+                  Company_LinkedIn_Profile: 1,
+                },
+              },
+            ],
+          },
+        },
+        { $unwind: { path: "$Company_ID", preserveNullAndEmptyArrays: true } },
+        // Custom sort: letters A-Z (0), numbers (1), special chars (2), no company (3)
+        {
+          $addFields: {
+            _cs: { $toLower: { $ifNull: ["$Company_ID.Company_Name", ""] } },
+            _cg: {
+              $switch: {
+                branches: [
+                  {
+                    case: { $regexMatch: { input: { $ifNull: ["$Company_ID.Company_Name", ""] }, regex: "^[A-Za-z]" } },
+                    then: 0,
+                  },
+                  {
+                    case: { $regexMatch: { input: { $ifNull: ["$Company_ID.Company_Name", ""] }, regex: "^[0-9]" } },
+                    then: 1,
+                  },
+                  {
+                    case: { $gt: [{ $strLenCP: { $ifNull: ["$Company_ID.Company_Name", ""] } }, 0] },
+                    then: 2,
+                  },
+                ],
+                default: 3,
+              },
+            },
+          },
+        },
+        { $sort: { _cg: 1, _cs: 1 } },
+        { $skip: skip },
+        { $limit: parseInt(limit) },
+        { $unset: ["_cs", "_cg"] },
+      ]),
       Contact.countDocuments(query),
     ]);
 
