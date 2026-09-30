@@ -821,11 +821,32 @@ const retryEnrichmentForPending = async () => {
 
 const downloadEnrichedProfiles = asyncHandler(async (req, res, next) => {
   try {
-    const { batchName, isEnriched } = req.query;
+    const { batchName, isEnriched, search } = req.query;
 
     const filter = {};
     if (batchName) filter.batchName = batchName;
     if (isEnriched !== undefined) filter.isEnriched = isEnriched === "true";
+
+    if (search && search.trim() !== "") {
+      const searchRegex = new RegExp(search.trim(), "i");
+      filter.$or = [
+        { batchName: searchRegex },
+        { "enrichedData.full_name": searchRegex },
+        { "enrichedData.first_name": searchRegex },
+        { "enrichedData.last_name": searchRegex },
+        { "enrichedData.email": searchRegex },
+        { "enrichedData.personal_email1": searchRegex },
+        { "enrichedData.company": searchRegex },
+        { "enrichedData.title": searchRegex },
+        { "enrichedData.location": searchRegex },
+        { "enrichedData.country": searchRegex },
+        { "enrichedData.region": searchRegex },
+        { "enrichedData.locality": searchRegex },
+        { "enrichedData.company_industry": searchRegex },
+        { "enrichedData.domain": searchRegex },
+        { linkedinId: searchRegex },
+      ];
+    }
 
     const profiles = await LinkedinProfile.find(filter).lean();
 
