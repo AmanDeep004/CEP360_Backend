@@ -887,7 +887,24 @@ const getAllCompanyData = asyncHandler(async (req, res, next) => {
 
     const [total, data] = await Promise.all([
       Company.countDocuments(finalFilter),
-      Company.find(finalFilter).skip(skip).limit(limit).lean(),
+      Company.aggregate([
+        { $match: finalFilter },
+        {
+          $addFields: {
+            _sortPriority: {
+              $cond: {
+                if: { $regexMatch: { input: { $ifNull: ["$Company_Name", ""] }, regex: /^[a-zA-Z]/ } },
+                then: 0,
+                else: 1,
+              },
+            },
+          },
+        },
+        { $sort: { _sortPriority: 1, Company_Name: 1 } },
+        { $skip: skip },
+        { $limit: limit },
+        { $project: { _sortPriority: 0 } },
+      ]),
     ]);
 
     return sendResponse(res, 200, "Companies fetched successfully", {
