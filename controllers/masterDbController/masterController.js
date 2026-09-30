@@ -3253,11 +3253,12 @@ async function individualSearch(req, res, next) {
       jobSeniority,
       jobFunction,
       mobile,
+      city,
       page = 1,
       limit = 20,
     } = req.query;
 
-    if (!name && !designation && !company && !email && !jobSeniority && !jobFunction && !mobile) {
+    if (!name && !designation && !company && !email && !jobSeniority && !jobFunction && !mobile && !city) {
       return sendError(next, "At least one search field is required", 400);
     }
 
@@ -3308,6 +3309,10 @@ async function individualSearch(req, res, next) {
       andConditions.push({
         $or: [{ Mobile_No: r }, { Contact_Direct_Phone1: r }],
       });
+    }
+
+    if (city?.trim()) {
+      andConditions.push({ Contact_City: new RegExp(esc(city), "i") });
     }
 
     // Company is on the same secondary connection — resolve IDs first, then filter Contact
@@ -3628,6 +3633,38 @@ const downloadBatchReport = asyncHandler(async (req, res, next) => {
   res.download(filePath, `skipped_rows_report_${jobId}.xlsx`);
 });
 
+// ── GET /masterdb/downloadCompanyNames — export all companies as Excel ─────────
+const downloadCompanyNames = asyncHandler(async (req, res, next) => {
+  try {
+    const companies = await Company.find({}, { _id: 1, Company_Name: 1 })
+      .sort({ Company_Name: 1 })
+      .lean();
+
+    const rows = companies.map((c) => ({
+      "_id":          String(c._id),
+      "Company Name": c.Company_Name || "",
+    }));
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(rows, { header: ["_id", "Company Name"] });
+    // Auto-width: set column widths based on max content length
+    ws["!cols"] = [
+      { wch: 28 }, // _id (ObjectId is 24 chars)
+      { wch: 60 }, // Company Name
+    ];
+    XLSX.utils.book_append_sheet(wb, ws, "Companies");
+
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+    const filename = `company_names_${Date.now()}.xlsx`;
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(buffer);
+  } catch (err) {
+    return sendError(next, err.message || "Download failed", 500);
+  }
+});
+
 export {
   batchCreateFromExcel,
   getBatchJobStatus,
@@ -3637,6 +3674,7 @@ export {
   updateData,
   createANewCompany,
   getAllCompanyName,
+  downloadCompanyNames,
   getDropdownFiltersOld,
   getDropdownFilters,
   getFiltersStats,

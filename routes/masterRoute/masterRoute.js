@@ -11,6 +11,7 @@ import {
   getAllCompanyData,
   createANewCompany,
   getAllCompanyName,
+  downloadCompanyNames,
   getDropdownFilters,
   getFiltersStats,
   getCompanyDataById,
@@ -59,6 +60,7 @@ router.get("/getAllData", protect, getAllData);
 router.get("/getCompanyDataById", protect, getCompanyDataById);
 router.get("/getAllCompanyData", protect, getAllCompanyData);
 router.get("/getAllCompanyName", protect, getAllCompanyName);
+router.get("/downloadCompanyNames", protect, downloadCompanyNames);
 router.get("/getDropdownFilters", protect, getDropdownFilters);
 router.get("/getFiltersStats", protect, getFiltersStats);
 router.get("/getAllDumpHistoryData", dumpAllHistoryData);
