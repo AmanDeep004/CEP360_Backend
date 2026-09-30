@@ -3512,6 +3512,94 @@ const updateFilterTag = asyncHandler(async (req, res, next) => {
   }
 });
 
+/**
+ * GET /filtration/downloadFilteredData?campaignFilterId=xxx
+ * Re-runs the saved filter and streams results as an Excel file.
+ */
+const downloadFilteredData = asyncHandler(async (req, res, next) => {
+  try {
+    const { campaignFilterId } = req.query;
+    if (!campaignFilterId) return sendError(next, "campaignFilterId is required", 400);
+
+    const filter = await CampaignFilter.findById(campaignFilterId).lean();
+    if (!filter) return sendError(next, "Filter not found", 404);
+    const { filters = [], exclusions = [], misc = {} } = filter;
+    const companyIds = misc.companyIdsUsed || [];
+
+    const preLookup  = buildPreLookupMatch(filters, exclusions, companyIds);
+    const postLookup = buildPostLookupMatch(filters, exclusions);
+    const pipeline   = buildAssignPipeline(preLookup, postLookup);
+
+    req.setTimeout(600000); // 10 min for large datasets
+
+    const cursor = Contact.collection.aggregate(pipeline, { allowDiskUse: true });
+
+    const rows = [];
+    for await (const row of cursor) {
+      rows.push({
+        Company_Name:              row.company_info?.Company_Name || "",
+        Company_ID_Kestone:        row.company_info?.Company_ID_Kestone || "",
+        Industry:                  row.company_info?.Industry || "",
+        Sub_Industry:              row.company_info?.Sub_Industry || "",
+        Company_Segment:           row.company_info?.Company_Segment || "",
+        Employees_Range:           row.company_info?.Employees_Range || "",
+        Turnover_Range:            row.company_info?.Turnover_Range || "",
+        Website:                   row.company_info?.Website || "",
+        Year_Founded:              row.company_info?.Year_Founded || "",
+        Company_Source:            row.company_info?.Company_Source || "",
+        Company_LinkedIn_Profile:  row.company_info?.Company_LinkedIn_Profile || "",
+        Company_Phone1:            row.company_info?.Company_Phone1 || "",
+        Company_Phone2:            row.company_info?.Company_Phone2 || "",
+        Contact_ID:                row.Contact_ID || "",
+        Contact_Source:            row.Contact_Source || "",
+        Contact_Create_Date:       row.Contact_Create_Date || "",
+        Salutation:                row.Salutation || "",
+        First_Name:                row.First_Name || "",
+        Last_Name:                 row.Last_Name || "",
+        Full_Name:                 row.Full_Name || "",
+        Gender:                    row.Gender || "",
+        Job_Title:                 row.Job_Title || "",
+        Job_Seniority:             row.Job_Seniority || "",
+        Job_Seniority_Secondary:   row.Job_Seniority_Secondary || "",
+        Job_Seniority_Tertiary:    row.Job_Seniority_Tertiary || "",
+        Job_Function:              row.Job_Function || "",
+        Contact_Address_1:         row.Contact_Address_1 || "",
+        Contact_Address_2:         row.Contact_Address_2 || "",
+        Contact_Address_3:         row.Contact_Address_3 || "",
+        Contact_City:              row.Contact_City || "",
+        Contact_Pin:               row.Contact_Pin || "",
+        Contact_State:             row.Contact_State || "",
+        Contact_Region:            row.Contact_Region || "",
+        Contact_Country:           row.Contact_Country || "",
+        Contact_STD_ISD_Code:      row.Contact_STD_ISD_Code || "",
+        Contact_Location_Tier:     row.Contact_Location_Tier || "",
+        Contact_Direct_Phone1:     row.Contact_Direct_Phone1 || "",
+        Contact_Direct_Phone2:     row.Contact_Direct_Phone2 || "",
+        Contact_Extn_No:           row.Contact_Extn_No || "",
+        Mobile_No:                 row.Mobile_No || "",
+        Office_Email_1:            row.Office_Email_1 || "",
+        Office_Email_2:            row.Office_Email_2 || "",
+        Personal_Email1:           row.Personal_Email1 || "",
+        Personal_Email2:           row.Personal_Email2 || "",
+        Contact_LinkedIn_Profile:  row.Contact_LinkedIn_Profile || "",
+      });
+    }
+
+    if (!rows.length) return sendError(next, "No data found for this filter", 404);
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, "Filtered Data");
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="filtered_data_${campaignFilterId}.xlsx"`);
+    res.send(buffer);
+  } catch (err) {
+    return sendError(next, err.message || "Download failed", 500);
+  }
+});
+
 export {
   callingDataFilter,
   callingDataFilterLightweight,
@@ -3533,4 +3621,5 @@ export {
   getCrossTab,
   getClientMatchEntries,
   updateFilterTag,
+  downloadFilteredData,
 };

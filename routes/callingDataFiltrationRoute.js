@@ -20,6 +20,7 @@ import {
   getClientMatchEntries,
   getCrossTab,
   updateFilterTag,
+  downloadFilteredData,
 } from "../controllers/callingDataFiltrationController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -96,5 +97,6 @@ router.get("/clientMatchEntries/:campaignId", protect, getClientMatchEntries);
 router.patch("/clientMatchData/:campaignId/action", protect, updateClientMatchAction);
 router.get("/crossTab/:campaignFilterId", protect, getCrossTab);
 router.patch("/:filterId/tag", protect, updateFilterTag);
+router.get("/downloadFilteredData", protect, downloadFilteredData);
 
 export default router;
