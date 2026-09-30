@@ -45,6 +45,7 @@ const {
   DATABASE_MANAGER,
   PRESALES_MANAGER,
   IT_ADMINISTRATOR,
+  MIS_MANAGER,
 } = UserRoleEnum;
 const userSchema = new Schema(
   {
@@ -95,6 +96,7 @@ const userSchema = new Schema(
           AGENT,
           PRESALES_MANAGER,
           IT_ADMINISTRATOR,
+          MIS_MANAGER,
         ],
         message: "{VALUE} is not a valid role",
       },
@@ -203,6 +205,32 @@ const userSchema = new Schema(
       type: String,
       trim: true,
     },
+    panAlertDismissed: {
+      type: Boolean,
+      default: false,
+    },
+    contractDuration: {
+      type: String,
+      enum: ["15days", "1month", "2months", "3months", "4months", "6months", "11months", "1year", "custom"],
+      default: "6months",
+    },
+    contractStartDate: { type: Date }, // start of the current contract period
+    contractEndDate:   { type: Date },
+    contractStatus: {
+      type: String,
+      enum: ["active", "expired", "rejected"],
+      default: "active",
+    },
+    // Snapshot of the last contract action — quick read without joining ContractHistory
+    contractLastAction: {
+      action:    { type: String, enum: ["created", "renewed", "ended", "rejected", "auto_expired"] },
+      updatedAt: { type: Date },
+      updatedBy: { type: Schema.Types.ObjectId, ref: "User", default: null }, // null = system/cron
+      tenure:    { type: String }, // duration key e.g. "3months" or "custom"
+      startDate: { type: Date },
+      endDate:   { type: Date },
+    },
+    // Full history lives in ContractHistory collection — not embedded here.
     tokenVersion: {
       type: Number,
       default: 0,
@@ -214,6 +242,37 @@ const userSchema = new Schema(
     toObject: { getters: true },
   }
 );
+
+// Contract duration → end date calculator (exported for controller use)
+export const CONTRACT_DURATION_MAP = {
+  "15days":   { days: 15 },
+  "1month":   { months: 1 },
+  "2months":  { months: 2 },
+  "3months":  { months: 3 },
+  "4months":  { months: 4 },
+  "6months":  { months: 6 },
+  "11months": { months: 11 },
+  "1year":    { months: 12 },
+};
+
+export const calcContractEndDate = (startDate, duration) => {
+  const d = new Date(startDate);
+  const cfg = CONTRACT_DURATION_MAP[duration] || { months: 6 };
+  if (cfg.days) d.setDate(d.getDate() + cfg.days);
+  if (cfg.months) d.setMonth(d.getMonth() + cfg.months);
+  return d;
+};
+
+// Auto-set contractEndDate when a new agent is created.
+// ContractHistory "created" record is written by registerUser controller after save.
+userSchema.pre("save", function (next) {
+  if (this.isNew && this.role === "agent" && !this.contractEndDate) {
+    const start = this.doj || new Date();
+    this.contractStartDate = start;
+    this.contractEndDate   = calcContractEndDate(start, this.contractDuration || "6months");
+  }
+  next();
+});
 
 // Encrypt password using bcrypt
 userSchema.pre("save", async function (next) {
@@ -245,4 +304,5 @@ userSchema.methods.matchPassword = async function (enteredPassword) {
 };
 
 const User = getPrimaryConnection().model("User", userSchema);
+export { decryptPAN };
 export default User;

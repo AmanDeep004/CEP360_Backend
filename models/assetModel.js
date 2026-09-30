@@ -26,6 +26,7 @@ const assetSchema = new Schema(
     assetBrand:        { type: String, trim: true, default: "" },
     assetModel:        { type: String, trim: true, default: "" },
     assetSerialNumber: { type: String, trim: true, required: true, unique: true },
+    assetType:         { type: String, enum: ["Long Term", "Short Term", ""], default: "" },
 
     addedBy:           { type: Schema.Types.ObjectId, ref: "User", required: true },
 
