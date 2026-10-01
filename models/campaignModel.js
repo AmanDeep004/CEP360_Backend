@@ -120,6 +120,10 @@ const campaignSchema = new mongoose.Schema(
       },
     },
     isCallingDataAssigned: { type: Boolean, default: false },
+
+    // Virsa AI integration
+    versaCampaignId: { type: String, default: null },
+    versaVerified:   { type: Boolean, default: false },
     isExternalSheetUploadAllowed: { type: Boolean, default: true },
 
     totalEmailSent:    { type: Number, default: 0 },

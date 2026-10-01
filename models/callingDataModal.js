@@ -123,6 +123,18 @@ const CallingDataSchema = new mongoose.Schema(
     isRegistered: { type: Boolean, default: false },
     registeredOn: { type: Date, default: null },
     registrationSource: { type: String, default: "Not Registered" },
+
+    // Virsa AI engagement data (synced per page load in agent database view)
+    versa: {
+      email:          { type: String,  default: null },
+      registered:     { type: Boolean, default: null },
+      send:           { type: Boolean, default: null },
+      open:           { type: Boolean, default: null },
+      click:          { type: Boolean, default: null },
+      telescriptData: { type: mongoose.Schema.Types.Mixed, default: null },
+      exists:         { type: Boolean, default: null },
+      syncedAt:       { type: Date,    default: null },
+    },
     isAttended: { type: Boolean, default: false },
     callHistory: { type: mongoose.Schema.Types.ObjectId, ref: "CallHistory" },
     lastRemarks: { type: String, default: null },

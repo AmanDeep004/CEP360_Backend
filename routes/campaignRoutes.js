@@ -13,6 +13,7 @@ import {
   updateAllowedTemplates,
   getCampaignAllowedTemplates,
 } from "../controllers/campaignController.js";
+import { validateVersaCampaign, syncVersaEmailStatus } from "../controllers/virsaController.js";
 import multer from "multer";
 import { protect, authorize } from "../middleware/authMiddleware.js";
 import { UserRoleEnum } from "../utils/enum.js";
@@ -97,6 +98,20 @@ router.get(
   "/allowedTemplates/:campaignId",
   protect,
   getCampaignAllowedTemplates
+);
+
+// Virsa AI integration
+router.post(
+  "/virsa-validate",
+  protect,
+  authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER),
+  validateVersaCampaign
+);
+router.post(
+  "/virsa-email-status",
+  protect,
+  authorize(ADMIN, PRESALES_MANAGER, PROGRAM_MANAGER, AGENT),
+  syncVersaEmailStatus
 );
 
 // Delete campaign

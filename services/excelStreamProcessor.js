@@ -26,10 +26,32 @@ const safeStr = (v) => (v == null || v === "" ? "" : String(v).trim());
 
 // Literal placeholder strings that appear as cell values in Excel exports
 const BLANK_LIKE = new Set([
-  "", "null", "na", "n/a", "n.a", "n.a.", "none", "blank",
-  "nil", "0", "00", "000", "-", "--", "---", "undefined",
-  "not available", "not applicable", "#n/a", "#na", "unknown",
-  "no data", "no email", "no phone", "nill", "blk",
+  "",
+  "null",
+  "na",
+  "n/a",
+  "n.a",
+  "n.a.",
+  "none",
+  "blank",
+  "nil",
+  "0",
+  "00",
+  "000",
+  "-",
+  "--",
+  "---",
+  "undefined",
+  "not available",
+  "not applicable",
+  "#n/a",
+  "#na",
+  "unknown",
+  "no data",
+  "no email",
+  "no phone",
+  "nill",
+  "blk",
 ]);
 
 /**
@@ -40,8 +62,8 @@ const isValidPhone = (val) => {
   if (!val) return false;
   const s = String(val).trim();
   if (BLANK_LIKE.has(s.toLowerCase())) return false;
-  const digits = s.replace(/\D/g, "");   // strip non-digits
-  return digits.length >= 7;             // real phone must have 7+ digits
+  const digits = s.replace(/\D/g, ""); // strip non-digits
+  return digits.length >= 7; // real phone must have 7+ digits
 };
 
 /**
@@ -53,9 +75,9 @@ const isValidEmail = (val) => {
   const s = String(val).trim();
   if (BLANK_LIKE.has(s.toLowerCase())) return false;
   const atIdx = s.indexOf("@");
-  if (atIdx < 1) return false;           // no "@" or starts with "@"
+  if (atIdx < 1) return false; // no "@" or starts with "@"
   const afterAt = s.slice(atIdx + 1);
-  return afterAt.includes(".");          // domain must have a "."
+  return afterAt.includes("."); // domain must have a "."
 };
 
 const parseDateVal = (v) => {
@@ -127,7 +149,8 @@ async function processChunk(rows, batchName, lastNumber, job) {
     // Fail: Mobile_No is missing or a placeholder (e.g. "-", "N/A", "")
     if (!isValidPhone(mob)) {
       job.progress.failed++;
-      job.progress.failReasons.missingMobileNo = (job.progress.failReasons.missingMobileNo || 0) + 1;
+      job.progress.failReasons.missingMobileNo =
+        (job.progress.failReasons.missingMobileNo || 0) + 1;
       job.failedRows?.push({ ...r, Reason: "Missing/invalid Mobile_No" });
       continue;
     }
@@ -135,7 +158,9 @@ async function processChunk(rows, batchName, lastNumber, job) {
     // Duplicate: Mobile_No already in DB or seen earlier in this chunk
     if (existingMobiles.has(mob) || seenMobilesInChunk.has(mob)) {
       job.progress.duplicates++;
-      const reason = existingMobiles.has(mob) ? "Duplicate (already in DB)" : "Duplicate (within file)";
+      const reason = existingMobiles.has(mob)
+        ? "Duplicate (already in DB)"
+        : "Duplicate (within file)";
       job.duplicateRows?.push({ ...r, Reason: reason });
       continue; // company is NOT touched
     }
@@ -150,7 +175,7 @@ async function processChunk(rows, batchName, lastNumber, job) {
 
   // Collect unique company names from valid rows only
   const uniqueCompanies = new Set();
-  const companyRowMap   = new Map(); // first occurrence of each company row
+  const companyRowMap = new Map(); // first occurrence of each company row
   for (const r of validRows) {
     const cn = safeStr(r.Company_Name);
     uniqueCompanies.add(cn);
@@ -174,21 +199,21 @@ async function processChunk(rows, batchName, lastNumber, job) {
         filter: { Company_Name: cn },
         update: {
           $set: {
-            Company_ID_Kestone:      cr.Company_ID_Kestone      || "",
+            Company_ID_Kestone: cr.Company_ID_Kestone || "",
             // Affinity_ID_Dell:        cr.Affinity_ID_Dell        || "",
             // Company_ID_Google:       cr.Company_ID_Google       || "",
-            Company_Source:          cr.Company_Source          || "",
-            Company_Name:            cn,
-            Year_Founded:            cr.Year_Founded            || "",
-            Turnover_Range:          cr.Turnover_Range          || "",
-            Employees_Range:         cr.Employees_Range         || "",
-            Industry:                cr.Industry                || "",
-            Sub_Industry:            cr.Sub_Industry            || "",
-            Company_Segment:         cr.Company_Segment         || "",
-            Website:                 cr.Website                 || "",
+            Company_Source: cr.Company_Source || "",
+            Company_Name: cn,
+            Year_Founded: cr.Year_Founded || "",
+            Turnover_Range: cr.Turnover_Range || "",
+            Employees_Range: cr.Employees_Range || "",
+            Industry: cr.Industry || "",
+            Sub_Industry: cr.Sub_Industry || "",
+            Company_Segment: cr.Company_Segment || "",
+            Website: cr.Website || "",
             Company_LinkedIn_Profile: cr.Company_LinkedIn_Profile || "",
-            Company_Phone1:          cr.Company_Phone1          || "",
-            Company_Phone2:          cr.Company_Phone2          || "",
+            Company_Phone1: cr.Company_Phone1 || "",
+            Company_Phone2: cr.Company_Phone2 || "",
           },
         },
         upsert: true,
@@ -206,8 +231,10 @@ async function processChunk(rows, batchName, lastNumber, job) {
     }
 
     // Fetch the _ids of newly created companies and merge into companyMap
-    const newNames = newCompanyOps.map((op) => op.updateOne.filter.Company_Name);
-    const newDocs  = await Company.find(
+    const newNames = newCompanyOps.map(
+      (op) => op.updateOne.filter.Company_Name
+    );
+    const newDocs = await Company.find(
       { Company_Name: { $in: newNames } },
       { Company_Name: 1 }
     ).lean();
@@ -232,11 +259,11 @@ async function processChunk(rows, batchName, lastNumber, job) {
     const year = new Date().getFullYear();
     r.Contact_ID = `CEP${year}-A-${String(lastNumber).padStart(10, "0")}`;
 
-    const p1  = safeStr(r.Contact_Direct_Phone1);
-    const p2  = safeStr(r.Contact_Direct_Phone2);
+    const p1 = safeStr(r.Contact_Direct_Phone1);
+    const p2 = safeStr(r.Contact_Direct_Phone2);
     const mob = safeStr(r.Mobile_No);
-    const e1  = safeStr(r.Personal_Email1).toLowerCase();
-    const e2  = safeStr(r.Personal_Email2).toLowerCase();
+    const e1 = safeStr(r.Personal_Email1).toLowerCase();
+    const e2 = safeStr(r.Personal_Email2).toLowerCase();
     const oe1 = safeStr(r.Office_Email_1).toLowerCase();
     const oe2 = safeStr(r.Office_Email_2).toLowerCase();
 
@@ -245,54 +272,54 @@ async function processChunk(rows, batchName, lastNumber, job) {
         filter: { Contact_ID: r.Contact_ID },
         update: {
           $set: {
-            Contact_ID:               safeStr(r.Contact_ID),
-            Contact_Source:           safeStr(r.Contact_Source),
-            Contact_Create_Date:      parseDateVal(r.Contact_Create_Date),
-            Salutation:               safeStr(r.Salutation),
-            First_Name:               safeStr(r.First_Name),
-            Last_Name:                safeStr(r.Last_Name),
-            Full_Name:                safeStr(r.Full_Name),
-            Gender:                   safeStr(r.Gender),
-            Job_Title:                safeStr(r.Job_Title),
-            Job_Seniority:            safeStr(r.Job_Seniority),
-            Job_Seniority_Secondary:  safeStr(r.Job_Seniority_Secondary),
-            Job_Seniority_Tertiary:   safeStr(r.Job_Seniority_Tertiary),
-            Job_Function:             safeStr(r.Job_Function),
-            Contact_Address_1:        safeStr(r.Contact_Address_1),
-            Contact_Address_2:        safeStr(r.Contact_Address_2),
-            Contact_Address_3:        safeStr(r.Contact_Address_3),
-            Contact_City:             safeStr(r.Contact_City),
-            Contact_Pin:              safeStr(r.Contact_Pin),
-            Contact_State:            safeStr(r.Contact_State),
-            Contact_Region:           safeStr(r.Contact_Region),
-            Contact_Country:          safeStr(r.Contact_Country),
-            Contact_STD_ISD_Code:     safeStr(r.Contact_STD_ISD_Code),
-            Contact_Location_Tier:    safeStr(r.Contact_Location_Tier),
-            Contact_Direct_Phone1:    p1,
-            Contact_Direct_Phone2:    p2,
-            Contact_Extn_No:          safeStr(r.Contact_Extn_No),
-            Mobile_No:                mob,
-            Office_Email_1:           oe1,
-            Office_Email_2:           oe2,
-            Personal_Email1:          e1,
-            Personal_Email2:          e2,
+            Contact_ID: safeStr(r.Contact_ID),
+            Contact_Source: safeStr(r.Contact_Source),
+            Contact_Create_Date: parseDateVal(r.Contact_Create_Date),
+            Salutation: safeStr(r.Salutation),
+            First_Name: safeStr(r.First_Name),
+            Last_Name: safeStr(r.Last_Name),
+            Full_Name: safeStr(r.Full_Name),
+            Gender: safeStr(r.Gender),
+            Job_Title: safeStr(r.Job_Title),
+            Job_Seniority: safeStr(r.Job_Seniority),
+            Job_Seniority_Secondary: safeStr(r.Job_Seniority_Secondary),
+            Job_Seniority_Tertiary: safeStr(r.Job_Seniority_Tertiary),
+            Job_Function: safeStr(r.Job_Function),
+            Contact_Address_1: safeStr(r.Contact_Address_1),
+            Contact_Address_2: safeStr(r.Contact_Address_2),
+            Contact_Address_3: safeStr(r.Contact_Address_3),
+            Contact_City: safeStr(r.Contact_City),
+            Contact_Pin: safeStr(r.Contact_Pin),
+            Contact_State: safeStr(r.Contact_State),
+            Contact_Region: safeStr(r.Contact_Region),
+            Contact_Country: safeStr(r.Contact_Country),
+            Contact_STD_ISD_Code: safeStr(r.Contact_STD_ISD_Code),
+            Contact_Location_Tier: safeStr(r.Contact_Location_Tier),
+            Contact_Direct_Phone1: p1,
+            Contact_Direct_Phone2: p2,
+            Contact_Extn_No: safeStr(r.Contact_Extn_No),
+            Mobile_No: mob,
+            Office_Email_1: oe1,
+            Office_Email_2: oe2,
+            Personal_Email1: e1,
+            Personal_Email2: e2,
             Contact_LinkedIn_Profile: safeStr(r.Contact_LinkedIn_Profile),
-            Unsubscribe_Flag:         safeStr(r["Unsubscribe Flag (Yes/No)"]),
-            Unsubscribe_Account_Tag:  safeStr(r.Unsubscribe_Account_Tag),
-            DND_Flag:                 safeStr(r["DND Flag (Yes/No)"]),
-            DND_Account_Tag:          safeStr(r.DND_Account_Tag),
-            Last_Engagement:          safeStr(r.Last_Engagement),
-            Last_Engagement_Date:     parseDateVal(r.Last_Engagement_Date),
+            Unsubscribe_Flag: safeStr(r["Unsubscribe Flag (Yes/No)"]),
+            Unsubscribe_Account_Tag: safeStr(r.Unsubscribe_Account_Tag),
+            DND_Flag: safeStr(r["DND Flag (Yes/No)"]),
+            DND_Account_Tag: safeStr(r.DND_Account_Tag),
+            Last_Engagement: safeStr(r.Last_Engagement),
+            Last_Engagement_Date: parseDateVal(r.Last_Engagement_Date),
             Last_Engagement_Campaign: safeStr(r.Last_Engagement_Campaign),
-            Telecalling_Remarks:      safeStr(r.Telecalling_Remarks),
-            BatchName:                batchName,
-            Company_ID:               companyId,
+            Telecalling_Remarks: safeStr(r.Telecalling_Remarks),
+            BatchName: batchName,
+            Company_ID: companyId,
             // Denormalized company fields for 2Cr-scale filtration
-            Industry:                 safeStr(r.Industry),
-            Sub_Industry:             safeStr(r.Sub_Industry),
-            Company_Segment:          safeStr(r.Company_Segment),
-            Employees_Range:          safeStr(r.Employees_Range),
-            Turnover_Range:           safeStr(r.Turnover_Range),
+            Industry: safeStr(r.Industry),
+            Sub_Industry: safeStr(r.Sub_Industry),
+            Company_Segment: safeStr(r.Company_Segment),
+            Employees_Range: safeStr(r.Employees_Range),
+            Turnover_Range: safeStr(r.Turnover_Range),
           },
         },
         upsert: true,
@@ -302,22 +329,26 @@ async function processChunk(rows, batchName, lastNumber, job) {
 
   // Write contacts in sub-chunks of 2000
   // validRows and contactOps share the same index order
-  const validRowsForReport = validRows.filter((r) => companyMap.get(safeStr(r.Company_Name))); // exclude company-not-found
+  const validRowsForReport = validRows.filter((r) =>
+    companyMap.get(safeStr(r.Company_Name))
+  ); // exclude company-not-found
   for (let i = 0; i < contactOps.length; i += 2000) {
-    const slice  = contactOps.slice(i, i + 2000);
+    const slice = contactOps.slice(i, i + 2000);
     const result = await Contact.bulkWrite(slice, {
       ordered: false,
       writeConcern: { w: 1 },
     });
-    job.progress.inserted  += result.upsertedCount;
-    job.progress.updated   += result.modifiedCount;
+    job.progress.inserted += result.upsertedCount;
+    job.progress.updated += result.modifiedCount;
     job.progress.processed += slice.length;
 
     // Track inserted rows for the report
-    const upsertedIndexes = new Set(Object.keys(result.upsertedIds || {}).map(Number));
+    const upsertedIndexes = new Set(
+      Object.keys(result.upsertedIds || {}).map(Number)
+    );
     slice.forEach((_, idx) => {
       const rowIdx = i + idx;
-      const row    = validRowsForReport[rowIdx];
+      const row = validRowsForReport[rowIdx];
       if (!row) return;
       if (upsertedIndexes.has(idx)) {
         job.insertedRows?.push({ ...row, Status: "Inserted" });
@@ -335,32 +366,34 @@ async function processChunk(rows, batchName, lastNumber, job) {
  */
 export async function processExcelInBackground(jobId, filePath, batchName) {
   const job = jobStore.get(jobId);
-  job.skippedRows  = []; // legacy — kept for internal use
+  job.skippedRows = []; // legacy — kept for internal use
   job.insertedRows = [];
   job.duplicateRows = [];
-  job.failedRows   = [];
+  job.failedRows = [];
   try {
     const ExcelJS = (await import("exceljs")).default;
 
     const workbook = new ExcelJS.stream.xlsx.WorkbookReader(filePath, {
       sharedStrings: "cache",
-      hyperlinks:    "ignore",
-      styles:        "ignore",
-      formulae:      "ignore",
+      hyperlinks: "ignore",
+      styles: "ignore",
+      formulae: "ignore",
     });
 
     // Get current max Contact_ID sequence number — handles old (CEP-A-) and new (CEP{YEAR}-A-) formats
     const lastContact = await Contact.findOne(
       { Contact_ID: { $regex: /^CEP/ } },
       { Contact_ID: 1 }
-    ).sort({ Contact_ID: -1 }).lean();
+    )
+      .sort({ Contact_ID: -1 })
+      .lean();
     let lastNumber = 0;
     if (lastContact?.Contact_ID) {
       const m = lastContact.Contact_ID.match(/CEP(?:\d{4})?-A-(\d+)/);
       if (m) lastNumber = parseInt(m[1], 10);
     }
 
-    let headers   = null;
+    let headers = null;
     let rowBuffer = [];
     const CHUNK_SIZE = 5000;
 
@@ -387,9 +420,16 @@ export async function processExcelInBackground(jobId, filePath, batchName) {
         job.progress.totalRows++;
 
         if (rowBuffer.length >= CHUNK_SIZE) {
-          lastNumber = await processChunk(rowBuffer, batchName, lastNumber, job);
-          rowBuffer  = [];
-          console.log(`[Job ${jobId}] Streamed ${job.progress.totalRows} rows so far...`);
+          lastNumber = await processChunk(
+            rowBuffer,
+            batchName,
+            lastNumber,
+            job
+          );
+          rowBuffer = [];
+          console.log(
+            `[Job ${jobId}] Streamed ${job.progress.totalRows} rows so far...`
+          );
         }
       }
       break; // Only first sheet
@@ -400,12 +440,12 @@ export async function processExcelInBackground(jobId, filePath, batchName) {
       await processChunk(rowBuffer, batchName, lastNumber, job);
     }
 
-    job.status      = "completed";
+    job.status = "completed";
     job.completedAt = new Date();
     console.log(
       `[Job ${jobId}] Done. Total: ${job.progress.totalRows}, ` +
-      `Inserted: ${job.progress.inserted}, Updated: ${job.progress.updated}, ` +
-      `Duplicates: ${job.progress.duplicates}, Failed: ${job.progress.failed}`
+        `Inserted: ${job.progress.inserted}, Updated: ${job.progress.updated}, ` +
+        `Duplicates: ${job.progress.duplicates}, Failed: ${job.progress.failed}`
     );
 
     // Write 3-sheet report: Inserted | Duplicates | Failed
@@ -420,29 +460,41 @@ export async function processExcelInBackground(jobId, filePath, batchName) {
         return XLSX.utils.aoa_to_sheet([[fallbackMsg]]);
       };
 
-      XLSX.utils.book_append_sheet(wb, makeSheet(job.insertedRows,  "No records inserted"), "Inserted");
-      XLSX.utils.book_append_sheet(wb, makeSheet(job.duplicateRows, "No duplicates found"), "Duplicates");
-      XLSX.utils.book_append_sheet(wb, makeSheet(job.failedRows,    "No failed rows"),      "Failed");
+      XLSX.utils.book_append_sheet(
+        wb,
+        makeSheet(job.insertedRows, "No records inserted"),
+        "Inserted"
+      );
+      XLSX.utils.book_append_sheet(
+        wb,
+        makeSheet(job.duplicateRows, "No duplicates found"),
+        "Duplicates"
+      );
+      XLSX.utils.book_append_sheet(
+        wb,
+        makeSheet(job.failedRows, "No failed rows"),
+        "Failed"
+      );
 
       XLSX.writeFile(wb, path.join(reportDir, fileName));
       job.reportUrl = `/reports/${fileName}`;
       console.log(
         `[Job ${jobId}] Report: ${fileName} — ` +
-        `Inserted: ${job.insertedRows.length}, Duplicates: ${job.duplicateRows.length}, Failed: ${job.failedRows.length}`
+          `Inserted: ${job.insertedRows.length}, Duplicates: ${job.duplicateRows.length}, Failed: ${job.failedRows.length}`
       );
     } catch (reportErr) {
       console.error(`[Job ${jobId}] Failed to write report:`, reportErr);
     }
   } catch (err) {
-    job.status      = "failed";
-    job.error       = err.message;
+    job.status = "failed";
+    job.error = err.message;
     job.completedAt = new Date();
     console.error(`[Job ${jobId}] Failed:`, err);
   } finally {
-    job.skippedRows   = []; // free memory
-    job.insertedRows  = [];
+    job.skippedRows = []; // free memory
+    job.insertedRows = [];
     job.duplicateRows = [];
-    job.failedRows    = [];
+    job.failedRows = [];
     fs.unlink(filePath, () => {});
   }
 }
