@@ -2286,41 +2286,77 @@ const getAdminHourlyAnalysis = asyncHandler(async (req, res, next) => {
       });
     }
 
-    const agents   = await User.find({ _id: { $in: agentIds } }).select("_id employeeName email").lean();
-    const agentMap = new Map(agents.map((a) => [String(a._id), a]));
+    // Run User.find and the heavy aggregation in parallel — both only need agentIds
+    const [agents, rawData] = await Promise.all([
+      User.find({ _id: { $in: agentIds } }).select("_id employeeName email").lean(),
 
-    // ── Aggregation ─────────────────────────────────────────────────────────
-    const rawData = await CallingData.aggregate([
-      { $match: { agentId: { $in: agentIds }, CampaignId: { $in: allowedCampIds } } },
-      {
-        $lookup: {
-          from: "callhistories",
-          localField: "callHistory",
-          foreignField: "_id",
-          as: "ch",
-          pipeline: [{ $project: { chatHistory: 1 } }],
-        },
-      },
-      { $unwind: { path: "$ch",              preserveNullAndEmptyArrays: false } },
-      { $unwind: { path: "$ch.chatHistory",  preserveNullAndEmptyArrays: false } },
-      { $match: { "ch.chatHistory.callingDate": { $gte: startDT, $lte: endDT } } },
-      {
-        $group: {
-          _id: {
-            agentId:   "$agentId",
-            slotStart: {
-              $multiply: [
-                { $floor: { $divide: [{ $hour: { date: "$ch.chatHistory.callingDate", timezone: "Asia/Kolkata" } }, slotSz] } },
-                slotSz,
+      // ── Aggregation ───────────────────────────────────────────────────────
+      CallingData.aggregate(
+        [
+          {
+            $match: {
+              agentId:         { $in: agentIds },
+              CampaignId:      { $in: allowedCampIds },
+              // lastCallingDate is indexed ({agentId,CampaignId,lastCallingDate}).
+              // If lastCallingDate < startDT, that record's last call was BEFORE
+              // our window — safe to skip entirely. Eliminates years of old data.
+              lastCallingDate: { $gte: startDT },
+            },
+          },
+          {
+            $lookup: {
+              from: "callhistories",
+              localField: "callHistory",
+              foreignField: "_id",
+              as: "ch",
+              // Pre-filter chatHistory to the date range inside $lookup so
+              // we never unwind out-of-range entries (key perf win on large data).
+              pipeline: [
+                {
+                  $project: {
+                    chatHistory: {
+                      $filter: {
+                        input: "$chatHistory",
+                        as: "e",
+                        cond: {
+                          $and: [
+                            { $gte: ["$$e.callingDate", startDT] },
+                            { $lte: ["$$e.callingDate", endDT] },
+                          ],
+                        },
+                      },
+                    },
+                  },
+                },
+                // Drop callhistory docs where no entry falls in the range
+                { $match: { "chatHistory.0": { $exists: true } } },
               ],
             },
           },
-          calls:         { $sum: 1 },
-          registrations: { $sum: { $cond: ["$ch.chatHistory.isRegistered", 1, 0] } },
-        },
-      },
-      { $sort: { "_id.agentId": 1, "_id.slotStart": 1 } },
+          { $unwind: { path: "$ch",             preserveNullAndEmptyArrays: false } },
+          { $unwind: { path: "$ch.chatHistory", preserveNullAndEmptyArrays: false } },
+          {
+            $group: {
+              _id: {
+                agentId:   "$agentId",
+                slotStart: {
+                  $multiply: [
+                    { $floor: { $divide: [{ $hour: { date: "$ch.chatHistory.callingDate", timezone: "Asia/Kolkata" } }, slotSz] } },
+                    slotSz,
+                  ],
+                },
+              },
+              calls:         { $sum: 1 },
+              registrations: { $sum: { $cond: ["$ch.chatHistory.isRegistered", 1, 0] } },
+            },
+          },
+          { $sort: { "_id.agentId": 1, "_id.slotStart": 1 } },
+        ],
+        { allowDiskUse: true }
+      ),
     ]);
+
+    const agentMap = new Map(agents.map((a) => [String(a._id), a]));
 
     // ── Build per-agent maps ─────────────────────────────────────────────────
     const agentDataMap = new Map();
