@@ -95,7 +95,7 @@ export async function sendEmail(toEmail, subject, htmlBody, meta = {}) {
     return;
   }
 
-  const { trigger, campaignId = null, recipientUserId = null } = meta;
+  const { trigger, campaignId = null, recipientUserId = null, cc = [], bcc = [] } = meta;
 
   try {
     const accessToken = await getAccessToken();
@@ -114,6 +114,8 @@ export async function sendEmail(toEmail, subject, htmlBody, meta = {}) {
           content: wrapInBrandTemplate(subject, htmlBody),
         },
         toRecipients: [{ emailAddress: { address: toEmail } }],
+        ...(cc.length ? { ccRecipients: cc.map(addr => ({ emailAddress: { address: addr } })) } : {}),
+        ...(bcc.length ? { bccRecipients: bcc.map(addr => ({ emailAddress: { address: addr } })) } : {}),
       },
     };
 

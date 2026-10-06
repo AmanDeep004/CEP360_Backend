@@ -58,9 +58,10 @@ const startServer = async () => {
     const campaignReportRoutes = (
       await import("./routes/campaignReportRoutes.js")
     ).default;
-    const assetRoutes     = (await import("./routes/assetRoutes.js")).default;
-    const recordingsRoute = (await import("./routes/recordingsRoute.js")).default;
-    const contractRoutes  = (await import("./routes/contractRoutes.js")).default;
+    const assetRoutes = (await import("./routes/assetRoutes.js")).default;
+    const recordingsRoute = (await import("./routes/recordingsRoute.js"))
+      .default;
+    const contractRoutes = (await import("./routes/contractRoutes.js")).default;
     const checkEndedCampaigns = await import("./utils/endedCampaign.js");
 
     const app = express();
@@ -438,10 +439,31 @@ const startServer = async () => {
       "5 0 * * *",
       async () => {
         try {
-          const { autoExpireContracts } = await import("./controllers/contractController.js");
+          const { autoExpireContracts } = await import(
+            "./controllers/contractController.js"
+          );
           await autoExpireContracts();
         } catch (err) {
-          console.error("[CONTRACT-CRON] Auto-expiry failed:", err?.message || err);
+          console.error(
+            "[CONTRACT-CRON] Auto-expiry failed:",
+            err?.message || err
+          );
+        }
+      },
+      { timezone: "Asia/Kolkata" }
+    );
+
+    // Weekly management report — every Monday 9:00 AM IST (test: 3:15 PM)
+    cron.schedule(
+      "0 9 * * 1",
+      async () => {
+        try {
+          const { sendWeeklyReport } = await import(
+            "./services/weeklyReportService.js"
+          );
+          await sendWeeklyReport();
+        } catch (err) {
+          console.error("[DAILY-REPORT-CRON] Failed:", err?.message || err);
         }
       },
       { timezone: "Asia/Kolkata" }
