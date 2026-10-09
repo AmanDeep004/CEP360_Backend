@@ -56,11 +56,16 @@ const tataGet = async (token, endpoint) => {
 };
 
 // ── POST /tataCalling/call ────────────────────────────────────────────────────
-// Frontend sends: { agentId, tataToken, destinationNumber, callingDataId }
-// Backend fetches agent's tataDIDNo from DB and uses it as agent_number + caller_id.
+// Frontend sends: { agentId, tataToken, destinationNumber, callingDataId, callMode?, agentMobile? }
+// callMode: "softphone" (default, Chrome extension) | "c2c" (Tata calls agent's mobile first)
+// Backend fetches agent's tataDIDNo from DB and uses it as caller_id.
 const initiateCall = asyncHandler(async (req, res, next) => {
   try {
-    const { agentId, tataToken, destinationNumber, callingDataId, campaignId } = req.body;
+    const {
+      agentId, tataToken, destinationNumber, callingDataId, campaignId,
+      callMode = "softphone",  // "softphone" or "c2c"
+      agentMobile,             // only used when callMode === "c2c"
+    } = req.body;
 
     if (!agentId || !tataToken || !destinationNumber) {
       return sendError(
@@ -72,50 +77,59 @@ const initiateCall = asyncHandler(async (req, res, next) => {
 
     // Fetch agent's Tata config from DB
     const agent = await User.findById(agentId).select(
-      "employeeName tataDIDNo tataTeleLoginId"
+      "employeeName tataDIDNo tataTeleLoginId tataC2CMobileNumber"
     );
     if (!agent) return sendError(next, "Agent not found", 404);
 
     const didNo = agent.tataDIDNo;
-    const tataTeleLoginId = agent.tataTeleLoginId;
-    if (!tataTeleLoginId) {
-      return sendError(
-        next,
-        "Agent's Tata Tele Login ID is not configured. Please contact admin.",
-        400
-      );
-    }
     if (!didNo) {
-      return sendError(
-        next,
-        "Agent's Tata DID No is not configured. Please contact admin.",
-        400
-      );
+      return sendError(next, "Agent's Tata DID No is not configured. Please contact admin.", 400);
+    }
+
+    // Mode-specific validation
+    if (callMode === "c2c") {
+      const mobile = agentMobile || agent.tataC2CMobileNumber;
+      if (!mobile) {
+        return sendError(next, "C2C Mobile Number is not configured for this agent. Please contact admin.", 400);
+      }
+    } else {
+      // Softphone mode requires tataTeleLoginId
+      if (!agent.tataTeleLoginId) {
+        return sendError(next, "Agent's Tata Tele Login ID is not configured. Please contact admin.", 400);
+      }
     }
 
     // Normalise destination → digits only, prefixed with 91
     let dest = String(destinationNumber).replace(/[^\d]/g, "");
     if (!dest.startsWith("91")) dest = `91${dest}`;
 
+    // Determine agent_number for Tata:
+    // - Softphone: tataTeleLoginId (rings Chrome extension/softphone)
+    // - C2C: agent's real mobile number (Tata calls mobile first, then bridges to customer)
+    let agentNumberForTata;
+    if (callMode === "c2c") {
+      const rawMobile = agentMobile || agent.tataC2CMobileNumber;
+      agentNumberForTata = String(rawMobile).replace(/[^\d]/g, "");
+      if (!agentNumberForTata.startsWith("91")) agentNumberForTata = `91${agentNumberForTata}`;
+    } else {
+      agentNumberForTata = String(agent.tataTeleLoginId);
+    }
+
     // Call Tata click_to_call using agent's own token
     let tataCallId = null;
     let tataRefId = null;
     try {
       const tataPayload = {
-        agent_number: String(tataTeleLoginId),
+        agent_number: agentNumberForTata,
         destination_number: dest,
         caller_id: String(didNo),
         async: 1,
       };
       if (callingDataId) tataPayload.custom_identifier = String(callingDataId);
 
-      const tataRes = await tataPost(
-        tataToken,
-        "/v1/click_to_call",
-        tataPayload
-      );
+      const tataRes = await tataPost(tataToken, "/v1/click_to_call", tataPayload);
       // Tata returns ref_id (queued call reference), not call_id yet.
-      // The actual call_id appears in live_calls once the call connects.
+      // The actual call_id appears in live_calls / webhook once the call connects.
       tataCallId = tataRes?.call_id || null;
       tataRefId = tataRes?.ref_id || null;
     } catch (tataErr) {
@@ -145,7 +159,9 @@ const initiateCall = asyncHandler(async (req, res, next) => {
       webHookResponse: [],
       misc: {
         didNo,
+        callMode,
         tataTeleLoginId: agent.tataTeleLoginId || null,
+        agentMobileUsed: callMode === "c2c" ? agentNumberForTata : null,
         tataRefId: tataRefId || null,
       },
     });

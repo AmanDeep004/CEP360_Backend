@@ -42,6 +42,7 @@ const registerUser = asyncHandler(async (req, res, next) => {
       tataSmartFlowPassword,
       tataDIDNo,
       tataTeleLoginId,
+      tataC2CMobileNumber,
       contractDuration,
     } = req.body;
 
@@ -91,6 +92,7 @@ const registerUser = asyncHandler(async (req, res, next) => {
       tataSmartFlowPassword,
       tataDIDNo,
       tataTeleLoginId,
+      tataC2CMobileNumber,
       contractDuration: contractDuration || "6months",
     });
 
@@ -277,6 +279,7 @@ const updateUserProfile = asyncHandler(async (req, res, next) => {
       "tataSmartFlowPassword",
       "tataDIDNo",
       "tataTeleLoginId",
+      "tataC2CMobileNumber",
     ];
 
     if (req.user.role === SUPERADMIN || req.user.role === ADMIN || req.user.role === RESOURCE_MANAGER) {

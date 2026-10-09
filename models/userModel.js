@@ -205,6 +205,12 @@ const userSchema = new Schema(
       type: String,
       trim: true,
     },
+    tataC2CMobileNumber: {
+      type: String,
+      trim: true,
+      // Agent's real mobile number for Click-to-Call mode.
+      // Tata calls this number first, then bridges to the customer.
+    },
     panAlertDismissed: {
       type: Boolean,
       default: false,
