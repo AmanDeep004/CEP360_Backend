@@ -8,6 +8,8 @@ import {
   restoreAsset,
   assignAsset,
   releaseAsset,
+  markMaintenance,
+  fixMaintenance,
   getAssetHistory,
   getPMReport,
   getPMAgents,
@@ -40,9 +42,11 @@ router.put("/:id",            protect, authorize(...IT_ROLES), updateAsset);
 router.delete("/:id",         protect, authorize(...IT_ROLES), deleteAsset);
 
 // Assignment
-router.put("/:id/assign",     protect, authorize(...IT_ROLES), assignAsset);
-router.put("/:id/release",    protect, authorize(...IT_ROLES), releaseAsset);
-router.put("/:id/restore",    protect, authorize(...IT_ROLES), restoreAsset);
+router.put("/:id/assign",       protect, authorize(...IT_ROLES), assignAsset);
+router.put("/:id/release",      protect, authorize(...IT_ROLES), releaseAsset);
+router.put("/:id/restore",      protect, authorize(...IT_ROLES), restoreAsset);
+router.put("/:id/maintenance",  protect, authorize(...IT_ROLES), markMaintenance);
+router.put("/:id/fix",          protect, authorize(...IT_ROLES), fixMaintenance);
 
 // History
 router.get("/:id/history",    protect, authorize(...IT_ROLES), getAssetHistory);

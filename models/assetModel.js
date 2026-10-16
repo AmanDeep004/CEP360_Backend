@@ -5,7 +5,7 @@ const { Schema } = mongoose;
 
 const assetHistorySchema = new Schema(
   {
-    action:          { type: String, enum: ["assigned", "released"], required: true },
+    action:          { type: String, enum: ["assigned", "released", "maintenance", "fixed"], required: true },
     agent:           { type: Schema.Types.ObjectId, ref: "User", default: null },
     agentName:       { type: String, default: null },
     agentCode:       { type: String, default: null },
@@ -30,7 +30,8 @@ const assetSchema = new Schema(
 
     addedBy:           { type: Schema.Types.ObjectId, ref: "User", required: true },
 
-    status:        { type: String, enum: ["assigned", "unassigned"], default: "unassigned" },
+    status:        { type: String, enum: ["assigned", "unassigned", "maintenance"], default: "unassigned" },
+    maintenanceNote: { type: String, default: "" },
     assignedAgent: { type: Schema.Types.ObjectId, ref: "User", default: null },
     associatedPM:  { type: Schema.Types.ObjectId, ref: "User", default: null },
     assignedBy:    { type: Schema.Types.ObjectId, ref: "User", default: null },

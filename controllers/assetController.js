@@ -26,7 +26,7 @@ export const getAssets = asyncHandler(async (req, res, next) => {
     const { status, pmId, search, page = 1, limit = 20 } = req.query;
 
     const filter = { isDeleted: { $ne: true } };
-    if (status === "assigned" || status === "unassigned") filter.status = status;
+    if (["assigned", "unassigned", "maintenance"].includes(status)) filter.status = status;
     if (pmId) filter.associatedPM = pmId;
     if (search) {
       const re = new RegExp(search.trim(), "i");
@@ -66,14 +66,16 @@ export const getAssets = asyncHandler(async (req, res, next) => {
 export const getAssetStats = asyncHandler(async (req, res, next) => {
   try {
     const Asset = getAsset();
-    const [total, assigned] = await Promise.all([
+    const [total, assigned, maintenance] = await Promise.all([
       Asset.countDocuments({ isDeleted: { $ne: true } }),
       Asset.countDocuments({ isDeleted: { $ne: true }, status: "assigned" }),
+      Asset.countDocuments({ isDeleted: { $ne: true }, status: "maintenance" }),
     ]);
     return sendResponse(res, 200, "Asset stats", {
       total,
       assigned,
-      unassigned: total - assigned,
+      maintenance,
+      unassigned: total - assigned - maintenance,
     });
   } catch (err) {
     return sendError(next, err.message, 500);
@@ -234,6 +236,8 @@ export const assignAsset = asyncHandler(async (req, res, next) => {
     if (!asset) return sendError(next, "Asset not found", 404);
     if (asset.status === "assigned")
       return sendError(next, "Asset is already assigned. Release it first.", 400);
+    if (asset.status === "maintenance")
+      return sendError(next, "Asset is under maintenance. Mark it as fixed before assigning.", 400);
 
     // Fetch agent and pm details for history snapshot
     const [agent, pm, itAdmin] = await Promise.all([
@@ -327,6 +331,78 @@ export const releaseAsset = asyncHandler(async (req, res, next) => {
       .lean();
 
     return sendResponse(res, 200, "Asset released successfully", populated);
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+// ── PUT /asset/:id/maintenance — mark asset as under maintenance ──────────────
+export const markMaintenance = asyncHandler(async (req, res, next) => {
+  try {
+    const Asset = getAsset();
+    const { id } = req.params;
+    const { note } = req.body;
+
+    const asset = await Asset.findOne({ _id: id, isDeleted: { $ne: true } });
+    if (!asset) return sendError(next, "Asset not found", 404);
+    if (asset.status === "assigned")
+      return sendError(next, "Cannot send an assigned asset to maintenance. Release it first.", 400);
+    if (asset.status === "maintenance")
+      return sendError(next, "Asset is already under maintenance.", 400);
+
+    const itAdmin = await User.findById(req.user._id).select("employeeName").lean();
+
+    asset.status          = "maintenance";
+    asset.maintenanceNote = note?.trim() || "";
+    asset.history.push({
+      action:          "maintenance",
+      performedBy:     req.user._id,
+      performedByName: itAdmin?.employeeName || "IT Admin",
+      note:            note?.trim() || "",
+      timestamp:       new Date(),
+    });
+
+    await asset.save();
+
+    const populated = await Asset.findById(id)
+      .populate(POPULATE_AGENT).populate(POPULATE_PM).populate(POPULATE_ADDED_BY).lean();
+
+    return sendResponse(res, 200, "Asset marked as under maintenance", populated);
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+// ── PUT /asset/:id/fix — mark maintenance asset as fixed (back to unassigned) ─
+export const fixMaintenance = asyncHandler(async (req, res, next) => {
+  try {
+    const Asset = getAsset();
+    const { id } = req.params;
+    const { note } = req.body;
+
+    const asset = await Asset.findOne({ _id: id, isDeleted: { $ne: true } });
+    if (!asset) return sendError(next, "Asset not found", 404);
+    if (asset.status !== "maintenance")
+      return sendError(next, "Asset is not under maintenance.", 400);
+
+    const itAdmin = await User.findById(req.user._id).select("employeeName").lean();
+
+    asset.status          = "unassigned";
+    asset.maintenanceNote = "";
+    asset.history.push({
+      action:          "fixed",
+      performedBy:     req.user._id,
+      performedByName: itAdmin?.employeeName || "IT Admin",
+      note:            note?.trim() || "Maintenance completed. Asset marked as available.",
+      timestamp:       new Date(),
+    });
+
+    await asset.save();
+
+    const populated = await Asset.findById(id)
+      .populate(POPULATE_AGENT).populate(POPULATE_PM).populate(POPULATE_ADDED_BY).lean();
+
+    return sendResponse(res, 200, "Asset marked as fixed and available", populated);
   } catch (err) {
     return sendError(next, err.message, 500);
   }
