@@ -240,11 +240,11 @@ const getSharedReport = asyncHandler(async (req, res, next) => {
 const STATIC_COLUMNS = [
   { key: "uniqueId",        header: "Unique ID",         width: 26 },
   // Contact
-  { key: "Contact_ID",      header: "Contact ID",       width: 18 },
+  { key: "Contact_ID",      header: "Contact ID",        width: 18 },
   { key: "Full_Name",       header: "Full Name",         width: 24 },
   { key: "Gender",          header: "Gender",            width: 10 },
   { key: "Job_Title",       header: "Job Title",         width: 28 },
-  { key: "Job_Seniority",           header: "Job Seniority",           width: 18 },
+  { key: "Job_Seniority",           header: "Job Seniority",            width: 18 },
   { key: "Job_Seniority_Secondary", header: "Job Seniority (Secondary)", width: 22 },
   { key: "Job_Seniority_Tertiary",  header: "Job Seniority (Tertiary)",  width: 22 },
   { key: "Job_Function",            header: "Job Function",              width: 20 },
@@ -252,6 +252,15 @@ const STATIC_COLUMNS = [
   { key: "Contact_State",   header: "State",             width: 16 },
   { key: "Contact_Country", header: "Country",           width: 16 },
   { key: "Contact_Region",  header: "Region",            width: 16 },
+  // Phone numbers
+  { key: "Mobile_No",              header: "Mobile No",             width: 18 },
+  { key: "Contact_Direct_Phone1",  header: "Direct Phone 1",        width: 18 },
+  { key: "Contact_Direct_Phone2",  header: "Direct Phone 2",        width: 18 },
+  // Emails
+  { key: "Office_Email_1",  header: "Office Email 1",   width: 30 },
+  { key: "Office_Email_2",  header: "Office Email 2",   width: 30 },
+  { key: "Personal_Email1", header: "Personal Email 1", width: 30 },
+  { key: "Personal_Email2", header: "Personal Email 2", width: 30 },
   // Company
   { key: "Company_Name",    header: "Company Name",      width: 28 },
   { key: "Company_Segment", header: "Company Segment",   width: 18 },
@@ -262,7 +271,7 @@ const STATIC_COLUMNS = [
   // CRM Status
   { key: "isRegistered",    header: "Registered",        width: 12 },
   { key: "lastRemarks",     header: "Last Remarks",      width: 28 },
-  { key: "lastCallingDate", header: "Last Calling Date",  width: 20 },
+  { key: "lastCallingDate", header: "Last Calling Date", width: 20 },
   // Agent
   { key: "agentName",       header: "Agent Name",        width: 22 },
   { key: "agentEmail",      header: "Agent Email",       width: 28 },
@@ -272,6 +281,8 @@ const STATIC_COLUMNS = [
 
 const SELECT_DOWNLOAD = "Contact_ID Full_Name Gender Job_Title Job_Seniority Job_Seniority_Secondary Job_Seniority_Tertiary Job_Function " +
   "Contact_City Contact_State Contact_Country Contact_Region " +
+  "Mobile_No Contact_Direct_Phone1 Contact_Direct_Phone2 " +
+  "Office_Email_1 Office_Email_2 Personal_Email1 Personal_Email2 " +
   "Company_Name Company_Segment Industry Sub_Industry Employees_Range Turnover_Range " +
   "isRegistered lastRemarks lastCallingDate agentId callHistory";
 
