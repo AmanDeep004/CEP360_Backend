@@ -1837,6 +1837,7 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
         regions,
         states,
         cities,
+        tiers,
         industries,
         subIndustries,
         jobFunctions,
@@ -1904,6 +1905,7 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
         distinctContactValues(regionMatchStage, "Contact_Region"),
         distinctContactValues(stateMatchStage, "Contact_State"),
         distinctContactValues(cityMatchStage, "Contact_City"),
+        distinctContactValues({ Contact_Location_Tier: BLANK_FILTER }, "Contact_Location_Tier"),
         // Industry hierarchy
         distinctCompanyValues(industryMatchStage, "Industry"),
         distinctCompanyValues(subIndustryMatchStage, "Sub_Industry"),
@@ -1933,6 +1935,11 @@ const getDropdownFilters = asyncHandler(async (req, res, next) => {
         regions,
         states,
         cities,
+        tiers: tiers.sort((a, b) => {
+          // Sort: Tier 1, Tier 2, … Tier 5, Out of India, then anything else
+          const tierNum = (s) => { const m = s.match(/Tier\s*(\d+)/i); return m ? parseInt(m[1]) : 999; };
+          return tierNum(a) - tierNum(b);
+        }),
         genders: ["Male", "Female"],
       };
 
