@@ -91,6 +91,7 @@ const CONTACT_ONLY_FIELDS = new Set([
   "Contact_State",
   "Contact_Region",
   "Contact_City",
+  "Contact_Location_Tier",
   "Job_Function",
   "Job_Seniority",
   "Job_Seniority_Secondary",

@@ -2,6 +2,7 @@ import Campaign from "../models/campaignModel.js";
 import errorHandler from "../utils/index.js";
 import User from "../models/userModel.js";
 import CallingData from "../models/callingDataModal.js";
+import CampaignFilter from "../models/CallingDataFiltrationModel.js";
 import PrioritySlot from "../models/prioritySlotModel.js";
 import CallHistory from "../models/callHistoryModel.js";
 import CallingDataEditApproval from "../models/callingDataEditApprovalModel.js";
@@ -542,6 +543,41 @@ const getAllCallingData = asyncHandler(async (req, res, next) => {
         const end = new Date(req.query.callingDateTo);
         end.setHours(23, 59, 59, 999);
         filter.lastCallingDate.$lte = end;
+      }
+    }
+
+    // CampaignFilter scoping — when filterId is supplied, narrow to contacts matching that filter's conditions
+    if (req.query.filterId && req.query.filterId.trim()) {
+      const cf = await CampaignFilter.findById(req.query.filterId.trim())
+        .select("filters exclusions")
+        .lean();
+      if (cf) {
+        const filterClauses = [];
+        for (const f of cf.filters || []) {
+          if (!Array.isArray(f.value) || !f.value.length) continue;
+          if (f.field === "Job_Seniority") {
+            filterClauses.push({ $or: [
+              { Job_Seniority:           { $in: f.value } },
+              { Job_Seniority_Secondary: { $in: f.value } },
+              { Job_Seniority_Tertiary:  { $in: f.value } },
+            ]});
+          } else {
+            filterClauses.push({ [f.field]: { $in: f.value } });
+          }
+        }
+        for (const f of cf.exclusions || []) {
+          if (!Array.isArray(f.value) || !f.value.length) continue;
+          if (f.field === "Job_Seniority") {
+            filterClauses.push({ Job_Seniority:           { $nin: f.value } });
+            filterClauses.push({ Job_Seniority_Secondary: { $nin: f.value } });
+            filterClauses.push({ Job_Seniority_Tertiary:  { $nin: f.value } });
+          } else {
+            filterClauses.push({ [f.field]: { $nin: f.value } });
+          }
+        }
+        if (filterClauses.length > 0) {
+          filter.$and = [...(filter.$and || []), ...filterClauses];
+        }
       }
     }
 
@@ -1412,6 +1448,7 @@ const closePriority = asyncHandler(async (req, res, next) => {
 // Filterable fields exposed to presales for building priority filter queries
 const PRIORITY_FILTER_FIELDS = [
   "Contact_City",
+  "Contact_Location_Tier",
   "Contact_State",
   "Contact_Region",
   "Contact_Country",
