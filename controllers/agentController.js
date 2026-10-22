@@ -358,7 +358,7 @@ const getCallingDataFilterOptions = asyncHandler(async (req, res, next) => {
       return results.map((r) => r._id).sort();
     };
 
-    const [jobSenioritiesPrimary, jobSenioritiesSecondary, jobSenioritiesTertiary, jobFunctions, cities, states, regions, priorityGroups] =
+    const [jobSenioritiesPrimary, jobSenioritiesSecondary, jobSenioritiesTertiary, jobFunctions, cities, states, regions, tiers, priorityGroups] =
       await Promise.all([
         topValues("Job_Seniority",          200),
         topValues("Job_Seniority_Secondary", 200),
@@ -367,9 +367,14 @@ const getCallingDataFilterOptions = asyncHandler(async (req, res, next) => {
         topValues("Contact_City",           200),
         topValues("Contact_State",          200),
         topValues("Contact_Region",         200),
+        topValues("Contact_Location_Tier",  10),
         topValues("priorityGroup.label",    50),
       ]);
     const jobSeniorities = [...new Set([...jobSenioritiesPrimary, ...jobSenioritiesSecondary, ...jobSenioritiesTertiary])].sort();
+    const sortedTiers = tiers.sort((a, b) => {
+      const n = (s) => { const m = s.match(/Tier\s*(\d+)/i); return m ? parseInt(m[1]) : 999; };
+      return n(a) - n(b);
+    });
 
     return sendResponse(res, 200, "Filter options fetched", {
       jobTitles: [],   // loaded lazily via /callingDataFieldSearch
@@ -378,6 +383,7 @@ const getCallingDataFilterOptions = asyncHandler(async (req, res, next) => {
       cities,
       states,
       regions,
+      tiers: sortedTiers,
       priorityGroups,
     });
   } catch (err) {
@@ -402,6 +408,7 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
       cities,
       states,
       regions,
+      tiers,
       search = "",
       page = 1,
       limit = 20,
@@ -489,6 +496,7 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
     const citiesArr         = parseMulti(cities);
     const statesArr         = parseMulti(states);
     const regionsArr        = parseMulti(regions);
+    const tiersArr          = parseMulti(tiers);
 
     if (jobTitlesArr.length)      filter.Job_Title    = { $in: jobTitlesArr };
     if (jobSenioritiesArr.length) {
@@ -506,9 +514,10 @@ const getCallingDataByAgentData = asyncHandler(async (req, res, next) => {
       }
     }
     if (jobFunctionsArr.length)   filter.Job_Function   = { $in: jobFunctionsArr };
-    if (citiesArr.length)         filter.Contact_City   = { $in: citiesArr };
-    if (statesArr.length)         filter.Contact_State  = { $in: statesArr };
-    if (regionsArr.length)        filter.Contact_Region = { $in: regionsArr };
+    if (citiesArr.length)         filter.Contact_City            = { $in: citiesArr };
+    if (statesArr.length)         filter.Contact_State           = { $in: statesArr };
+    if (regionsArr.length)        filter.Contact_Region          = { $in: regionsArr };
+    if (tiersArr.length)          filter.Contact_Location_Tier   = { $in: tiersArr };
 
     let callingData;
     let total;
