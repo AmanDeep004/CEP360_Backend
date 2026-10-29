@@ -2562,7 +2562,7 @@ const getSharedFilterStats = asyncHandler(async (req, res, next) => {
       isActive: true,
     }).populate({
       path: "campaignFilterId",
-      select: "filteredData filters exclusions misc",
+      select: "filteredData filters exclusions misc campaignId",
     });
 
     if (!sharedFilter) return sendError(next, "Link not found", 404);
@@ -2606,6 +2606,64 @@ const getSharedFilterStats = asyncHandler(async (req, res, next) => {
       }
     }
 
+    // ===== COMPANY MATCH STATS (from latest ClientMatchEntry meta) =====
+    let matchStats = null;
+    try {
+      if (cf?.campaignId) {
+        const metaDoc = await ClientMatchEntry.findOne({
+          campaignId: cf.campaignId,
+          matchType: "meta",
+          dataType: "Client",
+        }).sort({ uploadSession: -1 }).lean();
+
+        if (metaDoc) {
+          const uploadSession = metaDoc.uploadSession;
+          const campaignOid = cf.campaignId;
+          const base = { campaignId: campaignOid, dataType: "Client", uploadSession };
+
+          // complete entries from the resolved session; notMatched + duplicate counts
+          // searched across ALL sessions for this campaign — avoids the re-match session
+          // (which always stores duplicates:[]) shadowing the real upload session's data.
+          const [completeEntries, notMatchedCount, duplicatesCount] = await Promise.all([
+            ClientMatchEntry.find(
+              { ...base, matchType: "complete" },
+              { clientCompanyName: 1, inputName: 1, companyId: 1 }
+            ).lean(),
+            ClientMatchEntry.countDocuments({ campaignId: campaignOid, dataType: "Client", matchType: "notMatched" }),
+            ClientMatchEntry.countDocuments({ campaignId: campaignOid, dataType: "Client", matchType: "duplicate" }),
+          ]);
+
+          const nameKey = (e) => e.clientCompanyName || e.inputName || "";
+
+          // Distinct client company names that matched in MasterDB
+          const matchedNameSet = new Set(completeEntries.map(nameKey).filter(Boolean));
+
+          // MasterDB company IDs present in this campaign's assigned calling data (post-filter)
+          const callingCompanyIds = await CallingData.distinct("Company_ID", { CampaignId: cf.campaignId });
+          const callingSet = new Set(callingCompanyIds.map((id) => id?.toString()));
+
+          // Client company names where at least one matched MasterDB company has contacts in the campaign
+          const withDataNameSet = new Set();
+          for (const entry of completeEntries) {
+            if (entry.companyId && callingSet.has(entry.companyId.toString())) {
+              const name = nameKey(entry);
+              if (name) withDataNameSet.add(name);
+            }
+          }
+
+          matchStats = {
+            totalUploaded: matchedNameSet.size + notMatchedCount + duplicatesCount,
+            matched: matchedNameSet.size,
+            withData: withDataNameSet.size,
+            notMatched: notMatchedCount,
+            duplicates: duplicatesCount,
+          };
+        }
+      }
+    } catch (e) {
+      console.error("[SharedStats matchStats]", e.message);
+    }
+
     // Save tracking + optional cache update in one write
     await sharedFilter.save();
 
@@ -2615,6 +2673,7 @@ const getSharedFilterStats = asyncHandler(async (req, res, next) => {
         expiresAt: sharedFilter.expiresAt,
         revisionNo: sharedFilter.revisionNo,
         crossTabData,
+        matchStats,
       },
     });
   } catch (error) {
@@ -3585,6 +3644,9 @@ const downloadFilteredData = asyncHandler(async (req, res, next) => {
         Personal_Email1:           row.Personal_Email1 || "",
         Personal_Email2:           row.Personal_Email2 || "",
         Contact_LinkedIn_Profile:  row.Contact_LinkedIn_Profile || "",
+        Data_Source:               row.Contact_Source || "",
+        Calling_Status:            row.Telecalling_Remarks || "",
+        Last_Engagement:           row.Last_Engagement || "",
       });
     }
 
