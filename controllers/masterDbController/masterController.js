@@ -296,10 +296,18 @@ const batchCreateFromExcelOld = asyncHandler(async (req, res, next) => {
               DND_Account_Tag: safeString(r.DND_Account_Tag),
 
               // Engagement fields
-              Last_Engagement: safeString(r.Last_Engagement),
-              Last_Engagement_Date: parseDate(r.Last_Engagement_Date),
-              Last_Engagement_Campaign: safeString(r.Last_Engagement_Campaign),
               Telecalling_Remarks: safeString(r.Telecalling_Remarks),
+              Last_Engagement_Details: {
+                ...(safeString(r.Last_Engagement_Campaign) && { campaignName: safeString(r.Last_Engagement_Campaign) }),
+                ...(parseDate(r.Last_Engagement_Date) && { engagedAt: parseDate(r.Last_Engagement_Date) }),
+                ...((() => {
+                  const v = safeString(r.Last_Engagement)?.trim();
+                  if (!v) return null;
+                  if (v === "Registered & Attended" || v === "Registration & Attendee") return { eventStatus: "Registered & Attended" };
+                  if (v === "Registration" || v === "Registered") return { eventStatus: "Registered" };
+                  return null;
+                })()),
+              },
 
               // Batch and company reference
               BatchName: req.body.batchName || "default_batch",
@@ -738,10 +746,18 @@ const _batchCreateFromExcel_OLD_SYNC = async (req, res, next) => {
               Unsubscribe_Account_Tag: safeString(r.Unsubscribe_Account_Tag),
               DND_Flag: safeString(r["DND Flag (Yes/No)"]),
               DND_Account_Tag: safeString(r.DND_Account_Tag),
-              Last_Engagement: safeString(r.Last_Engagement),
-              Last_Engagement_Date: parseDate(r.Last_Engagement_Date),
-              Last_Engagement_Campaign: safeString(r.Last_Engagement_Campaign),
               Telecalling_Remarks: safeString(r.Telecalling_Remarks),
+              Last_Engagement_Details: {
+                ...(safeString(r.Last_Engagement_Campaign) && { campaignName: safeString(r.Last_Engagement_Campaign) }),
+                ...(parseDate(r.Last_Engagement_Date) && { engagedAt: parseDate(r.Last_Engagement_Date) }),
+                ...((() => {
+                  const v = safeString(r.Last_Engagement)?.trim();
+                  if (!v) return null;
+                  if (v === "Registered & Attended" || v === "Registration & Attendee") return { eventStatus: "Registered & Attended" };
+                  if (v === "Registration" || v === "Registered") return { eventStatus: "Registered" };
+                  return null;
+                })()),
+              },
               BatchName: req.body.batchName || "default_batch",
               Company_ID: companyId,
             },
@@ -1109,9 +1125,7 @@ const CONTACT_READONLY_FIELDS = [
   "EngagementPoints",
   "DND_Flag",
   "DND_Account_Tag",
-  "Last_Engagement",
-  "Last_Engagement_Date",
-  "Last_Engagement_Campaign",
+  "Last_Engagement_Details",
   "Telecalling_Remarks",
   "Unsubscribe_Account_Tag",
   "Unsubscribe_Flag",
@@ -2444,9 +2458,10 @@ const migrateToEngagementHistory = asyncHandler(async (req, res, next) => {
             {
               $inc: { EngagementPoints: 1 },
               $set: {
-                Last_Engagement: "Registered",
-                Last_Engagement_Date: callingData?.registeredOn,
-                Last_Engagement_Campaign: campaign.name,
+                "Last_Engagement_Details.eventStatus":  "Registered",
+                "Last_Engagement_Details.engagedAt":    callingData?.registeredOn,
+                "Last_Engagement_Details.campaignName": campaign.name,
+                "Last_Engagement_Details.campaignId":   campaign._id.toString(),
               },
             },
             { new: true }
@@ -3592,10 +3607,8 @@ async function assignIndividualSearch(req, res, next) {
       Unsubscribe_Account_Tag: c.Unsubscribe_Account_Tag,
       DND_Flag: c.DND_Flag,
       DND_Account_Tag: c.DND_Account_Tag,
-      Last_Engagement: c.Last_Engagement,
-      Last_Engagement_Date: c.Last_Engagement_Date,
-      Last_Engagement_Campaign: c.Last_Engagement_Campaign,
       Telecalling_Remarks: c.Telecalling_Remarks,
+      Last_Engagement_Details: c.Last_Engagement_Details || {},
       EngagementPoints: c.EngagementPoints,
       Company_ID: c.Company_ID?._id || null,
       Company_Name: c.Company_ID?.Company_Name || "",

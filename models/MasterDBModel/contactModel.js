@@ -87,11 +87,6 @@ const ContactSchema = new mongoose.Schema(
     ],
 
     // Engagement
-    Last_Engagement: { type: String, trim: true },
-    Last_Engagement_Date: { type: Date },
-    Last_Engagement_Campaign: { type: String, trim: true },
-
-    //new fields for last engagement details
     Last_Engagement_Details: {
       campaignId:        { type: String, trim: true }, // string (cross-DB ref — no populate)
       campaignName:      { type: String, trim: true },

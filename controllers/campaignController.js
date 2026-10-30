@@ -473,7 +473,7 @@ const CONTACT_FIELDS = [
   "Mobile_No", "Office_Email_1", "Office_Email_2", "Personal_Email1", "Personal_Email2",
   "Contact_LinkedIn_Profile",
   "Unsubscribe_Flag", "Unsubscribe_Account_Tag", "DND_Flag", "DND_Account_Tag",
-  "Last_Engagement", "Last_Engagement_Date", "EngagementPoints", "Last_Engagement_Campaign",
+  "EngagementPoints", "Last_Engagement_Details",
   "Telecalling_Remarks",
   "Company_ID", "Company_Name", "Company_ID_Kestone",
   // "Affinity_ID_Dell", "Company_ID_Google",

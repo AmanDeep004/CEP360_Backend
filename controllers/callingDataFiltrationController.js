@@ -218,10 +218,8 @@ const ASSIGN_PROJECT = {
   Unsubscribe_Account_Tag: 1,
   DND_Flag: 1,
   DND_Account_Tag: 1,
-  Last_Engagement: 1,
-  Last_Engagement_Date: 1,
-  Last_Engagement_Campaign: 1,
   Telecalling_Remarks: 1,
+  Last_Engagement_Details: 1,
   EngagementPoints: 1,
   "company_info._id": 1,
   "company_info.Company_Name": 1,
@@ -329,10 +327,8 @@ function mapContactToEntry(
     Unsubscribe_Account_Tag: row.Unsubscribe_Account_Tag,
     DND_Flag: row.DND_Flag,
     DND_Account_Tag: row.DND_Account_Tag,
-    Last_Engagement: row.Last_Engagement,
-    Last_Engagement_Date: row.Last_Engagement_Date,
-    Last_Engagement_Campaign: row.Last_Engagement_Campaign,
     Telecalling_Remarks: row.Telecalling_Remarks,
+    Last_Engagement_Details: row.Last_Engagement_Details || {},
     Company_ID: row.company_info?._id || null,
     Company_Name: row.company_info?.Company_Name || "",
     Company_ID_Kestone: row.company_info?.Company_ID_Kestone || "",
@@ -3646,7 +3642,7 @@ const downloadFilteredData = asyncHandler(async (req, res, next) => {
         Contact_LinkedIn_Profile:  row.Contact_LinkedIn_Profile || "",
         Data_Source:               row.Contact_Source || "",
         Calling_Status:            row.Telecalling_Remarks || "",
-        Last_Engagement:           row.Last_Engagement || "",
+        Last_Engagement:           row.Last_Engagement_Details?.eventStatus || "",
       });
     }
 

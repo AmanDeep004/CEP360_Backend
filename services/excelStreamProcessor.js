@@ -308,10 +308,18 @@ async function processChunk(rows, batchName, lastNumber, job) {
             Unsubscribe_Account_Tag: safeStr(r.Unsubscribe_Account_Tag),
             DND_Flag: safeStr(r["DND Flag (Yes/No)"]),
             DND_Account_Tag: safeStr(r.DND_Account_Tag),
-            Last_Engagement: safeStr(r.Last_Engagement),
-            Last_Engagement_Date: parseDateVal(r.Last_Engagement_Date),
-            Last_Engagement_Campaign: safeStr(r.Last_Engagement_Campaign),
             Telecalling_Remarks: safeStr(r.Telecalling_Remarks),
+            Last_Engagement_Details: {
+              ...(safeStr(r.Last_Engagement_Campaign) && { campaignName: safeStr(r.Last_Engagement_Campaign) }),
+              ...(parseDateVal(r.Last_Engagement_Date) && { engagedAt: parseDateVal(r.Last_Engagement_Date) }),
+              ...((() => {
+                const v = safeStr(r.Last_Engagement)?.trim();
+                if (!v) return null;
+                if (v === "Registered & Attended" || v === "Registration & Attendee") return { eventStatus: "Registered & Attended" };
+                if (v === "Registration" || v === "Registered") return { eventStatus: "Registered" };
+                return null;
+              })()),
+            },
             BatchName: batchName,
             Company_ID: companyId,
             // Denormalized company fields for 2Cr-scale filtration

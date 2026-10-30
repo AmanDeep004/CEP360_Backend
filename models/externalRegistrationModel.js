@@ -42,9 +42,22 @@ const ExternalRegistrationSchema = new mongoose.Schema(
     Unsubscribe_Account_Tag: { type: String, trim: true },
     DND_Flag: { type: String, trim: true },
     DND_Account_Tag: { type: String, trim: true },
-    Last_Engagement: { type: String, trim: true },
-    Last_Engagement_Date: { type: String, trim: true },
-    Last_Engagement_Campaign: { type: String, trim: true },
+    Last_Engagement_Details: {
+      campaignId:          { type: String, trim: true },
+      campaignName:        { type: String, trim: true },
+      campaignType:        { type: String, trim: true },
+      campaignStartDate:   { type: Date },
+      campaignEndDate:     { type: Date },
+      engagedAt:           { type: Date },
+      Telecalling_Remarks: { type: String, trim: true },
+      Agent_ID:            { type: String, trim: true },
+      Agent_Name:          { type: String, trim: true },
+      eventStatus: {
+        type: String,
+        enum: ["Registered", "Registered & Attended", null],
+        default: null,
+      },
+    },
     Telecalling_Remarks: { type: String, trim: true },
 
     // Master Company Fields
