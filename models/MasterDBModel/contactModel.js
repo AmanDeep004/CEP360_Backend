@@ -52,36 +52,36 @@ const ContactSchema = new mongoose.Schema(
     // ── Structured channel-level suppression ──────────────────────────────────
     // Global flags — set when scope is "global" for that channel.
     // Filtration stage uses these to exclude contacts from future campaigns.
-    DND_Calling:  { type: Boolean, default: false, index: true },
-    DND_Email:    { type: Boolean, default: false, index: true },
+    DND_Calling: { type: Boolean, default: false, index: true },
+    DND_Email: { type: Boolean, default: false, index: true },
     DND_Whatsapp: { type: Boolean, default: false, index: true },
 
     // Brand-scoped suppression — one entry per brand that suppressed this contact.
     // Filtration stage queries: "DND_Calling_Companies.brandId": { $nin: [clientCompanyId] }
     DND_Calling_Companies: [
       {
-        brandId:   { type: String, trim: true },
+        brandId: { type: String, trim: true },
         brandName: { type: String, trim: true },
-        setAt:     { type: Date, default: Date.now },
-        setBy:     { type: String, trim: true },   // agent userId
+        setAt: { type: Date, default: Date.now },
+        setBy: { type: String, trim: true }, // agent userId
         setByName: { type: String, trim: true },
       },
     ],
     DND_Email_Companies: [
       {
-        brandId:   { type: String, trim: true },
+        brandId: { type: String, trim: true },
         brandName: { type: String, trim: true },
-        setAt:     { type: Date, default: Date.now },
-        setBy:     { type: String, trim: true },
+        setAt: { type: Date, default: Date.now },
+        setBy: { type: String, trim: true },
         setByName: { type: String, trim: true },
       },
     ],
     DND_Whatsapp_Companies: [
       {
-        brandId:   { type: String, trim: true },
+        brandId: { type: String, trim: true },
         brandName: { type: String, trim: true },
-        setAt:     { type: Date, default: Date.now },
-        setBy:     { type: String, trim: true },
+        setAt: { type: Date, default: Date.now },
+        setBy: { type: String, trim: true },
         setByName: { type: String, trim: true },
       },
     ],
@@ -90,6 +90,25 @@ const ContactSchema = new mongoose.Schema(
     Last_Engagement: { type: String, trim: true },
     Last_Engagement_Date: { type: Date },
     Last_Engagement_Campaign: { type: String, trim: true },
+
+    //new fields for last engagement details
+    Last_Engagement_Details: {
+      campaignId:        { type: String, trim: true }, // string (cross-DB ref — no populate)
+      campaignName:      { type: String, trim: true },
+      campaignType:      { type: String, trim: true },
+      campaignStartDate: { type: Date },
+      campaignEndDate:   { type: Date },
+      engagedAt:         { type: Date },               // contact's last engagement date (from Last_Engagement_Date)
+      Telecalling_Remarks: { type: String, trim: true },
+      Agent_ID:          { type: String, trim: true }, // string (cross-DB ref — no populate)
+      Agent_Name:        { type: String, trim: true },
+      eventStatus: {
+        type: String,
+        enum: ["Registered", "Registered & Attended", null],
+        default: null,
+      },
+    },
+
     Telecalling_Remarks: { type: String, trim: true },
 
     // Extra
@@ -97,11 +116,11 @@ const ContactSchema = new mongoose.Schema(
 
     // Denormalized from Company — for 2Cr-scale filtration (eliminates $lookup)
     // READ-ONLY via API: synced automatically when Company fields change
-    Industry:        { type: String, trim: true, index: true },
-    Sub_Industry:    { type: String, trim: true, index: true },
+    Industry: { type: String, trim: true, index: true },
+    Sub_Industry: { type: String, trim: true, index: true },
     Company_Segment: { type: String, trim: true, index: true },
     Employees_Range: { type: String, trim: true },
-    Turnover_Range:  { type: String, trim: true },
+    Turnover_Range: { type: String, trim: true },
 
     Company_ID: {
       type: mongoose.Schema.Types.ObjectId,
