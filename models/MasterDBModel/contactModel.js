@@ -104,8 +104,6 @@ const ContactSchema = new mongoose.Schema(
       },
     },
 
-    Telecalling_Remarks: { type: String, trim: true },
-
     // Extra
     BatchName: { type: String, required: true, trim: true },
 

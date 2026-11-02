@@ -125,7 +125,7 @@ const uploadcallingData = asyncHandler(async (req, res, next) => {
       Company_LinkedIn_Profile: row.Company_LinkedIn_Profile || "",
       Company_Phone1: row.Company_Phone1 || "",
       Company_Phone2: row.Company_Phone2 || "",
-      Telecalling_Remarks: row.Telecalling_Remarks || "",
+      Telecalling_Remarks: row.Last_Engagement_Details?.Telecalling_Remarks || "",
       Last_Engagement_Details: row.Last_Engagement_Details || {},
       source: row.Source || "",
       batch: row.Batch || "",

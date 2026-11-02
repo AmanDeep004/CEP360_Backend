@@ -259,7 +259,7 @@ const uploadExternalDataControllerOld = asyncHandler(async (req, res, next) => {
           DND_Flag: row.DND_Flag,
           DND_Account_Tag: row.DND_Account_Tag,
           Last_Engagement_Details: row.Last_Engagement_Details || {},
-          Telecalling_Remarks: row.Telecalling_Remarks,
+          Telecalling_Remarks: row.Last_Engagement_Details?.Telecalling_Remarks || "",
           Company_Name: row.Company_Name,
           Company_ID_Kestone: row.Company_ID_Kestone,
           Affinity_ID_Dell: row.Affinity_ID_Dell,

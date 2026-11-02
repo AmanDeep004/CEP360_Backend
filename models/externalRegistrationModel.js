@@ -58,8 +58,6 @@ const ExternalRegistrationSchema = new mongoose.Schema(
         default: null,
       },
     },
-    Telecalling_Remarks: { type: String, trim: true },
-
     // Master Company Fields
     Company_ID: { type: mongoose.Schema.Types.ObjectId, ref: "Company" },
     Company_Name: { type: String, trim: true },

@@ -308,7 +308,6 @@ async function processChunk(rows, batchName, lastNumber, job) {
             Unsubscribe_Account_Tag: safeStr(r.Unsubscribe_Account_Tag),
             DND_Flag: safeStr(r["DND Flag (Yes/No)"]),
             DND_Account_Tag: safeStr(r.DND_Account_Tag),
-            Telecalling_Remarks: safeStr(r.Telecalling_Remarks),
             Last_Engagement_Details: {
               ...(safeStr(r.Last_Engagement_Campaign) && { campaignName: safeStr(r.Last_Engagement_Campaign) }),
               ...(parseDateVal(r.Last_Engagement_Date) && { engagedAt: parseDateVal(r.Last_Engagement_Date) }),

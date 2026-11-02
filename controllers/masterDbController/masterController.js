@@ -296,7 +296,6 @@ const batchCreateFromExcelOld = asyncHandler(async (req, res, next) => {
               DND_Account_Tag: safeString(r.DND_Account_Tag),
 
               // Engagement fields
-              Telecalling_Remarks: safeString(r.Telecalling_Remarks),
               Last_Engagement_Details: {
                 ...(safeString(r.Last_Engagement_Campaign) && { campaignName: safeString(r.Last_Engagement_Campaign) }),
                 ...(parseDate(r.Last_Engagement_Date) && { engagedAt: parseDate(r.Last_Engagement_Date) }),
@@ -746,7 +745,6 @@ const _batchCreateFromExcel_OLD_SYNC = async (req, res, next) => {
               Unsubscribe_Account_Tag: safeString(r.Unsubscribe_Account_Tag),
               DND_Flag: safeString(r["DND Flag (Yes/No)"]),
               DND_Account_Tag: safeString(r.DND_Account_Tag),
-              Telecalling_Remarks: safeString(r.Telecalling_Remarks),
               Last_Engagement_Details: {
                 ...(safeString(r.Last_Engagement_Campaign) && { campaignName: safeString(r.Last_Engagement_Campaign) }),
                 ...(parseDate(r.Last_Engagement_Date) && { engagedAt: parseDate(r.Last_Engagement_Date) }),
@@ -1126,7 +1124,6 @@ const CONTACT_READONLY_FIELDS = [
   "DND_Flag",
   "DND_Account_Tag",
   "Last_Engagement_Details",
-  "Telecalling_Remarks",
   "Unsubscribe_Account_Tag",
   "Unsubscribe_Flag",
   "discrepencyInData",
@@ -3607,7 +3604,7 @@ async function assignIndividualSearch(req, res, next) {
       Unsubscribe_Account_Tag: c.Unsubscribe_Account_Tag,
       DND_Flag: c.DND_Flag,
       DND_Account_Tag: c.DND_Account_Tag,
-      Telecalling_Remarks: c.Telecalling_Remarks,
+      Telecalling_Remarks: c.Last_Engagement_Details?.Telecalling_Remarks || "",
       Last_Engagement_Details: c.Last_Engagement_Details || {},
       EngagementPoints: c.EngagementPoints,
       Company_ID: c.Company_ID?._id || null,
