@@ -76,27 +76,18 @@ const ContactSchema = new mongoose.Schema(
         setByName: { type: String, trim: true },
       },
     ],
-    DND_Whatsapp_Companies: [
-      {
-        brandId: { type: String, trim: true },
-        brandName: { type: String, trim: true },
-        setAt: { type: Date, default: Date.now },
-        setBy: { type: String, trim: true },
-        setByName: { type: String, trim: true },
-      },
-    ],
 
     // Engagement
     Last_Engagement_Details: {
-      campaignId:        { type: String, trim: true }, // string (cross-DB ref — no populate)
-      campaignName:      { type: String, trim: true },
-      campaignType:      { type: String, trim: true },
+      campaignId: { type: String, trim: true }, // string (cross-DB ref — no populate)
+      campaignName: { type: String, trim: true },
+      campaignType: { type: String, trim: true },
       campaignStartDate: { type: Date },
-      campaignEndDate:   { type: Date },
-      engagedAt:         { type: Date },               // contact's last engagement date (from Last_Engagement_Date)
+      campaignEndDate: { type: Date },
+      engagedAt: { type: Date }, // contact's last engagement date (from Last_Engagement_Date)
       Telecalling_Remarks: { type: String, trim: true },
-      Agent_ID:          { type: String, trim: true }, // string (cross-DB ref — no populate)
-      Agent_Name:        { type: String, trim: true },
+      Agent_ID: { type: String, trim: true }, // string (cross-DB ref — no populate)
+      Agent_Name: { type: String, trim: true },
       eventStatus: {
         type: String,
         enum: ["Registered", "Registered & Attended", null],
@@ -122,11 +113,135 @@ const ContactSchema = new mongoose.Schema(
     },
     discrepencyInData: {
       status: { type: Boolean, default: false },
-      chatHistory: { type: Array },
+
+      // Who flagged it
+      flagged_at:      { type: Date },
+      flagged_by:      { type: String, trim: true },
+      flagged_by_name: { type: String, trim: true },
+
+      // Which fields are discrepant
+      fields: [
+        {
+          field_name:      { type: String, trim: true },
+          current_value:   { type: mongoose.Schema.Types.Mixed },
+          suggested_value: { type: mongoose.Schema.Types.Mixed },
+          source:          { type: String, trim: true }, // "LinkedIn", "Manual", "Import", "Client", etc.
+        },
+      ],
+
+      // Resolution
+      resolved_at:       { type: Date },
+      resolved_by:       { type: String, trim: true },
+      resolved_by_name:  { type: String, trim: true },
+      resolution: {
+        type: String,
+        trim: true,
+        enum: ["accepted", "rejected", "corrected", null],
+        default: null,
+      },
+
+      // Conversation thread between reporter ↔ DB manager
+      chatHistory: [
+        {
+          message:      { type: String, trim: true },
+          sent_by:      { type: String, trim: true },
+          sent_by_name: { type: String, trim: true },
+          sent_at:      { type: Date, default: Date.now },
+          role: {
+            type: String,
+            trim: true,
+            enum: ["reporter", "db_manager", "system"],
+          },
+        },
+      ],
+
       misc: { type: Object, default: {} },
     },
 
     EngagementPoints: { type: Number, default: 0, index: true },
+
+    // ── NeverBounce email verification ────────────────────────────────────────
+    never_bounce: {
+      id: { type: String, trim: true },
+      status: {
+        type: String,
+        trim: true,
+        enum: ["valid", "invalid", "disposable", "catchall", "unknown", null],
+        default: null,
+      },
+    },
+
+    // ── Miscellaneous flexible data ───────────────────────────────────────────
+    misc: { type: Object, default: {} },
+
+    // ── Areas of Interest ─────────────────────────────────────────────────────
+    aoi: [{ type: mongoose.Schema.Types.Mixed }],
+
+    // ── Last Touched (per channel) ────────────────────────────────────────────
+    last_touched: {
+      calling: {
+        date: { type: Date },
+        status: { type: String, trim: true },
+        platform: {
+          type: String,
+          trim: true,
+          enum: ["Cep360", "Versa", "Events", null],
+          default: null,
+        },
+      },
+      email: {
+        date: { type: Date },
+        status: { type: String, trim: true },
+        platform: {
+          type: String,
+          trim: true,
+          enum: ["Cep360", "Versa", "Events", null],
+          default: null,
+        },
+      },
+      whatsapp: {
+        date: { type: Date },
+        status: { type: String, trim: true },
+        campaign_id: { type: String, trim: true },
+        campaign_name: { type: String, trim: true },
+        platform: {
+          type: String,
+          trim: true,
+          enum: ["Cep360", "Versa", "Events", null],
+          default: null,
+        },
+      },
+      linkedin: {
+        date: { type: Date },
+        status: { type: String, trim: true },
+        campaign_id: { type: String, trim: true },
+        campaign_name: { type: String, trim: true },
+        platform: {
+          type: String,
+          trim: true,
+          enum: ["Cep360", "Versa", "Campaign", "Events", null],
+          default: null,
+        },
+      },
+    },
+
+    // ── LinkedIn enrichment ───────────────────────────────────────────────────
+    linkedin: {
+      date: { type: Date },
+      status: {
+        type: String,
+        trim: true,
+        enum: ["pending", "scraped", "failed", "not_found", null],
+        default: null,
+      },
+      // Array of profile snapshot dicts (e.g. summary key-value pairs)
+      profile_dict: [{ type: mongoose.Schema.Types.Mixed }],
+      // Reference to the LinkedinScraped collection document
+      scraped_data_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "LinkedinScraped",
+      },
+    },
   },
   { timestamps: true }
 );
