@@ -19,6 +19,7 @@ import {
   downloadInvoicesZip,
   getInvoiceGenerationSettings,
   updateInvoiceGenerationSettings,
+  getRecentMonthsSettings,
 } from "../controllers/invoiceController.js";
 
 import { protect, authorize } from "../middleware/authMiddleware.js";
@@ -50,11 +51,12 @@ router.get(
 router.get("/salaryDashboard", protect, getSalaryDashboard);
 router.post("/downloadZip", protect, downloadInvoicesZip);
 
-// Invoice generation global lock — RM only
-router.get("/settings",  protect, authorize("resource_manager", "superadmin"), getInvoiceGenerationSettings);
-router.put("/settings",  protect, authorize("resource_manager", "superadmin"), updateInvoiceGenerationSettings);
+// Invoice generation per-month lock — RM only
+router.get("/settings",        protect, authorize("resource_manager", "superadmin"), getInvoiceGenerationSettings);
+router.put("/settings",        protect, authorize("resource_manager", "superadmin"), updateInvoiceGenerationSettings);
+router.get("/settings/recent", protect, getRecentMonthsSettings);
 
-// PM also needs to read settings (to show the frozen banner on their page)
+// PM also needs to read settings for their selected month
 router.get("/settings/status", protect, getInvoiceGenerationSettings);
 
 export default router;

@@ -733,12 +733,6 @@ const getAgentInvoicesDataByMonth = asyncHandler(async (req, res, next) => {
 
 const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
   try {
-    // ── Global invoice generation lock ────────────────────────────────────
-    const invoiceSettings = await getInvoiceSettings();
-    if (!invoiceSettings.invoiceGenerationEnabled) {
-      return sendError(next, "Invoice generation is currently disabled by the Resource Manager.", 403);
-    }
-
     const {
       invoiceId,
       agentId,      // used to auto-create invoice if invoiceId missing
@@ -758,6 +752,12 @@ const updateAndGenerateInvoice = asyncHandler(async (req, res, next) => {
       genBy,
       salaryModBy,
     } = req.body;
+
+    // ── Per-month invoice generation lock ─────────────────────────────────
+    const invoiceSettings = await getInvoiceSettings(month);
+    if (!invoiceSettings.invoiceGenerationEnabled) {
+      return sendError(next, `Invoice generation for ${month || "this month"} is currently disabled by the Resource Manager.`, 403);
+    }
 
     if (!startDate || !endDate || ctc === undefined || ctc === null || !genBy) {
       return sendError(next, "Missing required fields", 400);
@@ -1445,10 +1445,11 @@ const downloadInvoicesZip = asyncHandler(async (req, res, next) => {
   }
 });
 
-// ── Invoice Generation Settings (RM only) ─────────────────────────────────────
+// ── Invoice Generation Settings (per month) ───────────────────────────────────
 const getInvoiceGenerationSettings = asyncHandler(async (req, res, next) => {
   try {
-    const settings = await getInvoiceSettings();
+    const { month } = req.query;
+    const settings = await getInvoiceSettings(month);
     return sendResponse(res, 200, "Invoice settings fetched", settings);
   } catch (err) {
     return sendError(next, err.message, 500);
@@ -1457,9 +1458,12 @@ const getInvoiceGenerationSettings = asyncHandler(async (req, res, next) => {
 
 const updateInvoiceGenerationSettings = asyncHandler(async (req, res, next) => {
   try {
-    const { enabled } = req.body;
+    const { enabled, month } = req.body;
     if (typeof enabled !== "boolean") {
       return sendError(next, "'enabled' must be a boolean", 400);
+    }
+    if (!month) {
+      return sendError(next, "'month' is required", 400);
     }
 
     const now = new Date();
@@ -1475,18 +1479,50 @@ const updateInvoiceGenerationSettings = asyncHandler(async (req, res, next) => {
       setData.disabledByName = req.user.employeeName || null;
     }
 
-    // Upsert the single settings document
+    // Upsert the settings document for this specific month
     const settings = await InvoiceSettings.findOneAndUpdate(
-      {},
+      { month },
       { $set: setData },
       { upsert: true, new: true }
     ).lean();
 
     return sendResponse(
       res, 200,
-      `Invoice generation ${enabled ? "enabled" : "disabled"} successfully`,
+      `Invoice generation ${enabled ? "enabled" : "disabled"} for ${month}`,
       settings
     );
+  } catch (err) {
+    return sendError(next, err.message, 500);
+  }
+});
+
+// ── Bulk month settings — returns last N months' enabled/disabled state ────────
+const getRecentMonthsSettings = asyncHandler(async (req, res, next) => {
+  try {
+    const count = Math.min(parseInt(req.query.count) || 4, 6);
+
+    // Build last `count` month labels — mirrors frontend useMonthRange
+    const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+    const now = new Date();
+    const months = [];
+    for (let i = 0; i < count; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      months.push(`${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`);
+    }
+
+    // Fetch all existing settings docs for these months in one query
+    const docs = await InvoiceSettings.find({ month: { $in: months } }).lean();
+    const docMap = Object.fromEntries(docs.map((d) => [d.month, d]));
+
+    // Return all months, defaulting to enabled if no doc exists
+    const result = months.map((m) => ({
+      month: m,
+      invoiceGenerationEnabled: docMap[m]?.invoiceGenerationEnabled !== false,
+      disabledByName: docMap[m]?.disabledByName || null,
+      disabledAt:     docMap[m]?.disabledAt     || null,
+    }));
+
+    return sendResponse(res, 200, "Recent months settings fetched", result);
   } catch (err) {
     return sendError(next, err.message, 500);
   }
@@ -1511,4 +1547,5 @@ export {
   downloadInvoicesZip,
   getInvoiceGenerationSettings,
   updateInvoiceGenerationSettings,
+  getRecentMonthsSettings,
 };

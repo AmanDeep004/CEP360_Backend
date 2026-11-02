@@ -50,7 +50,7 @@ const SharedFilterSchema = new mongoose.Schema(
 
     allowedDevices: {
       type: Number,
-      default: 3,
+      default: 20,
     },
     accessDevices: [
       {
