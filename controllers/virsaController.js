@@ -94,13 +94,14 @@ export const syncVersaEmailStatus = asyncHandler(async (req, res, next) => {
   let virsaData;
   try {
     const { data } = await axios.post(
-      `${VIRSA_BASE_URL}/email-status`,
+      `${VIRSA_BASE_URL}/user-status-bulk`,
       { campaignId: versaCampaignId, encryptionKey: VIRSA_ENC_KEY, emails: allEmails },
       { headers: { "Content-Type": "application/json" }, timeout: 30000 }
     );
-    virsaData = data?.data || [];
+    // Accept both old shape (data.data) and new shape (data.users / data.results)
+    virsaData = data?.data || data?.users || data?.results || [];
   } catch (err) {
-    return sendError(next, err.message || "Virsa email-status request failed", 500);
+    return sendError(next, err.message || "Virsa user-status-bulk request failed", 500);
   }
 
   // email → virsa result lookup
@@ -124,14 +125,16 @@ export const syncVersaEmailStatus = asyncHandler(async (req, res, next) => {
 
     if (matched) {
       const setFields = {
-        "versa.email":          matched.email,
-        "versa.registered":     matched.registered,
-        "versa.send":           matched.send,
-        "versa.open":           matched.open,
-        "versa.click":          matched.click,
-        "versa.telescriptData": matched.telescriptData ?? null,
-        "versa.exists":         true,
-        "versa.syncedAt":       now,
+        "versa.email":                    matched.email,
+        "versa.registered":               matched.registered,
+        "versa.emailStatus.send":         matched.emailStatus?.send  ?? null,
+        "versa.emailStatus.open":         matched.emailStatus?.open  ?? null,
+        "versa.emailStatus.click":        matched.emailStatus?.click ?? null,
+        "versa.whatsappStatus.read":      matched.whatsappStatus?.read    ?? null,
+        "versa.whatsappStatus.replied":   matched.whatsappStatus?.replied ?? null,
+        "versa.telescriptData":           matched.telescriptData ?? null,
+        "versa.exists":                   true,
+        "versa.syncedAt":                 now,
       };
 
       if (matched.registered === true) {
@@ -158,9 +161,14 @@ export const syncVersaEmailStatus = asyncHandler(async (req, res, next) => {
           filter: { _id: contact.id, "versa.exists": { $ne: true } },
           update: {
             $set: {
-              "versa.email":    contact.emails[0] || null,
-              "versa.exists":   false,
-              "versa.syncedAt": now,
+              "versa.email":                  contact.emails[0] || null,
+              "versa.exists":                 false,
+              "versa.emailStatus.send":       false,
+              "versa.emailStatus.open":       false,
+              "versa.emailStatus.click":      false,
+              "versa.whatsappStatus.read":    false,
+              "versa.whatsappStatus.replied": false,
+              "versa.syncedAt":               now,
             },
           },
         },

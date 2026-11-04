@@ -115,24 +115,24 @@ const ContactSchema = new mongoose.Schema(
       status: { type: Boolean, default: false },
 
       // Who flagged it
-      flagged_at:      { type: Date },
-      flagged_by:      { type: String, trim: true },
+      flagged_at: { type: Date },
+      flagged_by: { type: String, trim: true },
       flagged_by_name: { type: String, trim: true },
 
       // Which fields are discrepant
       fields: [
         {
-          field_name:      { type: String, trim: true },
-          current_value:   { type: mongoose.Schema.Types.Mixed },
+          field_name: { type: String, trim: true },
+          current_value: { type: mongoose.Schema.Types.Mixed },
           suggested_value: { type: mongoose.Schema.Types.Mixed },
-          source:          { type: String, trim: true }, // "LinkedIn", "Manual", "Import", "Client", etc.
+          source: { type: String, trim: true }, // "LinkedIn", "Manual", "Import", "Client", etc.
         },
       ],
 
       // Resolution
-      resolved_at:       { type: Date },
-      resolved_by:       { type: String, trim: true },
-      resolved_by_name:  { type: String, trim: true },
+      resolved_at: { type: Date },
+      resolved_by: { type: String, trim: true },
+      resolved_by_name: { type: String, trim: true },
       resolution: {
         type: String,
         trim: true,
@@ -143,10 +143,10 @@ const ContactSchema = new mongoose.Schema(
       // Conversation thread between reporter ↔ DB manager
       chatHistory: [
         {
-          message:      { type: String, trim: true },
-          sent_by:      { type: String, trim: true },
+          message: { type: String, trim: true },
+          sent_by: { type: String, trim: true },
           sent_by_name: { type: String, trim: true },
-          sent_at:      { type: Date, default: Date.now },
+          sent_at: { type: Date, default: Date.now },
           role: {
             type: String,
             trim: true,
