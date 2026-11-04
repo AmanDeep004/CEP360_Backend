@@ -1441,11 +1441,14 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
         "MasterDbMatchedCompanyName",
         "MasterDBMatchedCompanyName",
         "Master_Db_Matched_Company_Name",
+        "MasterDB Company Name",       // new download format
+        "Matched With (Input)",        // new download format (complete entries)
       ]);
       const clientCompanyName = pickVal(row, [
         "ClientCompanyName",
         "Client_Company_Name",
         "clientCompanyName",
+        "Client Company Name",         // new download format
       ]);
 
       // For Matched: both ClientCompanyName and MasterDbMatchedCompanyName are mandatory.
@@ -1467,6 +1470,7 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
           "companyspecificid",
           "SpecificId",
           "Specific_Id",
+          "Company Unique ID",          // new download format
         ]),
         segment: pickVal(row, [
           "Segment",
@@ -2491,22 +2495,25 @@ const generateMagicLink = asyncHandler(async (req, res, next) => {
       console.error("[generateMagicLink CrossTab]", e.message);
     }
 
-    // If a link already exists for this filter, update its snapshot and return it
+    // If a link already exists for this filter, refresh it and return it
     const existingLink = await SharedFilter.findOne({
       campaignFilterId,
       isActive: true,
     });
 
     if (existingLink) {
+      // Reset device list and refresh expiry so the creator can always access their own link
+      existingLink.accessDevices = [];
+      existingLink.expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       if (crossTabSnapshot) {
         existingLink.misc = { ...(existingLink.misc || {}), crossTabSnapshot };
         existingLink.markModified("misc");
-        await existingLink.save();
       }
+      await existingLink.save();
       const magicLink = `${
         process.env.FRONTEND_URL || req.get("origin")
       }/shared-stats/${existingLink.filterId}`;
-      return sendResponse(res, 200, "Magic link already exists", {
+      return sendResponse(res, 200, "Magic link refreshed", {
         magicLink,
         filterId: existingLink.filterId,
         expiresAt: existingLink.expiresAt,
@@ -2628,20 +2635,20 @@ const getSharedFilterStats = asyncHandler(async (req, res, next) => {
             ClientMatchEntry.countDocuments({ campaignId: campaignOid, dataType: "Client", matchType: "duplicate" }),
           ]);
 
-          const nameKey = (e) => e.clientCompanyName || e.inputName || "";
-
           // Distinct client company names that matched in MasterDB
-          const matchedNameSet = new Set(completeEntries.map(nameKey).filter(Boolean));
+          const matchedNameSet = new Set(
+            completeEntries.map((e) => e.clientCompanyName || e.inputName || "").filter(Boolean)
+          );
 
           // MasterDB company IDs present in this campaign's assigned calling data (post-filter)
           const callingCompanyIds = await CallingData.distinct("Company_ID", { CampaignId: cf.campaignId });
           const callingSet = new Set(callingCompanyIds.map((id) => id?.toString()));
 
-          // Client company names where at least one matched MasterDB company has contacts in the campaign
+          // Unique clientCompanyName values where the matched MasterDB company has contacts in the campaign
           const withDataNameSet = new Set();
           for (const entry of completeEntries) {
             if (entry.companyId && callingSet.has(entry.companyId.toString())) {
-              const name = nameKey(entry);
+              const name = entry.clientCompanyName || "";
               if (name) withDataNameSet.add(name);
             }
           }
@@ -3583,6 +3590,32 @@ const downloadFilteredData = asyncHandler(async (req, res, next) => {
     const { filters = [], exclusions = [], misc = {} } = filter;
     const companyIds = misc.companyIdsUsed || [];
 
+    // For Client data: build companyId → clientCompanyName map from the latest match session
+    const isClientData = filter.dataType === "Client";
+    const clientCompanyNameMap = new Map();
+    if (isClientData && filter.campaignId) {
+      const metaDoc = await ClientMatchEntry.findOne({
+        campaignId: filter.campaignId,
+        dataType: "Client",
+        matchType: "meta",
+      }).sort({ uploadSession: -1 }).lean();
+
+      if (metaDoc?.uploadSession) {
+        const entries = await ClientMatchEntry.find({
+          campaignId: filter.campaignId,
+          dataType: "Client",
+          uploadSession: metaDoc.uploadSession,
+          matchType: "complete",
+        }).select("companyId clientCompanyName").lean();
+
+        for (const e of entries) {
+          if (e.companyId && e.clientCompanyName) {
+            clientCompanyNameMap.set(String(e.companyId), e.clientCompanyName);
+          }
+        }
+      }
+    }
+
     const preLookup  = buildPreLookupMatch(filters, exclusions, companyIds);
     const postLookup = buildPostLookupMatch(filters, exclusions);
     const pipeline   = buildAssignPipeline(preLookup, postLookup);
@@ -3594,6 +3627,7 @@ const downloadFilteredData = asyncHandler(async (req, res, next) => {
     const rows = [];
     for await (const row of cursor) {
       rows.push({
+        ...(isClientData ? { Client_Company_Name: clientCompanyNameMap.get(String(row.company_info?._id)) || "" } : {}),
         Company_Name:              row.company_info?.Company_Name || "",
         Company_ID_Kestone:        row.company_info?.Company_ID_Kestone || "",
         Industry:                  row.company_info?.Industry || "",

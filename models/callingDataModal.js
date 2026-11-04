@@ -141,6 +141,10 @@ const CallingDataSchema = new mongoose.Schema(
     versa: {
       email:          { type: String,  default: null },
       registered:     { type: Boolean, default: null },
+      // Legacy flat fields (old /email-status API) — kept for backward compat with existing DB docs
+      send:           { type: Boolean, default: null },
+      open:           { type: Boolean, default: null },
+      click:          { type: Boolean, default: null },
       // Nested from new /user-status-bulk API shape
       emailStatus: {
         send:  { type: Boolean, default: null },
