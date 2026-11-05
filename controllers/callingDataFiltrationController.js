@@ -1451,16 +1451,19 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
         "Client Company Name",         // new download format
       ]);
 
-      // For Matched: both ClientCompanyName and MasterDbMatchedCompanyName are mandatory.
-      if (status === "Matched" && (!masterDbName || !clientCompanyName)) return null;
-      // For NotMatched / Duplicate: ClientCompanyName is required as display name.
-      if (status !== "Matched" && !clientCompanyName) return null;
+      // For Matched: at minimum the MasterDB name is required for DB lookup.
+      if (status === "Matched" && !masterDbName) return null;
+      // For NotMatched / Duplicate: at least one name is required as display name.
+      if (status !== "Matched" && !clientCompanyName && !masterDbName) return null;
 
       const name = masterDbName || clientCompanyName;
+      // If clientCompanyName is blank (old format / re-upload of old download),
+      // fall back to the input name so the column is never empty.
+      const resolvedClientName = clientCompanyName || name;
 
       return {
         name,
-        clientCompanyName,
+        clientCompanyName: resolvedClientName,
         companySpecificId: pickVal(row, [
           "CompanyUniqueId",
           "Company_Unique_Id",
@@ -2564,7 +2567,7 @@ const getSharedFilterStats = asyncHandler(async (req, res, next) => {
       isActive: true,
     }).populate({
       path: "campaignFilterId",
-      select: "filteredData filters exclusions misc campaignId",
+      select: "filteredData filters exclusions misc campaignId dataType",
     });
 
     if (!sharedFilter) return sendError(next, "Link not found", 404);
@@ -2608,50 +2611,67 @@ const getSharedFilterStats = asyncHandler(async (req, res, next) => {
       }
     }
 
-    // ===== COMPANY MATCH STATS (from latest ClientMatchEntry meta) =====
+    // ===== COMPANY MATCH STATS =====
+    // Mirror exactly the same logic as downloadFilteredData:
+    //   build clientCompanyNameMap from filter's companyMetaMap snapshot,
+    //   then count unique client names among the filtered companies
+    //   (stored in filteredData.companyBreakdown at filter-apply time).
     let matchStats = null;
     try {
-      if (cf?.campaignId) {
-        const metaDoc = await ClientMatchEntry.findOne({
-          campaignId: cf.campaignId,
-          matchType: "meta",
-          dataType: "Client",
-        }).sort({ uploadSession: -1 }).lean();
+      if (cf?.campaignId && cf.dataType === "Client") {
+        const campaignOid = cf.campaignId;
 
-        if (metaDoc) {
-          const uploadSession = metaDoc.uploadSession;
-          const campaignOid = cf.campaignId;
-          const base = { campaignId: campaignOid, dataType: "Client", uploadSession };
+        // Step 1: build companyId → clientName map (same as download)
+        const rawMetaMap = cf.misc?.companyMetaMap || {};
+        const clientCompanyNameMap = new Map();
+        for (const [companyId, meta] of Object.entries(rawMetaMap)) {
+          const clientName =
+            meta.clientCompanyName ||
+            meta.masterDbMatchedCompanyName ||
+            meta.companyName ||
+            "";
+          if (clientName) clientCompanyNameMap.set(companyId, clientName);
+        }
 
-          // complete entries from the resolved session; notMatched + duplicate counts
-          // searched across ALL sessions for this campaign — avoids the re-match session
-          // (which always stores duplicates:[]) shadowing the real upload session's data.
-          const [completeEntries, notMatchedCount, duplicatesCount] = await Promise.all([
-            ClientMatchEntry.find(
-              { ...base, matchType: "complete" },
-              { clientCompanyName: 1, inputName: 1, companyId: 1 }
-            ).lean(),
+        // Fallback for old filters that have no companyMetaMap: use latest ClientMatchEntry
+        if (clientCompanyNameMap.size === 0) {
+          const metaDoc = await ClientMatchEntry.findOne({
+            campaignId: campaignOid, matchType: "meta", dataType: "Client",
+          }).sort({ uploadSession: -1 }).lean();
+
+          if (metaDoc?.uploadSession) {
+            const entries = await ClientMatchEntry.find({
+              campaignId: campaignOid, dataType: "Client",
+              uploadSession: metaDoc.uploadSession, matchType: "complete",
+            }).select("companyId clientCompanyName inputName").lean();
+
+            for (const e of entries) {
+              if (e.companyId) {
+                const name = e.clientCompanyName || e.inputName || "";
+                if (name) clientCompanyNameMap.set(String(e.companyId), name);
+              }
+            }
+          }
+        }
+
+        if (clientCompanyNameMap.size > 0) {
+          // Step 2: count unique client names among the FILTERED companies
+          // (companyBreakdown is saved on the filter at apply-time — same companies
+          //  that appear in the downloaded Excel rows)
+          const companyBreakdown = cf.filteredData?.companyBreakdown || [];
+          const withDataNameSet = new Set();
+          for (const { companyId } of companyBreakdown) {
+            const clientName = clientCompanyNameMap.get(String(companyId));
+            if (clientName) withDataNameSet.add(clientName);
+          }
+
+          // matched = unique client names across ALL matched companies in the map
+          const matchedNameSet = new Set(clientCompanyNameMap.values());
+
+          const [notMatchedCount, duplicatesCount] = await Promise.all([
             ClientMatchEntry.countDocuments({ campaignId: campaignOid, dataType: "Client", matchType: "notMatched" }),
             ClientMatchEntry.countDocuments({ campaignId: campaignOid, dataType: "Client", matchType: "duplicate" }),
           ]);
-
-          // Distinct client company names that matched in MasterDB
-          const matchedNameSet = new Set(
-            completeEntries.map((e) => e.clientCompanyName || e.inputName || "").filter(Boolean)
-          );
-
-          // MasterDB company IDs present in this campaign's assigned calling data (post-filter)
-          const callingCompanyIds = await CallingData.distinct("Company_ID", { CampaignId: cf.campaignId });
-          const callingSet = new Set(callingCompanyIds.map((id) => id?.toString()));
-
-          // Unique clientCompanyName values where the matched MasterDB company has contacts in the campaign
-          const withDataNameSet = new Set();
-          for (const entry of completeEntries) {
-            if (entry.companyId && callingSet.has(entry.companyId.toString())) {
-              const name = entry.clientCompanyName || "";
-              if (name) withDataNameSet.add(name);
-            }
-          }
 
           matchStats = {
             totalUploaded: matchedNameSet.size + notMatchedCount + duplicatesCount,
@@ -3590,29 +3610,21 @@ const downloadFilteredData = asyncHandler(async (req, res, next) => {
     const { filters = [], exclusions = [], misc = {} } = filter;
     const companyIds = misc.companyIdsUsed || [];
 
-    // For Client data: build companyId → clientCompanyName map from the latest match session
+    // For Client data: build companyId → clientCompanyName map from the filter's own
+    // companyMetaMap snapshot (saved at filter-creation time from the upload session
+    // that was active when the user applied the filter). This ensures re-uploads don't
+    // overwrite the client names for older filters.
     const isClientData = filter.dataType === "Client";
     const clientCompanyNameMap = new Map();
-    if (isClientData && filter.campaignId) {
-      const metaDoc = await ClientMatchEntry.findOne({
-        campaignId: filter.campaignId,
-        dataType: "Client",
-        matchType: "meta",
-      }).sort({ uploadSession: -1 }).lean();
-
-      if (metaDoc?.uploadSession) {
-        const entries = await ClientMatchEntry.find({
-          campaignId: filter.campaignId,
-          dataType: "Client",
-          uploadSession: metaDoc.uploadSession,
-          matchType: "complete",
-        }).select("companyId clientCompanyName").lean();
-
-        for (const e of entries) {
-          if (e.companyId && e.clientCompanyName) {
-            clientCompanyNameMap.set(String(e.companyId), e.clientCompanyName);
-          }
-        }
+    if (isClientData) {
+      const metaMap = filter.misc?.companyMetaMap || {};
+      for (const [companyId, meta] of Object.entries(metaMap)) {
+        const clientName =
+          meta.clientCompanyName ||
+          meta.masterDbMatchedCompanyName ||
+          meta.companyName ||
+          "";
+        if (clientName) clientCompanyNameMap.set(companyId, clientName);
       }
     }
 
