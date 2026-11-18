@@ -428,48 +428,52 @@ export const getAssetHistory = asyncHandler(async (req, res, next) => {
 export const getPMReport = asyncHandler(async (req, res, next) => {
   try {
     const Asset = getAsset();
-    const report = await Asset.aggregate([
-      { $match: { status: "assigned", associatedPM: { $ne: null }, isDeleted: { $ne: true } } },
-      // group by PM + vendor to get per-vendor counts
-      {
-        $group: {
-          _id:   { pm: "$associatedPM", vendor: { $cond: [{ $gt: [{ $strLenCP: { $ifNull: ["$vendorName", ""] } }, 0] }, "$vendorName", "Unknown"] } },
-          count: { $sum: 1 },
-        },
-      },
-      // roll up to PM level, keeping vendor breakdown
-      {
-        $group: {
-          _id:           "$_id.pm",
-          assignedCount: { $sum: "$count" },
-          vendors: {
-            $push: { vendor: "$_id.vendor", count: "$count" },
+    const [report, maintenanceCount, unassignedCount] = await Promise.all([
+      Asset.aggregate([
+        { $match: { status: "assigned", associatedPM: { $ne: null }, isDeleted: { $ne: true } } },
+        // group by PM + vendor to get per-vendor counts
+        {
+          $group: {
+            _id:   { pm: "$associatedPM", vendor: { $cond: [{ $gt: [{ $strLenCP: { $ifNull: ["$vendorName", ""] } }, 0] }, "$vendorName", "Unknown"] } },
+            count: { $sum: 1 },
           },
         },
-      },
-      {
-        $lookup: {
-          from:         "users",
-          localField:   "_id",
-          foreignField: "_id",
-          as:           "pmDetails",
+        // roll up to PM level, keeping vendor breakdown
+        {
+          $group: {
+            _id:           "$_id.pm",
+            assignedCount: { $sum: "$count" },
+            vendors: {
+              $push: { vendor: "$_id.vendor", count: "$count" },
+            },
+          },
         },
-      },
-      { $unwind: { path: "$pmDetails", preserveNullAndEmptyArrays: true } },
-      {
-        $project: {
-          _id:           0,
-          pmId:          "$_id",
-          pmName:        "$pmDetails.employeeName",
-          pmEmail:       "$pmDetails.email",
-          assignedCount: 1,
-          vendors:       1,
+        {
+          $lookup: {
+            from:         "users",
+            localField:   "_id",
+            foreignField: "_id",
+            as:           "pmDetails",
+          },
         },
-      },
-      { $sort: { assignedCount: -1 } },
+        { $unwind: { path: "$pmDetails", preserveNullAndEmptyArrays: true } },
+        {
+          $project: {
+            _id:           0,
+            pmId:          "$_id",
+            pmName:        "$pmDetails.employeeName",
+            pmEmail:       "$pmDetails.email",
+            assignedCount: 1,
+            vendors:       1,
+          },
+        },
+        { $sort: { assignedCount: -1 } },
+      ]),
+      Asset.countDocuments({ status: "maintenance", isDeleted: { $ne: true } }),
+      Asset.countDocuments({ status: "unassigned",  isDeleted: { $ne: true } }),
     ]);
 
-    return sendResponse(res, 200, "PM report", { data: report });
+    return sendResponse(res, 200, "PM report", { data: report, maintenanceCount, unassignedCount });
   } catch (err) {
     return sendError(next, err.message, 500);
   }
