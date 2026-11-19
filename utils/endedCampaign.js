@@ -6,17 +6,59 @@ import Contact from "../models/MasterDBModel/contactModel.js";
 const checkEndedCampaigns = async () => {
   try {
     const now = new Date();
-    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const endedCampaign = await Campaign.find({
-      // endDate: { $gte: yesterday, $gte: now },
-      endDate: { $lte: now },
-    });
-    const endedCampaignIds = endedCampaign.map((Campaign) => Campaign._id);
+    // Add 14h buffer to cover all timezones (UTC-12 to UTC+14)
+    const buffer = new Date(now.getTime() + 14 * 60 * 60 * 1000);
+    const candidates = await Campaign.find({
+      endDate: { $lte: buffer },
+    }).select("_id endDate timezone").lean();
+
+    // Filter per campaign's own timezone
+    const endedCampaignIds = candidates
+      .filter((c) => {
+        const tz = c.timezone || "Asia/Kolkata";
+        const nowInTz = now.toLocaleDateString("en-CA", { timeZone: tz });
+        const endInTz = new Date(c.endDate).toLocaleDateString("en-CA", { timeZone: tz });
+        return nowInTz > endInTz;
+      })
+      .map((c) => c._id);
+
     return endedCampaignIds;
   } catch (error) {
     console.error("Error checking ended campaigns:", error);
-
     return [];
+  }
+};
+
+const markExpiredCampaignsInactive = async () => {
+  try {
+    const now = new Date();
+    const buffer = new Date(now.getTime() + 14 * 60 * 60 * 1000);
+    const activeCampaigns = await Campaign.find({
+      status: "active",
+      endDate: { $lte: buffer },
+    }).select("_id endDate timezone").lean();
+
+    const expiredIds = activeCampaigns
+      .filter((c) => {
+        const tz = c.timezone || "Asia/Kolkata";
+        const nowInTz = now.toLocaleDateString("en-CA", { timeZone: tz });
+        const endInTz = new Date(c.endDate).toLocaleDateString("en-CA", { timeZone: tz });
+        return nowInTz > endInTz;
+      })
+      .map((c) => c._id);
+
+    if (expiredIds.length === 0) {
+      console.log("[CRON] No active campaigns to mark inactive.");
+      return;
+    }
+
+    const result = await Campaign.updateMany(
+      { _id: { $in: expiredIds } },
+      { $set: { status: "completed" } }
+    );
+    console.log(`[CRON] Marked ${result.modifiedCount} campaign(s) as completed.`);
+  } catch (error) {
+    console.error("[CRON] markExpiredCampaignsInactive error:", error);
   }
 };
 
@@ -294,6 +336,7 @@ const updatingIncorrectDataInMasterDB = async (filtData) => {
 
 export {
   checkEndedCampaigns,
+  markExpiredCampaignsInactive,
   getAllCallHistoriesForCampaign,
   updatingIncorrectDataInMasterDB,
 };

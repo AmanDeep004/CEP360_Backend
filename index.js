@@ -453,6 +453,22 @@ const startServer = async () => {
       { timezone: "Asia/Kolkata" }
     );
 
+    // Daily cron at 1 AM IST — marks campaigns whose endDate has passed (per their timezone) as completed
+    cron.schedule(
+      "0 1 * * *",
+      async () => {
+        const now = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+        console.log(`[CRON] CAMPAIGN AUTO-EXPIRE - Triggered at ${now} (IST)`);
+        try {
+          const { markExpiredCampaignsInactive } = await import("./utils/endedCampaign.js");
+          await markExpiredCampaignsInactive();
+        } catch (err) {
+          console.error("[CRON] Campaign auto-expire failed:", err?.message || err);
+        }
+      },
+      { timezone: "Asia/Kolkata" }
+    );
+
     // Weekly management report — every Monday 9:00 AM IST (test: 3:15 PM)
     cron.schedule(
       "0 9 * * 1",

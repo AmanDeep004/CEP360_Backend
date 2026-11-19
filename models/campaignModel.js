@@ -38,6 +38,8 @@ const campaignSchema = new mongoose.Schema(
 
     endDate: { type: Date, required: true },
 
+    timezone: { type: String, default: "Asia/Kolkata" },
+
     programManager: {
       type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
       required: true,

@@ -31,6 +31,7 @@ const createCampaign = asyncHandler(async (req, res, next) => {
       category,
       startDate,
       endDate,
+      timezone,
       programManager,
       status,
       keyAccountManager,
@@ -54,13 +55,13 @@ const createCampaign = asyncHandler(async (req, res, next) => {
       clientDataType,
     } = req.body;
 
-    // Dates cannot be in the past at creation time
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    if (startDate && new Date(startDate) < today) {
+    // Dates cannot be in the past — compare against today in the campaign's timezone
+    const tz = timezone || "Asia/Kolkata";
+    const todayInTz = new Date().toLocaleDateString("en-CA", { timeZone: tz }); // "YYYY-MM-DD"
+    if (startDate && startDate < todayInTz) {
       return sendError(next, "Start date cannot be in the past", 400);
     }
-    if (endDate && new Date(endDate) < today) {
+    if (endDate && endDate < todayInTz) {
       return sendError(next, "End date cannot be in the past", 400);
     }
 
@@ -78,6 +79,7 @@ const createCampaign = asyncHandler(async (req, res, next) => {
       category,
       startDate,
       endDate,
+      timezone: tz,
       programManager,
       status: status || "active",
       keyAccountManager,
