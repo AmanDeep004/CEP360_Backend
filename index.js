@@ -62,6 +62,7 @@ const startServer = async () => {
     const recordingsRoute = (await import("./routes/recordingsRoute.js"))
       .default;
     const contractRoutes = (await import("./routes/contractRoutes.js")).default;
+    const dncRoutes      = (await import("./routes/dncRoutes.js")).default;
     const checkEndedCampaigns = await import("./utils/endedCampaign.js");
 
     const app = express();
@@ -304,6 +305,7 @@ const startServer = async () => {
     app.use("/api/asset", assetRoutes);
     app.use("/api/recordings", recordingsRoute);
     app.use("/api/contract", contractRoutes);
+    app.use("/api/dnc",      dncRoutes);
 
     // Job status endpoint — poll progress of bulk email/whatsapp sends
     app.get("/api/jobs/:jobId", async (req, res) => {
