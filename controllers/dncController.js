@@ -4,6 +4,7 @@ import fs from "fs";
 import DncEntry from "../models/dncEntryModel.js";
 import Company from "../models/MasterDBModel/companyModel.js";
 import BrandsWorkedWith from "../models/MasterDBModel/brandsWorkedWithModel.js";
+import Campaign from "../models/campaignModel.js";
 import utils from "../utils/index.js";
 
 const { asyncHandler, sendResponse, sendError } = utils;
@@ -189,48 +190,25 @@ const uploadDncList = asyncHandler(async (req, res, next) => {
       }));
 
       const result = await DncEntry.bulkWrite(ops, { ordered: false });
-      const insertedCount = result.upsertedCount || 0;
-      const skippedCount  = toInsert.length - insertedCount;
+      // upsertedIds is a map of { bulkWriteOpIndex → ObjectId } for newly inserted docs
+      const upsertedIndexes = new Set(Object.keys(result.upsertedIds || {}).map(Number));
 
-      for (const entry of toInsert) {
-        // We determine duplicate by checking if it already existed (not upserted)
-        const wasUpserted = Object.values(result.upsertedIds || {}).some(
-          (id) => id !== undefined
-        );
-        // Add to success or duplicate based on upsertedIds
-        successRows.push({
-          Company_Name:      entry.companyName,
-          Company_Unique_ID: entry.companyId,
-          Brand:             entry.brandName,
-          Status:            "Added",
-        });
-      }
-
-      // Re-check duplicates by querying existing active entries
-      if (skippedCount > 0) {
-        const companyIds = toInsert.map((e) => e.companyId);
-        const existing = await DncEntry.find({
-          companyId: { $in: companyIds },
-          brandId:   resolvedBrandId,
-          isActive:  true,
-          createdAt: { $lt: new Date(Date.now() - 1000) }, // existed before this upload
-        })
-          .select("companyId companyName")
-          .lean();
-        const existingSet = new Set(existing.map((e) => e.companyId));
-        // Fix success vs duplicate split
-        for (let j = successRows.length - toInsert.length; j < successRows.length; j++) {
-          const r = successRows[j];
-          if (existingSet.has(r.Company_Unique_ID)) {
-            duplicateRows.push({
-              Company_Name:      r.Company_Name,
-              Company_Unique_ID: r.Company_Unique_ID,
-              Brand:             r.Brand,
-              Status:            "Already in DNC list",
-            });
-            successRows.splice(j, 1);
-            j--;
-          }
+      for (let idx = 0; idx < toInsert.length; idx++) {
+        const entry = toInsert[idx];
+        if (upsertedIndexes.has(idx)) {
+          successRows.push({
+            Company_Name:      entry.companyName,
+            Company_Unique_ID: entry.companyId,
+            Brand:             entry.brandName,
+            Status:            "Added",
+          });
+        } else {
+          duplicateRows.push({
+            Company_Name:      entry.companyName,
+            Company_Unique_ID: entry.companyId,
+            Brand:             entry.brandName,
+            Status:            "Already in DNC list",
+          });
         }
       }
     }
@@ -312,14 +290,40 @@ const clearDncForBrand = asyncHandler(async (req, res, next) => {
 });
 
 // ─────────────────────────────────────────────────────────────
+// GET /api/dnc/campaign-ids/:campaignId
+// Returns the DNC companyId strings for the campaign's brand.
+// Used by frontend to mark DNC companies in the client match download report.
+// ─────────────────────────────────────────────────────────────
+const getDncIdsForCampaign = asyncHandler(async (req, res, next) => {
+  const { campaignId } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(campaignId)) {
+    return sendError(next, "Invalid campaignId", 400);
+  }
+  const campaign = await Campaign.findById(campaignId).select("brandName").lean();
+  if (!campaign) return sendError(next, "Campaign not found", 404);
+
+  const escaped = (campaign.brandName || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const entries = await DncEntry.find({
+    brandName: { $regex: `^${escaped}$`, $options: "i" },
+    isActive:  true,
+  }).select("companyId").lean();
+
+  return sendResponse(res, 200, "DNC IDs fetched", {
+    companyIds: entries.map((e) => e.companyId),
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
 // Helper used by filter controllers — returns company ObjectIds
 // to exclude for a given brandName. Returns [] if none.
 // ─────────────────────────────────────────────────────────────
 const getDncCompanyIdsForBrand = async (brandName) => {
   if (!brandName) return [];
-  const entries = await DncEntry.find({ brandName, isActive: true })
-    .select("companyId")
-    .lean();
+  const escaped = brandName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const entries = await DncEntry.find({
+    brandName: { $regex: `^${escaped}$`, $options: "i" },
+    isActive:  true,
+  }).select("companyId").lean();
   if (entries.length === 0) return [];
   return entries
     .map((e) => {
@@ -336,5 +340,6 @@ export {
   getDncList,
   removeDncEntry,
   clearDncForBrand,
+  getDncIdsForCampaign,
   getDncCompanyIdsForBrand,
 };

@@ -2,6 +2,7 @@ import CampaignFilter from "../models/CallingDataFiltrationModel.js";
 import Contact from "../models/MasterDBModel/contactModel.js";
 import Company from "../models/MasterDBModel/companyModel.js";
 import Campaign from "../models/campaignModel.js";
+import { getDncCompanyIdsForBrand } from "./dncController.js";
 import errorHandler from "../utils/index.js";
 import CallingData from "../models/callingDataModal.js";
 import ClientCompanyList from "../models/clientCompanyList.js";
@@ -650,10 +651,18 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
     const includeQuery = buildMongoQuery(filters, "$in");
     const excludeQuery = buildMongoQuery(exclusions, "$nin");
 
+    // DNC exclusion: fetch company IDs to exclude for this campaign's brand
+    const campaign = await Campaign.findById(campaignId).select("brandName").lean();
+    const dncIds   = await getDncCompanyIdsForBrand(campaign?.brandName);
+    const dncPreStage = dncIds.length > 0
+      ? [{ $match: { Company_ID: { $nin: dncIds } } }]
+      : [];
+
     req.setTimeout(300000);
 
     // ================= PIPELINE =================
     const statsPipeline = [
+      ...dncPreStage,
       {
         $lookup: {
           from: "companies",
@@ -684,6 +693,7 @@ const callingDataFilter = asyncHandler(async (req, res, next) => {
 
       Contact.aggregate(
         [
+          ...dncPreStage,
           {
             $lookup: {
               from: "companies",
@@ -1855,8 +1865,20 @@ const clientCallingDataFilter = asyncHandler(async (req, res, next) => {
     }
 
     // Split filters into pre-lookup (contact fields + Company_ID) and post-lookup (company fields)
-    const preLookup = buildPreLookupMatch(filters, exclusions, companyIds);
+    const preLookup  = buildPreLookupMatch(filters, exclusions, companyIds);
     const postLookup = buildPostLookupMatch(filters, exclusions);
+
+    // DNC exclusion: exclude companies on the brand's DNC list
+    const campaignDoc = await Campaign.findById(campaignId).select("brandName").lean();
+    const dncIds      = await getDncCompanyIdsForBrand(campaignDoc?.brandName);
+    if (dncIds.length > 0) {
+      // preLookup may already have Company_ID: { $in: [...] } from companyIds — combine safely
+      if (preLookup.Company_ID) {
+        preLookup.$and = (preLookup.$and || []).concat({ Company_ID: { $nin: dncIds } });
+      } else {
+        preLookup.Company_ID = { $nin: dncIds };
+      }
+    }
 
     req.setTimeout(300000);
 
@@ -2087,6 +2109,17 @@ const assignCallingDataToCampaign = asyncHandler(async (req, res, next) => {
       lastFilter.filters || [],
       lastFilter.exclusions || []
     );
+
+    // DNC exclusion
+    const dncIds = await getDncCompanyIdsForBrand(campaign?.brandName);
+    if (dncIds.length > 0) {
+      if (preLookup.Company_ID) {
+        preLookup.$and = (preLookup.$and || []).concat({ Company_ID: { $nin: dncIds } });
+      } else {
+        preLookup.Company_ID = { $nin: dncIds };
+      }
+    }
+
     const pipeline = buildAssignPipeline(preLookup, postLookup);
 
     const { totalProcessed, insertedCount, duplicateCount } =
@@ -2197,6 +2230,17 @@ const assignCallingDataToCampaignClientSuggested = asyncHandler(
         lastFilter.filters || [],
         lastFilter.exclusions || []
       );
+
+      // DNC exclusion
+      const dncIds = await getDncCompanyIdsForBrand(campaign?.brandName);
+      if (dncIds.length > 0) {
+        if (preLookup.Company_ID) {
+          preLookup.$and = (preLookup.$and || []).concat({ Company_ID: { $nin: dncIds } });
+        } else {
+          preLookup.Company_ID = { $nin: dncIds };
+        }
+      }
+
       const pipeline = buildAssignPipeline(preLookup, postLookup);
 
       const { totalProcessed, insertedCount, duplicateCount } =
@@ -2316,19 +2360,25 @@ const assignCallingDataToCampaignBoth = asyncHandler(async (req, res, next) => {
           .filter(Boolean)
       : bothFilter.filters;
 
+    // ── DNC exclusion (shared for both Kestone and Client pipelines) ──
+    const dncIds = await getDncCompanyIdsForBrand(campaign?.brandName);
+    const applyDnc = (preLookup) => {
+      if (dncIds.length === 0) return preLookup;
+      if (preLookup.Company_ID) {
+        preLookup.$and = (preLookup.$and || []).concat({ Company_ID: { $nin: dncIds } });
+      } else {
+        preLookup.Company_ID = { $nin: dncIds };
+      }
+      return preLookup;
+    };
+
     // ── Build pipelines ──
     const kestonePipeline = buildAssignPipeline(
-      buildPreLookupMatch(
-        kestoneFilter.filters || [],
-        kestoneFilter.exclusions || []
-      ),
-      buildPostLookupMatch(
-        kestoneFilter.filters || [],
-        kestoneFilter.exclusions || []
-      )
+      applyDnc(buildPreLookupMatch(kestoneFilter.filters || [], kestoneFilter.exclusions || [])),
+      buildPostLookupMatch(kestoneFilter.filters || [], kestoneFilter.exclusions || [])
     );
     const clientPipeline = buildAssignPipeline(
-      buildPreLookupMatch(clientFilters, []),
+      applyDnc(buildPreLookupMatch(clientFilters, [])),
       buildPostLookupMatch(clientFilters, [])
     );
 
@@ -3407,7 +3457,7 @@ const getCrossTab = asyncHandler(async (req, res, next) => {
     }
 
     const stored = await CampaignFilter.findById(campaignFilterId)
-      .select("filters exclusions misc")
+      .select("filters exclusions misc campaignId")
       .lean();
     if (!stored) return sendError(next, "Filter not found", 404);
 
@@ -3440,6 +3490,19 @@ const getCrossTab = asyncHandler(async (req, res, next) => {
       stored.filters || [],
       stored.exclusions || []
     );
+
+    // DNC exclusion — keep cross-tab counts consistent with filter counts
+    if (stored.campaignId) {
+      const ctCampaign = await Campaign.findById(stored.campaignId).select("brandName").lean();
+      const ctDncIds   = await getDncCompanyIdsForBrand(ctCampaign?.brandName);
+      if (ctDncIds.length > 0) {
+        if (preLookup.Company_ID) {
+          preLookup.$and = (preLookup.$and || []).concat({ Company_ID: { $nin: ctDncIds } });
+        } else {
+          preLookup.Company_ID = { $nin: ctDncIds };
+        }
+      }
+    }
 
     const needsLookup =
       rowDef.needsLookup || colDefs.some((d) => d.needsLookup);
@@ -3705,6 +3768,18 @@ const downloadFilteredData = asyncHandler(async (req, res, next) => {
 
     const preLookup  = buildPreLookupMatch(filters, exclusions, companyIds);
     const postLookup = buildPostLookupMatch(filters, exclusions);
+
+    // DNC exclusion
+    const dlCampaign = await Campaign.findById(filter.campaignId).select("brandName").lean();
+    const dlDncIds   = await getDncCompanyIdsForBrand(dlCampaign?.brandName);
+    if (dlDncIds.length > 0) {
+      if (preLookup.Company_ID) {
+        preLookup.$and = (preLookup.$and || []).concat({ Company_ID: { $nin: dlDncIds } });
+      } else {
+        preLookup.Company_ID = { $nin: dlDncIds };
+      }
+    }
+
     const pipeline   = buildAssignPipeline(preLookup, postLookup);
 
     req.setTimeout(600000); // 10 min for large datasets

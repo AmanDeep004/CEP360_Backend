@@ -9,6 +9,7 @@ import {
   getDncList,
   removeDncEntry,
   clearDncForBrand,
+  getDncIdsForCampaign,
 } from "../controllers/dncController.js";
 
 const { ADMIN, DATABASE_MANAGER, PRESALES_MANAGER } = UserRoleEnum;
@@ -24,5 +25,6 @@ router.post(   "/upload",         protect, authorize(...allowed), upload.single(
 router.get(    "/list",           protect, authorize(...allowed), getDncList);
 router.delete( "/remove/:id",     protect, authorize(...allowed), removeDncEntry);
 router.delete( "/clear-brand",    protect, authorize(...allowed), clearDncForBrand);
+router.get(    "/campaign-ids/:campaignId", protect, authorize(...allowed), getDncIdsForCampaign);
 
 export default router;
