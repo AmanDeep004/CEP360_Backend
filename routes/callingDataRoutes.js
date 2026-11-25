@@ -1,6 +1,5 @@
 import { Router } from "express";
 import {
-  uploadcallingData,
   getCallingDataById,
   editcallingData,
   addSingleContact,
@@ -51,12 +50,6 @@ const upload = multer({ storage: multer.memoryStorage() });
 const { ADMIN, PROGRAM_MANAGER, PRESALES_MANAGER, AGENT } = UserRoleEnum;
 const router = Router();
 
-router.post(
-  "/upload-database",
-  protect,
-  upload.single("file"),
-  uploadcallingData
-);
 router.get("/getCallingDataById/:id", protect, getCallingDataById);
 router.put("/", protect, editcallingData);
 router.post("/addContact", protect, addSingleContact);
