@@ -1140,6 +1140,7 @@ const persistToEntryCollection = async (
     partiallyMatched,
     notMatched,
     duplicates = [],
+    dncMatched = [],
     uploadSession,
     counts,
   }
@@ -1206,6 +1207,20 @@ const persistToEntryCollection = async (
       ...base,
       matchType: "duplicate",
       inputName: e.name || e.inputName || "",
+      clientCompanyName: e.clientCompanyName || "",
+      companySpecificId: e.companySpecificId || "",
+      segment: e.segment || "",
+    }));
+    await ClientMatchEntry.insertMany(batch, { ordered: false });
+    await yieldControl();
+  }
+
+  // Stream-insert DNC entries — store client name only, no MasterDB data needed
+  for (let i = 0; i < dncMatched.length; i += ENTRY_BATCH) {
+    const batch = dncMatched.slice(i, i + ENTRY_BATCH).map((e) => ({
+      ...base,
+      matchType: "dnc",
+      inputName: e.clientCompanyName || e.matchedWith || "",
       clientCompanyName: e.clientCompanyName || "",
       companySpecificId: e.companySpecificId || "",
       segment: e.segment || "",
@@ -1296,7 +1311,7 @@ const loadMatchResultFromEntry = async (campaignId) => {
   const needAllComplete = (counts.completeCount ?? 0) > PG;
   const completeBase = { campaignId, dataType: "Client", uploadSession, matchType: "complete" };
 
-  const [uploadHistory, completeDocs, allCompleteRaw, notMatchedRaw, duplicateRaw] = await Promise.all([
+  const [uploadHistory, completeDocs, allCompleteRaw, notMatchedRaw, duplicateRaw, dncRaw] = await Promise.all([
     loadUploadHistoryFromEntry(campaignId, uploadSession),
     ClientMatchEntry.find(completeBase)
       .select("companyId companyName matchedWith inputName companySpecificId segment clientCompanyName")
@@ -1315,12 +1330,17 @@ const loadMatchResultFromEntry = async (campaignId) => {
       .select("inputName clientCompanyName companySpecificId segment")
       .limit(PG + 1)
       .lean(),
+    ClientMatchEntry.find({ campaignId, dataType: "Client", uploadSession, matchType: "dnc" })
+      .select("inputName clientCompanyName companySpecificId segment")
+      .limit(PG + 1)
+      .lean(),
   ]);
 
   const completeHasMore = completeDocs.length > PG;
   const notMatchedHasMore = notMatchedRaw.length > PG;
   const duplicatesCount = counts.duplicatesCount ?? 0;
   const duplicatesHasMore = duplicateRaw.length > PG;
+  const dncHasMore = dncRaw.length > PG;
 
   const mapCompleteDoc = (d) => ({
     _id: d.companyId,
@@ -1335,9 +1355,11 @@ const loadMatchResultFromEntry = async (campaignId) => {
     uploadSession,
     uploadHistory,
     completeCount: counts.completeCount ?? 0,
+    dncCount: counts.dncCount ?? 0,
     notMatchedCount: counts.notMatchedCount ?? 0,
     duplicatesCount,
     completeHasMore,
+    dncHasMore,
     notMatchedHasMore,
     duplicatesHasMore,
     completelyMatched: completeDocs.slice(0, PG).map(mapCompleteDoc),
@@ -1359,6 +1381,12 @@ const loadMatchResultFromEntry = async (campaignId) => {
       remark: d.remark || "",
     })),
     duplicates: duplicateRaw.slice(0, PG).map((d) => ({
+      inputName: d.inputName || "",
+      clientCompanyName: d.clientCompanyName || "",
+      companySpecificId: d.companySpecificId || "",
+      segment: d.segment || "",
+    })),
+    dncEntries: dncRaw.slice(0, PG).map((d) => ({
       inputName: d.inputName || "",
       clientCompanyName: d.clientCompanyName || "",
       companySpecificId: d.companySpecificId || "",
@@ -1679,7 +1707,21 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
   await flushNmBuffer();
   await flushDupBuffer(); // flush any remaining dedup duplicates from the matching loop
 
-  const completelyMatched = [...completeMap.values()];
+  const allMatched = [...completeMap.values()];
+
+  // DNC split: check matched companies against campaign brand's DNC list
+  const campForDnc = await Campaign.findById(campaignId).select("brandName").lean().catch(() => null);
+  const dncIdsForJob = campForDnc?.brandName
+    ? await getDncCompanyIdsForBrand(campForDnc.brandName).catch(() => [])
+    : [];
+  const dncIdSetForJob = new Set(dncIdsForJob.map(String));
+
+  const dncMatchedEntries = dncIdSetForJob.size > 0
+    ? allMatched.filter((e) => dncIdSetForJob.has(String(e._id)))
+    : [];
+  const completelyMatched = dncIdSetForJob.size > 0
+    ? allMatched.filter((e) => !dncIdSetForJob.has(String(e._id)))
+    : allMatched;
 
   // Stage 4 — save company names list for ClientCompanyList (for re-match on cache miss)
   updateMatchJob(jobId, "Saving results...", 93);
@@ -1703,6 +1745,7 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
 
   const counts = {
     completeCount: completelyMatched.length,
+    dncCount: dncMatchedEntries.length,
     partialCount: 0,
     notMatchedCount,
     duplicatesCount,
@@ -1715,16 +1758,24 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
       partiallyMatched: [],
       notMatched: [], // already in DB; served via getClientMatchEntries
       duplicates: [],
+      dncEntries: dncMatchedEntries.map((e) => ({
+        inputName: e.clientCompanyName || "",
+        clientCompanyName: e.clientCompanyName || "",
+        companySpecificId: e.companySpecificId || "",
+        segment: e.segment || "",
+      })),
       uploadSession,
       completeCount: counts.completeCount,
+      dncCount: counts.dncCount,
       notMatchedCount: counts.notMatchedCount,
       duplicatesCount: counts.duplicatesCount,
+      dncHasMore: counts.dncCount > 0,
       notMatchedHasMore: counts.notMatchedCount > 0,
       duplicatesHasMore: counts.duplicatesCount > 0,
     });
   }
 
-  // Persist complete + meta to DB (notMatched already persisted above)
+  // Persist complete + DNC + meta to DB (notMatched already persisted above)
   updateMatchJob(jobId, "Saving to database...", 97);
   try {
     await persistToEntryCollection(campaignId, {
@@ -1732,6 +1783,7 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
       partiallyMatched: [],
       notMatched: [],
       duplicates: [],
+      dncMatched: dncMatchedEntries,
       uploadSession,
       counts,
     });
@@ -1747,6 +1799,7 @@ async function runCompanyMatchJob(jobId, filePath, ext, campaignId, dataType) {
       partiallyMatchedCount: 0,
       notMatchedCount: counts.notMatchedCount,
       duplicatesCount: 0,
+      dncCount: counts.dncCount,
       uploadHistory: [],
     });
   }
@@ -2905,6 +2958,7 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
           completelyMatchedCount: result.completelyMatchedCount ?? result.completeCount ?? 0,
           notMatchedCount: result.notMatchedCount ?? 0,
           duplicatesCount: result.duplicatesCount ?? 0,
+          dncCount: 0,
           uploadSession: result.uploadSession || null,
           uploadHistory: result.uploadHistory || [],
         };
@@ -2939,12 +2993,15 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
       const allComplete = result.completelyMatched || [];
       const notMatch = result.notMatched || [];
       const dupEntries = result.duplicates || [];
+      const dncEntries = result.dncEntries || [];
 
-      const completeCount = result.completeCount ?? allComplete.length;
+      const completeCount   = result.completeCount   ?? allComplete.length;
+      const dncCount        = result.dncCount        ?? dncEntries.length;
       const notMatchedCount = result.notMatchedCount ?? notMatch.length;
       const duplicatesCount = result.duplicatesCount ?? 0;
 
-      const completeHasMore = result.completeHasMore ?? allComplete.length > MATCH_PAGE_SIZE;
+      const completeHasMore   = result.completeHasMore   ?? allComplete.length > MATCH_PAGE_SIZE;
+      const dncHasMore        = result.dncHasMore        ?? dncEntries.length > MATCH_PAGE_SIZE;
       const notMatchedHasMore = result.notMatchedHasMore ?? notMatch.length > MATCH_PAGE_SIZE;
       const duplicatesHasMore = result.duplicatesHasMore ?? false;
 
@@ -2966,9 +3023,11 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
       return {
         campaignId: String(campaignId),
         completeCount,
+        dncCount,
         notMatchedCount,
         duplicatesCount,
         completeHasMore,
+        dncHasMore,
         notMatchedHasMore,
         duplicatesHasMore,
         uploadSession: result.uploadSession || null,
@@ -2976,6 +3035,7 @@ const getClientMatchData = asyncHandler(async (req, res, next) => {
         approvedIds,
         rejectedIds,
         completelyMatched: allComplete.slice(0, MATCH_PAGE_SIZE),
+        dncEntries: dncEntries.slice(0, MATCH_PAGE_SIZE),
         allCompleteEntries,
         partiallyMatched: [],
         notMatched: notMatch.slice(0, MATCH_PAGE_SIZE),
@@ -3294,7 +3354,7 @@ const updateClientMatchAction = asyncHandler(async (req, res, next) => {
 /**
  * GET /filtration/clientMatchEntries/:campaignId
  * Paginated endpoint for large match datasets.
- * Query params: matchType (complete|partial|notMatched|duplicate), uploadSession, page (0-based), limit (max 500)
+ * Query params: matchType (complete|partial|notMatched|duplicate|dnc), uploadSession, page (0-based), limit (max 500)
  */
 const getClientMatchEntries = asyncHandler(async (req, res, next) => {
   try {
@@ -3331,31 +3391,29 @@ const getClientMatchEntries = asyncHandler(async (req, res, next) => {
     const lim = Math.min(parseInt(limit), 50_000);
 
     const selectByType = {
-      complete: "companyId companyName matchedWith companySpecificId segment clientCompanyName",
-      partial: "inputName clientCompanyName companySpecificId segment suggestions",
+      complete:   "companyId companyName matchedWith companySpecificId segment clientCompanyName",
+      partial:    "inputName clientCompanyName companySpecificId segment suggestions",
       notMatched: "inputName clientCompanyName companySpecificId segment remark",
-      duplicate: "inputName clientCompanyName companySpecificId segment",
+      duplicate:  "inputName clientCompanyName companySpecificId segment",
+      dnc:        "inputName clientCompanyName companySpecificId segment",
     };
     const projection = selectByType[matchType] || "inputName";
 
+    const baseQuery = {
+      campaignId,
+      dataType: "Client",
+      uploadSession: session,
+      matchType,
+    };
+
     const [docs, total] = await Promise.all([
-      ClientMatchEntry.find({
-        campaignId,
-        dataType: "Client",
-        uploadSession: session,
-        matchType,
-      })
+      ClientMatchEntry.find(baseQuery)
         .select(projection)
         .sort({ _id: 1 })
         .skip(skip)
         .limit(lim + 1)
         .lean(),
-      ClientMatchEntry.countDocuments({
-        campaignId,
-        dataType: "Client",
-        uploadSession: session,
-        matchType,
-      }),
+      ClientMatchEntry.countDocuments(baseQuery),
     ]);
 
     const hasMore = docs.length > lim;
@@ -3370,6 +3428,13 @@ const getClientMatchEntries = asyncHandler(async (req, res, next) => {
         ...(d.companySpecificId ? { companySpecificId: d.companySpecificId } : {}),
         ...(d.segment ? { segment: d.segment } : {}),
         ...(d.clientCompanyName ? { clientCompanyName: d.clientCompanyName } : {}),
+      }));
+    } else if (matchType === "dnc") {
+      entries = page_docs.map((d) => ({
+        inputName: d.inputName || "",
+        clientCompanyName: d.clientCompanyName || "",
+        companySpecificId: d.companySpecificId || "",
+        segment: d.segment || "",
       }));
     } else if (matchType === "partial") {
       entries = page_docs.map((d) => ({

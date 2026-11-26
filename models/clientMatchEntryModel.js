@@ -8,10 +8,11 @@ import { getPrimaryConnection } from "../config/db.js";
  *
  * matchType values:
  *   "meta"       — single doc per session storing counts summary
- *   "complete"   — fully matched company
+ *   "complete"   — fully matched company (not on DNC list)
  *   "partial"    — partial match with suggestions
  *   "notMatched" — no match found (inputName only, no companyId)
  *   "duplicate"  — duplicate input row (skipped from matching)
+ *   "dnc"        — matched but company is on the brand's DNC list
  */
 const clientMatchEntrySchema = new mongoose.Schema(
   {
@@ -20,13 +21,14 @@ const clientMatchEntrySchema = new mongoose.Schema(
     dataType:    { type: String, default: "Client" },
     matchType:   {
       type: String,
-      enum: ["meta", "complete", "partial", "notMatched", "duplicate"],
+      enum: ["meta", "complete", "partial", "notMatched", "duplicate", "dnc"],
       required: true,
     },
 
     // ── meta doc only ─────────────────────────────────────────────────────────
     counts: {
       completeCount:   { type: Number },
+      dncCount:        { type: Number },
       partialCount:    { type: Number },
       notMatchedCount: { type: Number },
       duplicatesCount: { type: Number },
